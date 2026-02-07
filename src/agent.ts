@@ -39,6 +39,7 @@ export type AgentOptions = {
   onToolUse?: (tool: string, input: unknown) => void;
   onToolResult?: (tool: string, result: unknown) => void;
   hooks?: Partial<Record<HookEvent, HookCallbackMatcher[]>>;
+  canUseTool?: (toolName: string, input: Record<string, unknown>, options: unknown) => Promise<unknown>;
 };
 
 export type AgentResult = {
@@ -136,6 +137,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
       env: cleanEnvForSdk(),
       maxTurns: 50,
       includePartialMessages: true,
+      canUseTool: opts.canUseTool as any,
       stderr: (data: string) => console.error(`[agent:stderr] ${data.trimEnd()}`),
     },
   });
@@ -150,14 +152,16 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
   };
   let usedMessageTool = false;
 
-  // store user message (SDK doesn't yield the initial prompt)
-  const userMsg: SessionMessage = {
-    type: 'user',
-    timestamp: new Date().toISOString(),
-    content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } },
-  };
-  messages.push(userMsg);
-  sessionManager.append(sessionId, userMsg);
+  // store user message only for new sessions (resume replays history)
+  if (!resumeSessionId) {
+    const userMsg: SessionMessage = {
+      type: 'user',
+      timestamp: new Date().toISOString(),
+      content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } },
+    };
+    messages.push(userMsg);
+    sessionManager.append(sessionId, userMsg);
+  }
 
   // stream messages
   for await (const msg of q) {
@@ -287,6 +291,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
       env: cleanEnvForSdk(),
       maxTurns: 50,
       includePartialMessages: true,
+      canUseTool: opts.canUseTool as any,
       stderr: (data: string) => console.error(`[agent:stderr] ${data.trimEnd()}`),
     },
   });
@@ -296,14 +301,16 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
   let usage = { inputTokens: 0, outputTokens: 0, totalCostUsd: 0 };
   let usedMessageTool = false;
 
-  // store user message (SDK doesn't yield the initial prompt)
-  const userMsg: SessionMessage = {
-    type: 'user',
-    timestamp: new Date().toISOString(),
-    content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } },
-  };
-  messages.push(userMsg);
-  sessionManager.append(sessionId, userMsg);
+  // store user message only for new sessions (resume replays history)
+  if (!resumeSessionId) {
+    const userMsg: SessionMessage = {
+      type: 'user',
+      timestamp: new Date().toISOString(),
+      content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } },
+    };
+    messages.push(userMsg);
+    sessionManager.append(sessionId, userMsg);
+  }
 
   for await (const msg of q) {
     const sessionMsg = sdkMessageToSession(msg);

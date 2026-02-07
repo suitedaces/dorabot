@@ -445,6 +445,97 @@ input, textarea, select, button {
   color: var(--accent-red);
 }
 
+/* ask user question panel */
+.ask-user-panel {
+  padding: 12px 16px;
+  border-top: 1px solid var(--accent-blue);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.ask-user-question {
+  margin-bottom: 12px;
+}
+
+.ask-user-question:last-of-type {
+  margin-bottom: 8px;
+}
+
+.ask-user-header {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent-blue);
+  margin-bottom: 4px;
+}
+
+.ask-user-text {
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.ask-user-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ask-user-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 8px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-primary);
+  width: 100%;
+}
+
+.ask-user-option:hover {
+  border-color: var(--accent-blue);
+}
+
+.ask-user-option.selected {
+  border-color: var(--accent-blue);
+  background: rgba(88, 166, 255, 0.1);
+}
+
+.ask-user-option-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ask-user-option-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.ask-user-other-input {
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--accent-blue);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-size: 12px;
+  outline: none;
+}
+
+.ask-user-other-input::placeholder {
+  color: var(--text-muted);
+}
+
+.ask-user-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .chat-input-area {
   padding: 12px 16px;
   border-top: 1px solid var(--border);

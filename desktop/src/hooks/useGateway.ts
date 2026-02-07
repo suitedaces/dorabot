@@ -36,6 +36,16 @@ export type SessionInfo = {
   updatedAt: string;
 };
 
+export type AskUserQuestion = {
+  requestId: string;
+  questions: Array<{
+    question: string;
+    header: string;
+    options: Array<{ label: string; description: string }>;
+    multiSelect: boolean;
+  }>;
+};
+
 type RpcResponse = {
   id: number;
   result?: unknown;
@@ -69,10 +79,13 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
     if (msg.type === 'system') continue;
 
     if (msg.type === 'user') {
-      if ((c as any).isSynthetic) {
+      const userMsg = (c as any).message;
+      const blocks = userMsg?.content;
+      // detect tool result messages by checking for tool_result blocks or tool_use_result field
+      const hasToolResult = Array.isArray(blocks) && blocks.some((b: any) => b.type === 'tool_result');
+
+      if (hasToolResult) {
         // tool results - patch matching tool_use items
-        const userMsg = (c as any).message;
-        const blocks = userMsg?.content;
         if (Array.isArray(blocks)) {
           for (const block of blocks) {
             if (block.type === 'tool_result') {
@@ -85,7 +98,6 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
                   .map((b: any) => b.text)
                   .join('\n');
               }
-              // find matching tool_use and set output
               for (let i = items.length - 1; i >= 0; i--) {
                 const it = items[i];
                 if (it.type === 'tool_use' && it.id === block.tool_use_id) {
@@ -98,8 +110,6 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
         }
       } else {
         // real user message
-        const userMsg = (c as any).message;
-        const blocks = userMsg?.content;
         let text = '';
         if (typeof blocks === 'string') {
           text = blocks;
@@ -161,6 +171,7 @@ export function useGateway(url = 'ws://localhost:18789') {
   const [agentStatus, setAgentStatus] = useState<string>('idle');
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | undefined>();
+  const [pendingQuestion, setPendingQuestion] = useState<AskUserQuestion | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const rpcIdRef = useRef(0);
@@ -234,44 +245,54 @@ export function useGateway(url = 'ws://localhost:18789') {
           if (delta.type === 'text_delta' && typeof delta.text === 'string') {
             const text = delta.text;
             setChatItems(prev => {
-              const last = prev[prev.length - 1];
-              if (last?.type === 'text' && last.streaming) {
-                const updated = [...prev];
-                updated[updated.length - 1] = { ...last, content: last.content + text };
-                return updated;
+              // find last streaming text item
+              for (let i = prev.length - 1; i >= 0; i--) {
+                const it = prev[i];
+                if (it.type === 'text' && it.streaming) {
+                  const updated = [...prev];
+                  updated[i] = { ...it, content: it.content + text };
+                  return updated;
+                }
               }
               return prev;
             });
           } else if (delta.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
             const json = delta.partial_json;
             setChatItems(prev => {
-              const last = prev[prev.length - 1];
-              if (last?.type === 'tool_use' && last.streaming) {
-                const updated = [...prev];
-                updated[updated.length - 1] = { ...last, input: last.input + json };
-                return updated;
+              for (let i = prev.length - 1; i >= 0; i--) {
+                const it = prev[i];
+                if (it.type === 'tool_use' && it.streaming) {
+                  const updated = [...prev];
+                  updated[i] = { ...it, input: it.input + json };
+                  return updated;
+                }
               }
               return prev;
             });
           } else if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {
             const thinking = delta.thinking;
             setChatItems(prev => {
-              const last = prev[prev.length - 1];
-              if (last?.type === 'thinking' && last.streaming) {
-                const updated = [...prev];
-                updated[updated.length - 1] = { ...last, content: last.content + thinking };
-                return updated;
+              for (let i = prev.length - 1; i >= 0; i--) {
+                const it = prev[i];
+                if (it.type === 'thinking' && it.streaming) {
+                  const updated = [...prev];
+                  updated[i] = { ...it, content: it.content + thinking };
+                  return updated;
+                }
               }
               return prev;
             });
           }
         } else if (evt.type === 'content_block_stop') {
           setChatItems(prev => {
-            const last = prev[prev.length - 1];
-            if (last && 'streaming' in last && last.streaming) {
-              const updated = [...prev];
-              updated[updated.length - 1] = { ...last, streaming: false };
-              return updated;
+            // find last streaming item and mark done
+            for (let i = prev.length - 1; i >= 0; i--) {
+              const it = prev[i];
+              if ('streaming' in it && it.streaming) {
+                const updated = [...prev];
+                updated[i] = { ...it, streaming: false };
+                return updated;
+              }
             }
             return prev;
           });
@@ -304,6 +325,13 @@ export function useGateway(url = 'ws://localhost:18789') {
           timestamp: Date.now(),
         }]);
         setAgentStatus('idle');
+        break;
+      }
+
+      case 'agent.ask_user': {
+        const d = data as { requestId: string; questions: AskUserQuestion['questions']; timestamp: number };
+        setPendingQuestion({ requestId: d.requestId, questions: d.questions });
+        setAgentStatus('waiting for input...');
         break;
       }
 
@@ -452,7 +480,7 @@ export function useGateway(url = 'ws://localhost:18789') {
     };
   }, [connect]);
 
-  const sendMessage = useCallback(async (prompt: string, sessionId?: string) => {
+  const sendMessage = useCallback(async (prompt: string) => {
     setChatItems(prev => [...prev, {
       type: 'user',
       content: prompt,
@@ -460,7 +488,7 @@ export function useGateway(url = 'ws://localhost:18789') {
     }]);
     setAgentStatus('thinking...');
     try {
-      await rpc('chat.send', { prompt, sessionId: sessionId || currentSessionId });
+      await rpc('chat.send', { prompt });
     } catch (err) {
       setChatItems(prev => [...prev, {
         type: 'error',
@@ -469,7 +497,7 @@ export function useGateway(url = 'ws://localhost:18789') {
       }]);
       setAgentStatus('idle');
     }
-  }, [rpc, currentSessionId]);
+  }, [rpc]);
 
   const loadSession = useCallback(async (sessionId: string) => {
     try {
@@ -484,6 +512,20 @@ export function useGateway(url = 'ws://localhost:18789') {
       console.error('failed to load session:', err);
     }
   }, [rpc]);
+
+  const answerQuestion = useCallback(async (requestId: string, answers: Record<string, string>) => {
+    try {
+      await rpc('chat.answerQuestion', { requestId, answers });
+      setPendingQuestion(null);
+      setAgentStatus('thinking...');
+    } catch (err) {
+      console.error('failed to answer question:', err);
+    }
+  }, [rpc]);
+
+  const dismissQuestion = useCallback(() => {
+    setPendingQuestion(null);
+  }, []);
 
   const newSession = useCallback(() => {
     setCurrentSessionId(undefined);
@@ -506,12 +548,15 @@ export function useGateway(url = 'ws://localhost:18789') {
     agentStatus,
     sessions,
     currentSessionId,
+    pendingQuestion,
     ws: wsRef.current,
     rpc,
     sendMessage,
     newSession,
     loadSession,
     setCurrentSessionId,
+    answerQuestion,
+    dismissQuestion,
     onFileChange,
   };
 }

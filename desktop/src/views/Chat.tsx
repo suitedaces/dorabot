@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, type KeyboardEvent } from 'react';
 import Markdown from 'react-markdown';
-import type { useGateway, ChatItem } from '../hooks/useGateway';
+import type { useGateway, ChatItem, AskUserQuestion } from '../hooks/useGateway';
 
 type Props = {
   gateway: ReturnType<typeof useGateway>;
@@ -63,6 +63,106 @@ function ToolUseItem({ item }: { item: Extract<ChatItem, { type: 'tool_use' }> }
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function AskUserQuestionPanel({
+  question,
+  onAnswer,
+  onDismiss,
+}: {
+  question: AskUserQuestion;
+  onAnswer: (requestId: string, answers: Record<string, string>) => void;
+  onDismiss: () => void;
+}) {
+  const [selections, setSelections] = useState<Record<string, string>>({});
+  const [otherTexts, setOtherTexts] = useState<Record<string, string>>({});
+  const [useOther, setUseOther] = useState<Record<string, boolean>>({});
+
+  const handleSelect = (questionText: string, label: string, multiSelect: boolean) => {
+    if (multiSelect) {
+      setSelections(prev => {
+        const current = prev[questionText] || '';
+        const labels = current ? current.split(', ') : [];
+        const idx = labels.indexOf(label);
+        if (idx >= 0) labels.splice(idx, 1);
+        else labels.push(label);
+        return { ...prev, [questionText]: labels.join(', ') };
+      });
+      setUseOther(prev => ({ ...prev, [questionText]: false }));
+    } else {
+      setSelections(prev => ({ ...prev, [questionText]: label }));
+      setUseOther(prev => ({ ...prev, [questionText]: false }));
+    }
+  };
+
+  const handleSubmit = () => {
+    const answers: Record<string, string> = {};
+    for (const q of question.questions) {
+      if (useOther[q.question] && otherTexts[q.question]) {
+        answers[q.question] = otherTexts[q.question];
+      } else {
+        answers[q.question] = selections[q.question] || '';
+      }
+    }
+    onAnswer(question.requestId, answers);
+  };
+
+  const allAnswered = question.questions.every(q =>
+    (useOther[q.question] && otherTexts[q.question]) || selections[q.question]
+  );
+
+  return (
+    <div className="ask-user-panel">
+      {question.questions.map((q, qi) => (
+        <div key={qi} className="ask-user-question">
+          <div className="ask-user-header">{q.header}</div>
+          <div className="ask-user-text">{q.question}</div>
+          <div className="ask-user-options">
+            {q.options.map((opt, oi) => {
+              const selected = q.multiSelect
+                ? (selections[q.question] || '').split(', ').includes(opt.label)
+                : selections[q.question] === opt.label && !useOther[q.question];
+              return (
+                <button
+                  key={oi}
+                  className={`ask-user-option ${selected ? 'selected' : ''}`}
+                  onClick={() => handleSelect(q.question, opt.label, q.multiSelect)}
+                >
+                  <span className="ask-user-option-label">{opt.label}</span>
+                  <span className="ask-user-option-desc">{opt.description}</span>
+                </button>
+              );
+            })}
+            <button
+              className={`ask-user-option ${useOther[q.question] ? 'selected' : ''}`}
+              onClick={() => {
+                setUseOther(prev => ({ ...prev, [q.question]: true }));
+                setSelections(prev => ({ ...prev, [q.question]: '' }));
+              }}
+            >
+              <span className="ask-user-option-label">Other</span>
+              <span className="ask-user-option-desc">type your own answer</span>
+            </button>
+          </div>
+          {useOther[q.question] && (
+            <input
+              className="ask-user-other-input"
+              placeholder="type your answer..."
+              value={otherTexts[q.question] || ''}
+              onChange={e => setOtherTexts(prev => ({ ...prev, [q.question]: e.target.value }))}
+              autoFocus
+            />
+          )}
+        </div>
+      ))}
+      <div className="ask-user-actions">
+        <button className="btn" onClick={onDismiss}>skip</button>
+        <button className="btn btn-primary" onClick={handleSubmit} disabled={!allAnswered}>
+          answer
+        </button>
+      </div>
     </div>
   );
 }
@@ -176,6 +276,14 @@ export function ChatView({ gateway }: Props) {
         {gateway.chatItems.map((item, i) => renderItem(item, i))}
         <div ref={messagesEndRef} />
       </div>
+
+      {gateway.pendingQuestion && (
+        <AskUserQuestionPanel
+          question={gateway.pendingQuestion}
+          onAnswer={gateway.answerQuestion}
+          onDismiss={gateway.dismissQuestion}
+        />
+      )}
 
       <div className="chat-input-area">
         <div className="chat-input-wrapper">

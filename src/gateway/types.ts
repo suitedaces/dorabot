@@ -61,6 +61,7 @@ export type RpcMethod =
   | 'status'
   | 'chat.send'
   | 'chat.history'
+  | 'chat.answerQuestion'
   | 'sessions.list'
   | 'sessions.get'
   | 'sessions.delete'
@@ -86,6 +87,8 @@ export type GatewayEventName =
   | 'agent.message'
   | 'agent.result'
   | 'agent.error'
+  | 'agent.ask_user'
+  | 'agent.user_message'
   | 'channel.message'
   | 'channel.status'
   | 'channel.reply'
@@ -94,7 +97,8 @@ export type GatewayEventName =
   | 'cron.run'
   | 'cron.result'
   | 'session.update'
-  | 'status.update';
+  | 'status.update'
+  | 'fs.change';
 
 export type GatewayContext = {
   config: import('../config.js').Config;

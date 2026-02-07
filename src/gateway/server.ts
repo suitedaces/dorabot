@@ -14,6 +14,7 @@ import { checkSkillEligibility, loadAllSkills } from '../skills/loader.js';
 import type { InboundMessage } from '../channels/types.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { setCronRunner } from '../tools/index.js';
+import { randomUUID } from 'node:crypto';
 
 const DEFAULT_PORT = 18789;
 const DEFAULT_HOST = 'localhost';
@@ -200,6 +201,56 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     broadcast,
   };
 
+  // pending AskUserQuestion requests waiting for desktop answers
+  const pendingQuestions = new Map<string, {
+    resolve: (answers: Record<string, string>) => void;
+    reject: (err: Error) => void;
+  }>();
+
+  // canUseTool callback - handles AskUserQuestion by routing to desktop
+  const canUseTool = async (toolName: string, input: Record<string, unknown>) => {
+    if (toolName === 'AskUserQuestion') {
+      const questions = input.questions as unknown[];
+      if (!questions) {
+        return { behavior: 'allow' as const, updatedInput: input };
+      }
+
+      // no clients connected - can't ask
+      if (clients.size === 0) {
+        return {
+          behavior: 'deny' as const,
+          message: 'No UI client connected to answer questions. Proceed with your best judgment.',
+        };
+      }
+
+      const requestId = randomUUID();
+      broadcast({
+        event: 'agent.ask_user',
+        data: { requestId, questions, timestamp: Date.now() },
+      });
+
+      // wait for answer from desktop
+      const answers = await new Promise<Record<string, string>>((resolve, reject) => {
+        pendingQuestions.set(requestId, { resolve, reject });
+        // timeout after 5 minutes
+        setTimeout(() => {
+          if (pendingQuestions.has(requestId)) {
+            pendingQuestions.delete(requestId);
+            reject(new Error('Question timeout - no answer received'));
+          }
+        }, 300000);
+      });
+
+      return {
+        behavior: 'allow' as const,
+        updatedInput: { questions, answers },
+      };
+    }
+
+    // auto-allow other tools
+    return { behavior: 'allow' as const, updatedInput: input };
+  };
+
   // agent run queue (one per session key)
   const runQueues = new Map<string, Promise<void>>();
 
@@ -233,6 +284,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           config,
           channel,
           extraContext,
+          canUseTool,
         });
 
         // track result from stream (for-await-of doesn't capture generator return value)
@@ -290,8 +342,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             }
           }
 
-          // tool results come as synthetic user messages
-          if (m.type === 'user' && (m as any).isSynthetic) {
+          // tool results come as SDK user messages with tool_use_result or tool_result content blocks
+          if (m.type === 'user') {
             const userMsg = (m as any).message;
             const content = userMsg?.content;
             if (Array.isArray(content)) {
@@ -403,12 +455,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const prompt = params?.prompt as string;
           if (!prompt) return { id, error: 'prompt required' };
 
-          const sessionId = params?.sessionId as string | undefined;
-          const sessionKey = `desktop:dm:${sessionId || 'default'}`;
+          // desktop always uses a single session key - the SDK session ID is
+          // tracked separately in sessionRegistry.sdkSessionId for resume
+          const sessionKey = 'desktop:dm:default';
 
           const session = sessionRegistry.getOrCreate({
             channel: 'desktop',
-            chatId: sessionId || 'default',
+            chatId: 'default',
           });
           sessionRegistry.incrementMessages(session.key);
 
@@ -419,7 +472,19 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             source: 'desktop/chat',
           });
 
-          return { id, result: { sessionKey, sessionId: session.sessionId, queued: true } };
+          return { id, result: { sessionKey, sessionId: session.sdkSessionId, queued: true } };
+        }
+
+        case 'chat.answerQuestion': {
+          const requestId = params?.requestId as string;
+          const answers = params?.answers as Record<string, string>;
+          if (!requestId) return { id, error: 'requestId required' };
+          if (!answers) return { id, error: 'answers required' };
+          const pending = pendingQuestions.get(requestId);
+          if (!pending) return { id, error: 'no pending question with that ID' };
+          pendingQuestions.delete(requestId);
+          pending.resolve(answers);
+          return { id, result: { answered: true } };
         }
 
         case 'chat.history': {
