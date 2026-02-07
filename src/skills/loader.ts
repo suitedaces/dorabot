@@ -5,14 +5,10 @@ import matter from 'gray-matter';
 import type { Config } from '../config.js';
 
 export type SkillMetadata = {
-  openclaw?: {
-    emoji?: string;
-    primaryEnv?: string;
-    requires?: {
-      bins?: string[];
-      env?: string[];
-      config?: string[];
-    };
+  requires?: {
+    bins?: string[];
+    env?: string[];
+    config?: string[];
   };
 };
 
@@ -45,7 +41,7 @@ function checkEnvVar(env: string): boolean {
 
 export function checkSkillEligibility(skill: Skill, config: Config): SkillEligibility {
   const reasons: string[] = [];
-  const requires = skill.metadata.openclaw?.requires;
+  const requires = skill.metadata.requires;
 
   // check if explicitly disabled
   if (config.skills.disabled.includes(skill.name)) {

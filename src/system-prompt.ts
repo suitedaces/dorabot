@@ -55,11 +55,11 @@ Use these tools to help complete tasks. The built-in Claude Code tools (Read, Wr
 
   // skills section (only in full mode)
   if (config.systemPromptMode === 'full' && skills.length > 0) {
-    const skillList = skills.map(s => `- ${s.name}: ${s.description}`).join('\n');
+    const skillList = skills.map(s => `- ${s.name}: ${s.description} [${s.path}]`).join('\n');
     sections.push(`## Skills (mandatory)
 
 Before replying: scan the available skills below.
-- If exactly one skill clearly applies: read its content, then follow it.
+- If exactly one skill clearly applies: read its SKILL.md at the path shown, then follow it.
 - If multiple could apply: choose the most specific one.
 - If none clearly apply: do not invoke any skill.
 
