@@ -198,10 +198,10 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
   return items;
 }
 
-const SESSION_STORAGE_KEY = 'my-agent:sessionId';
+const SESSION_STORAGE_KEY = 'dorabot:sessionId';
 
 export function useGateway(url = 'ws://localhost:18789') {
-  const getToken = () => (window as any).electronAPI?.getGatewayToken?.() || (window as any).electronAPI?.gatewayToken || localStorage.getItem('my-agent:gateway-token') || '';
+  const getToken = () => (window as any).electronAPI?.getGatewayToken?.() || (window as any).electronAPI?.gatewayToken || localStorage.getItem('dorabot:gateway-token') || '';
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [chatItems, setChatItems] = useState<ChatItem[]>([]);
   const [channelMessages, setChannelMessages] = useState<ChannelMessage[]>([]);

@@ -1,7 +1,7 @@
 {
-  "name": "my-agent-desktop",
+  "name": "dorabot-desktop",
   "version": "1.0.0",
-  "description": "Desktop control center for my-agent",
+  "description": "Desktop control center for dorabot",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",

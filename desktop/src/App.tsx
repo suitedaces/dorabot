@@ -51,7 +51,7 @@ export default function App() {
     if (gw.notifications.length > prevNotifCount.current) {
       const latest = gw.notifications[gw.notifications.length - 1];
       if (latest) {
-        const name = latest.toolName.replace('mcp__my-agent__', '');
+        const name = latest.toolName.replace('mcp__dorabot__', '');
         toast(name, { description: 'executing...', duration: 3000 });
       }
     }
@@ -124,7 +124,7 @@ export default function App() {
 
       {/* titlebar */}
       <div className="h-9 bg-card border-b border-border flex items-center px-4 pr-20 shrink-0" style={{ WebkitAppRegion: 'drag' } as any}>
-        <span className="text-xs text-muted-foreground font-medium">my-agent</span>
+        <span className="text-xs text-muted-foreground font-medium">dorabot</span>
 
         <div style={{ WebkitAppRegion: 'no-drag' } as any} className="ml-3">
           <Select value={gw.model} onValueChange={gw.changeModel} disabled={gw.connectionState !== 'connected'}>

@@ -20,7 +20,7 @@ export function StatusView({ gateway }: Props) {
       .catch(() => {});
   }, [gateway.connectionState, gateway.rpc]);
 
-  const hasToken = !!(window as any).electronAPI?.getGatewayToken?.() || !!(window as any).electronAPI?.gatewayToken || !!localStorage.getItem('my-agent:gateway-token');
+  const hasToken = !!(window as any).electronAPI?.getGatewayToken?.() || !!(window as any).electronAPI?.gatewayToken || !!localStorage.getItem('dorabot:gateway-token');
 
   return (
     <div className="flex flex-col h-full min-h-0">

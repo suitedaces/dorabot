@@ -61,8 +61,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const startedAt = Date.now();
 
   // stable gateway auth token — reuse existing, only generate on first run
-  const tokenPath = join(homedir(), '.my-agent', 'gateway-token');
-  mkdirSync(join(homedir(), '.my-agent'), { recursive: true });
+  const tokenPath = join(homedir(), '.dorabot', 'gateway-token');
+  mkdirSync(join(homedir(), '.dorabot'), { recursive: true });
   let gatewayToken: string;
   if (existsSync(tokenPath)) {
     gatewayToken = readFileSync(tokenPath, 'utf-8').trim();

@@ -25,7 +25,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
   const sections: string[] = [];
 
   // identity
-  sections.push(`You are a personal agent running inside my-agent. Your job is helping the user achieve their goals. If you don't know what their goals are yet, find out — read USER.md and MEMORY.md, or ask.`);
+  sections.push(`You are a personal agent running inside dorabot. Your job is helping the user achieve their goals. If you don't know what their goals are yet, find out — read USER.md and MEMORY.md, or ask.`);
 
   // tooling
   if (tools.length > 0) {
@@ -90,14 +90,14 @@ ${skillList}
 
 Workspace: ${WORKSPACE_DIR}
 
-Your persistent memory lives in ~/.my-agent/workspace/MEMORY.md. Use it.
+Your persistent memory lives in ~/.dorabot/workspace/MEMORY.md. Use it.
 
 **When to write memory:**
 - User shares goals, preferences, facts about themselves, or communication style → update USER.md or MEMORY.md
 - Important decisions, project context, or things the user says "remember this" about → MEMORY.md
 - If you want something to survive between sessions, write it to a file. Mental notes don't persist.
 
-**How:** Use the Write or Edit tool to update files in ~/.my-agent/workspace/.
+**How:** Use the Write or Edit tool to update files in ~/.dorabot/workspace/.
 
 **Privacy:** MEMORY.md content is loaded into your system prompt every session. Don't store secrets or credentials there.`);
   }

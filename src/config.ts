@@ -212,8 +212,8 @@ export const ALWAYS_DENIED = [
   '~/.ssh',
   '~/.gnupg',
   '~/.aws',
-  '~/.my-agent/whatsapp/auth',
-  '~/.my-agent/gateway-token',
+  '~/.dorabot/whatsapp/auth',
+  '~/.dorabot/gateway-token',
   '~/.config/nanoclaw',
 ];
 

@@ -20,7 +20,7 @@ export type CreateSocketOptions = {
 };
 
 export function getDefaultAuthDir(): string {
-  return join(homedir(), '.my-agent', 'whatsapp', 'auth');
+  return join(homedir(), '.dorabot', 'whatsapp', 'auth');
 }
 
 export async function createWaSocket(opts: CreateSocketOptions): Promise<WASocket> {
@@ -31,7 +31,7 @@ export async function createWaSocket(opts: CreateSocketOptions): Promise<WASocke
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys),
     },
-    browser: Browsers.macOS('my-agent'),
+    browser: Browsers.macOS('dorabot'),
     printQRInTerminal: !opts.onQr,
     markOnlineOnConnect: false,
     getMessage: async () => undefined,

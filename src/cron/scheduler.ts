@@ -31,10 +31,10 @@ type CronState = {
   timers: Map<string, NodeJS.Timeout>;
 };
 
-const CRON_FILE = join(homedir(), '.my-agent', 'cron-jobs.json');
+const CRON_FILE = join(homedir(), '.dorabot', 'cron-jobs.json');
 
 function ensureCronDir(): void {
-  const dir = join(homedir(), '.my-agent');
+  const dir = join(homedir(), '.dorabot');
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }

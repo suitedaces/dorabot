@@ -47,7 +47,7 @@ async function interactiveMode(config: Awaited<ReturnType<typeof loadConfig>>): 
   const sessionManager = new SessionManager(config);
   let currentSessionId: string | undefined;
 
-  console.log('my-agent interactive mode');
+  console.log('dorabot interactive mode');
   console.log('Commands: /new, /resume <id>, /sessions, /skills, /agents, /heartbeat, /cron, /channels, /exit\n');
 
   const promptUser = (): void => {
@@ -129,7 +129,7 @@ async function interactiveMode(config: Awaited<ReturnType<typeof loadConfig>>): 
                 }
               }
             } else if (args[0] === 'add') {
-              console.log('Use CLI: my-agent cron add --name "..." --every "1h" --message "..."');
+              console.log('Use CLI: dorabot cron add --name "..." --every "1h" --message "..."');
             } else {
               console.log('Usage: /cron list | /cron add');
             }
@@ -233,15 +233,15 @@ async function main(): Promise<void> {
 
   if (values.help) {
     console.log(`
-my-agent - Claude Agent SDK powered assistant
+dorabot - Claude Agent SDK powered assistant
 
 Usage:
-  my-agent [options] [message]
-  my-agent -i                    # interactive mode
-  my-agent -d                    # daemon mode (heartbeat + cron)
-  my-agent -g                    # gateway mode (channels + heartbeat + cron)
-  my-agent -m "Hello"            # single message
-  echo "Hello" | my-agent        # pipe input
+  dorabot [options] [message]
+  dorabot -i                    # interactive mode
+  dorabot -d                    # daemon mode (heartbeat + cron)
+  dorabot -g                    # gateway mode (channels + heartbeat + cron)
+  dorabot -m "Hello"            # single message
+  echo "Hello" | dorabot        # pipe input
 
 Options:
   -m, --message <text>    Message to send
@@ -275,10 +275,11 @@ Commands (interactive mode):
   }
 
   if (values.version) {
-    console.log('my-agent 1.0.0');
+    console.log('dorabot 1.0.0');
     process.exit(0);
   }
 
+  migrateDataDir();
   const config = await loadConfig(values.config);
 
   // override model if specified
