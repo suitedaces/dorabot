@@ -1,0 +1,177 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --font-mono: 'JetBrains Mono', monospace;
+  --font-sans: 'JetBrains Mono', monospace;
+
+  --color-background: oklch(0.145 0 0);
+  --color-foreground: oklch(0.925 0 0);
+  --color-card: oklch(0.17 0 0);
+  --color-card-foreground: oklch(0.925 0 0);
+  --color-popover: oklch(0.17 0 0);
+  --color-popover-foreground: oklch(0.925 0 0);
+  --color-primary: oklch(0.625 0.18 250);
+  --color-primary-foreground: oklch(1 0 0);
+  --color-secondary: oklch(0.22 0 0);
+  --color-secondary-foreground: oklch(0.925 0 0);
+  --color-muted: oklch(0.22 0 0);
+  --color-muted-foreground: oklch(0.556 0 0);
+  --color-accent: oklch(0.22 0 0);
+  --color-accent-foreground: oklch(0.925 0 0);
+  --color-destructive: oklch(0.55 0.2 27);
+  --color-destructive-foreground: oklch(1 0 0);
+  --color-border: oklch(0.3 0 0);
+  --color-input: oklch(0.3 0 0);
+  --color-ring: oklch(0.625 0.18 250);
+  --color-chart-1: oklch(0.625 0.18 250);
+  --color-chart-2: oklch(0.6 0.16 165);
+  --color-chart-3: oklch(0.65 0.15 80);
+  --color-chart-4: oklch(0.6 0.15 310);
+  --color-chart-5: oklch(0.55 0.2 27);
+  --color-sidebar: oklch(0.17 0 0);
+  --color-sidebar-foreground: oklch(0.925 0 0);
+  --color-sidebar-primary: oklch(0.625 0.18 250);
+  --color-sidebar-primary-foreground: oklch(1 0 0);
+  --color-sidebar-accent: oklch(0.22 0 0);
+  --color-sidebar-accent-foreground: oklch(0.925 0 0);
+  --color-sidebar-border: oklch(0.3 0 0);
+  --color-sidebar-ring: oklch(0.625 0.18 250);
+
+  --color-success: oklch(0.6 0.19 145);
+  --color-warning: oklch(0.65 0.15 80);
+
+  --radius: 0.5rem;
+  --sidebar-width: 200px;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    @apply bg-background text-foreground font-mono;
+    font-size: 13px;
+    line-height: 1.5;
+    overflow: hidden;
+    height: 100vh;
+    -webkit-app-region: no-drag;
+    user-select: none;
+  }
+
+  #root {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: oklch(0.3 0 0);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.35 0 0);
+  }
+}
+
+/* streaming cursor */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.streaming-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  background: oklch(0.6 0.19 145);
+  animation: blink 1s infinite;
+  margin-left: 2px;
+  vertical-align: middle;
+  border-radius: 1px;
+}
+
+/* prose styles for markdown in chat */
+.prose-chat p { margin: 0 0 8px; }
+.prose-chat p:last-child { margin-bottom: 0; }
+.prose-chat code {
+  @apply bg-secondary px-1.5 py-0.5 rounded text-xs;
+}
+.prose-chat pre {
+  @apply bg-card border border-border rounded-md p-3 my-2 overflow-x-auto text-xs;
+}
+.prose-chat pre code {
+  @apply bg-transparent p-0 rounded-none;
+}
+.prose-chat ul, .prose-chat ol {
+  padding-left: 20px;
+  margin: 4px 0;
+}
+.prose-chat li { margin: 2px 0; }
+.prose-chat h1, .prose-chat h2, .prose-chat h3,
+.prose-chat h4, .prose-chat h5, .prose-chat h6 {
+  margin: 12px 0 4px;
+  line-height: 1.3;
+  font-weight: 600;
+}
+.prose-chat h1 { font-size: 18px; }
+.prose-chat h2 { font-size: 16px; }
+.prose-chat h3 { font-size: 14px; }
+.prose-chat blockquote {
+  @apply border-l-2 border-border pl-3 my-2 text-muted-foreground;
+}
+.prose-chat a {
+  @apply text-primary hover:underline;
+}
+.prose-chat table {
+  @apply border-collapse my-2 text-xs;
+}
+.prose-chat th, .prose-chat td {
+  @apply border border-border px-2 py-1;
+}
+.prose-chat th {
+  @apply bg-secondary font-semibold;
+}
+.prose-chat hr {
+  @apply border-t border-border my-2;
+  border-bottom: none;
+  border-left: none;
+  border-right: none;
+}
+
+/* markdown viewer (file viewer) */
+.markdown-viewer {
+  @apply p-5 max-w-3xl mx-auto text-foreground;
+  line-height: 1.6;
+}
+.markdown-viewer h1, .markdown-viewer h2, .markdown-viewer h3 { @apply font-semibold my-4; }
+.markdown-viewer h1 { font-size: 24px; }
+.markdown-viewer h2 { font-size: 20px; }
+.markdown-viewer h3 { font-size: 16px; }
+.markdown-viewer p { @apply my-2; }
+.markdown-viewer code { @apply bg-secondary px-1.5 py-0.5 rounded text-sm font-mono; }
+.markdown-viewer pre { @apply bg-card border border-border rounded-md p-3 overflow-x-auto my-2; }
+.markdown-viewer pre code { @apply bg-transparent p-0; }
+.markdown-viewer ul, .markdown-viewer ol { @apply pl-6 my-2; }
+.markdown-viewer a { @apply text-primary hover:underline; }
+.markdown-viewer blockquote { @apply border-l-2 border-border pl-3 my-2 text-muted-foreground; }
+.markdown-viewer table { @apply border-collapse my-2 w-full; }
+.markdown-viewer th, .markdown-viewer td { @apply border border-border px-3 py-1.5 text-left; }
+.markdown-viewer th { @apply bg-secondary font-semibold; }
+

@@ -201,7 +201,7 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
 const SESSION_STORAGE_KEY = 'my-agent:sessionId';
 
 export function useGateway(url = 'ws://localhost:18789') {
-  const gatewayToken = (window as any).electronAPI?.gatewayToken || localStorage.getItem('my-agent:gateway-token') || '';
+  const getToken = () => (window as any).electronAPI?.getGatewayToken?.() || (window as any).electronAPI?.gatewayToken || localStorage.getItem('my-agent:gateway-token') || '';
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [chatItems, setChatItems] = useState<ChatItem[]>([]);
   const [channelMessages, setChannelMessages] = useState<ChannelMessage[]>([]);
@@ -475,7 +475,8 @@ export function useGateway(url = 'ws://localhost:18789') {
     ws.onopen = () => {
       if (wsRef.current !== ws) return;
 
-      const token = gatewayToken;
+      const token = getToken();
+      console.log('[gateway] auth token:', token ? `${token.slice(0, 8)}...` : 'MISSING');
       if (token) {
         const authId = ++rpcIdRef.current;
         ws.send(JSON.stringify({ method: 'auth', params: { token }, id: authId }));
@@ -509,27 +510,9 @@ export function useGateway(url = 'ws://localhost:18789') {
           },
         });
       } else {
-        setConnectionState('connected');
-        rpc('config.get').then((res) => {
-          const c = res as { model?: string };
-          if (c.model) setModel(c.model);
-        }).catch(() => {});
-        rpc('sessions.list').then((res) => {
-          const arr = res as SessionInfo[];
-          if (Array.isArray(arr)) setSessions(arr);
-        }).catch(() => {});
-        const savedSession = localStorage.getItem(SESSION_STORAGE_KEY);
-        if (savedSession) {
-          rpc('sessions.get', { sessionId: savedSession }).then((res) => {
-            const r = res as { sessionId: string; messages: SessionMessage[] };
-            if (r?.messages) {
-              setChatItems(sessionMessagesToChatItems(r.messages));
-              setCurrentSessionId(savedSession);
-            }
-          }).catch(() => {
-            localStorage.removeItem(SESSION_STORAGE_KEY);
-          });
-        }
+        console.error('[gateway] no auth token available, closing connection');
+        ws.close();
+        setConnectionState('disconnected');
       }
     };
 
@@ -572,7 +555,7 @@ export function useGateway(url = 'ws://localhost:18789') {
     ws.onerror = () => {
       ws.close();
     };
-  }, [url, rpc, handleEvent, gatewayToken]);
+  }, [url, rpc, handleEvent]);
 
   useEffect(() => {
     connect();

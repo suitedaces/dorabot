@@ -1,6 +1,11 @@
 import { useMemo } from 'react';
 import type { useGateway } from '../hooks/useGateway';
 import { ChannelSecurity } from '../components/ChannelSecurity';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
+import { FocusCards } from '@/components/aceternity/focus-cards';
 
 type Props = {
   channel: 'whatsapp' | 'telegram';
@@ -23,17 +28,16 @@ export function ChannelView({ channel, gateway, onViewSession }: Props) {
   const label = channel === 'whatsapp' ? 'WhatsApp' : 'Telegram';
 
   const statusBadge = () => {
-    if (!status) return <span className="badge">not configured</span>;
-    if (status.connected) return <span className="badge connected">connected</span>;
-    if (status.running) return <span className="badge running">connecting...</span>;
-    return <span className="badge disconnected">disconnected</span>;
+    if (!status) return <Badge variant="outline">not configured</Badge>;
+    if (status.connected) return <Badge className="bg-success/15 text-success border-success/30">connected</Badge>;
+    if (status.running) return <Badge className="bg-warning/15 text-warning border-warning/30">connecting...</Badge>;
+    return <Badge variant="destructive">disconnected</Badge>;
   };
 
   const formatTime = (ts: number) => {
     return new Date(ts).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
   };
 
-  // group live messages by chatId
   const grouped = useMemo(() => {
     const groups = new Map<string, typeof messages>();
     for (const msg of messages) {
@@ -45,86 +49,88 @@ export function ChannelView({ channel, gateway, onViewSession }: Props) {
   }, [messages]);
 
   return (
-    <div className="chat-view">
-      <div className="chat-header">
-        <span style={{ fontWeight: 600, fontSize: 14 }}>{label}</span>
-        <span style={{ marginLeft: 8 }}>{statusBadge()}</span>
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0">
+        <span className="font-semibold text-sm">{label}</span>
+        {statusBadge()}
         {status?.accountId && (
-          <span style={{ color: 'var(--text-muted)', fontSize: 11, marginLeft: 8 }}>
-            {status.accountId}
-          </span>
+          <span className="text-muted-foreground text-[11px]">{status.accountId}</span>
         )}
         {status?.lastError && (
-          <span style={{ color: 'var(--accent-red)', fontSize: 11, marginLeft: 8 }}>
-            {status.lastError}
-          </span>
+          <span className="text-destructive text-[11px]">{status.lastError}</span>
         )}
       </div>
 
-      <div className="view-body">
-        <ChannelSecurity channel={channel} gateway={gateway} />
+      <ScrollArea className="flex-1">
+        <div className="p-4 space-y-4">
+          <ChannelSecurity channel={channel} gateway={gateway} />
 
-        {channelSessions.length === 0 && messages.length === 0 && (
-          <div className="empty-state">
-            <div className="empty-state-icon">{channel === 'whatsapp' ? 'W' : 'T'}</div>
-            <div>no {label} conversations yet</div>
-            <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
-              {!status ? `configure ${label} in your config to get started` :
-               status.connected ? 'waiting for incoming messages...' :
-               'channel is not connected'}
-            </div>
-          </div>
-        )}
-
-        {channelSessions.length > 0 && (
-          <>
-            <div className="nav-label">conversations</div>
-            {channelSessions.map(s => (
-              <button
-                key={s.id}
-                className="card"
-                style={{ cursor: 'pointer', marginBottom: 8, width: '100%', textAlign: 'left' }}
-                onClick={() => onViewSession?.(s.id, s.channel, s.chatId)}
-              >
-                <div className="card-title" style={{ color: 'var(--accent-blue)' }}>
-                  {s.senderName || s.chatId || s.id.slice(0, 16)}
-                </div>
-                <div className="card-meta">
-                  {s.messageCount} messages — last {new Date(s.updatedAt).toLocaleString()}
-                </div>
-              </button>
-            ))}
-          </>
-        )}
-
-        {grouped.length > 0 && (
-          <>
-            <div className="nav-label" style={{ marginTop: channelSessions.length > 0 ? 16 : 0 }}>live feed</div>
-            {grouped.map(([chatId, msgs]) => (
-              <div key={chatId} className="card" style={{ marginBottom: 12 }}>
-                <div className="card-title" style={{ color: 'var(--accent-blue)' }}>
-                  {msgs[0]?.senderName || chatId}
-                </div>
-                <div className="card-meta">{chatId}</div>
-                <div className="card-body">
-                  {msgs.slice(-10).map(msg => (
-                    <div key={msg.id} className="channel-message">
-                      <div className="channel-message-header">
-                        <span className="channel-message-sender">{msg.senderName || msg.senderId}</span>
-                        <span className="channel-message-time">{formatTime(msg.timestamp)}</span>
-                      </div>
-                      <div className="channel-message-body">{msg.body}</div>
-                      {msg.response && (
-                        <div className="channel-message-response">{msg.response}</div>
-                      )}
-                    </div>
-                  ))}
-                </div>
+          {channelSessions.length === 0 && messages.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+              <div className="text-2xl opacity-40">{channel === 'whatsapp' ? 'W' : 'T'}</div>
+              <div className="text-sm">no {label} conversations yet</div>
+              <div className="text-[10px]">
+                {!status ? `configure ${label} in your config to get started` :
+                 status.connected ? 'waiting for incoming messages...' :
+                 'channel is not connected'}
               </div>
-            ))}
-          </>
-        )}
-      </div>
+            </div>
+          )}
+
+          {channelSessions.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground px-1 pb-2">conversations</div>
+              <FocusCards>
+                {channelSessions.map(s => (
+                  <Card
+                    key={s.id}
+                    className="cursor-pointer hover:border-primary/50 transition-colors"
+                    onClick={() => onViewSession?.(s.id, s.channel, s.chatId)}
+                  >
+                    <CardContent className="p-3">
+                      <div className="text-primary text-xs font-semibold">
+                        {s.senderName || s.chatId || s.id.slice(0, 16)}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground mt-1">
+                        {s.messageCount} messages — last {new Date(s.updatedAt).toLocaleString()}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </FocusCards>
+            </div>
+          )}
+
+          {grouped.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground px-1 pb-2">live feed</div>
+              {grouped.map(([chatId, msgs]) => (
+                <Card key={chatId} className="mb-3">
+                  <CardContent className="p-3">
+                    <div className="text-primary text-xs font-semibold">{msgs[0]?.senderName || chatId}</div>
+                    <div className="text-[10px] text-muted-foreground">{chatId}</div>
+                    <Separator className="my-2" />
+                    <div className="space-y-2">
+                      {msgs.slice(-10).map(msg => (
+                        <div key={msg.id} className="border-b border-border/50 pb-2 last:border-0 last:pb-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-primary text-xs font-semibold">{msg.senderName || msg.senderId}</span>
+                            <span className="text-[10px] text-muted-foreground">{formatTime(msg.timestamp)}</span>
+                          </div>
+                          <div className="text-xs text-muted-foreground">{msg.body}</div>
+                          {msg.response && (
+                            <div className="mt-1 pl-3 border-l-2 border-success text-xs text-foreground">{msg.response}</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      </ScrollArea>
     </div>
   );
 }
