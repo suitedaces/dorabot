@@ -49,6 +49,11 @@ export async function startTelegramMonitor(opts: TelegramMonitorOptions): Promis
       if (!chatId) throw new Error('chatId required for Telegram delete');
       await deleteTelegramMessage(bot.api, chatId, messageId);
     },
+    typing: async (chatId) => {
+      try {
+        await bot.api.sendChatAction(Number(chatId), 'typing');
+      } catch {}
+    },
   });
 
   // bot commands

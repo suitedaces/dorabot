@@ -5,6 +5,7 @@ export type ChannelHandler = {
   send(target: string, message: string, opts?: { media?: string; replyTo?: string }): Promise<{ id: string; chatId: string }>;
   edit(messageId: string, message: string, chatId?: string): Promise<void>;
   delete(messageId: string, chatId?: string): Promise<void>;
+  typing?(chatId: string): Promise<void>;
 };
 
 // registry for channel handlers (populated at runtime)
@@ -36,6 +37,27 @@ function getHandler(channel: string): ChannelHandler {
   return channelHandlers.get(channel) || consoleHandler;
 }
 
+// redirect: when a status message exists, the message tool edits it instead of sending new
+const sendRedirects = new Map<string, string>();
+
+export function setSendRedirect(key: string, messageId: string) {
+  sendRedirects.set(key, messageId);
+}
+
+export function consumeSendRedirect(key: string): string | undefined {
+  const id = sendRedirects.get(key);
+  if (id !== undefined) sendRedirects.delete(key);
+  return id;
+}
+
+export function hasSendRedirect(key: string): boolean {
+  return sendRedirects.has(key);
+}
+
+export function clearSendRedirect(key: string) {
+  sendRedirects.delete(key);
+}
+
 export const messageTool = tool(
   'message',
   'Send, edit, or delete messages on messaging channels (WhatsApp, Telegram, Discord, Slack, etc.)',
@@ -59,6 +81,16 @@ export const messageTool = tool(
             content: [{ type: 'text', text: 'Error: target and message required for send' }],
             isError: true,
           };
+        }
+        // if there's a status message for this chat, edit it instead of sending new
+        if (!args.media) {
+          const redirectId = consumeSendRedirect(`${args.channel}:${args.target}`);
+          if (redirectId) {
+            await handler.edit(redirectId, args.message, args.target);
+            return {
+              content: [{ type: 'text', text: `Message sent. ID: ${redirectId}` }],
+            };
+          }
         }
         const result = await handler.send(args.target, args.message, {
           media: args.media,

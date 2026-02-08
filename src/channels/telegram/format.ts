@@ -2,12 +2,15 @@
 // handles the case where the agent outputs markdown instead of HTML tags
 
 export function markdownToTelegramHtml(text: string): string {
-  // if text already has telegram HTML tags, assume it's formatted and pass through
-  if (/<(b|i|em|strong|code|pre|a |s|u|del|strike|blockquote|tg-)/.test(text)) {
-    return text;
-  }
-
   let result = text;
+
+  // protect existing HTML tags so we don't double-process them
+  const htmlTags: string[] = [];
+  result = result.replace(/<(\/?)(\w+)([^>]*)>/g, (match) => {
+    const idx = htmlTags.length;
+    htmlTags.push(match);
+    return `\x00HT${idx}\x00`;
+  });
 
   // protect code blocks first (```lang\ncode\n```)
   const codeBlocks: string[] = [];
@@ -29,6 +32,9 @@ export function markdownToTelegramHtml(text: string): string {
 
   // escape HTML entities in remaining text
   result = escapeHtml(result);
+
+  // spoiler ||text||
+  result = result.replace(/\|\|(.+?)\|\|/g, '<tg-spoiler>$1</tg-spoiler>');
 
   // markdown links [text](url)
   result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
@@ -52,9 +58,13 @@ export function markdownToTelegramHtml(text: string): string {
   // merge adjacent blockquotes
   result = result.replace(/<\/blockquote>\n<blockquote>/g, '\n');
 
+  // make long blockquotes expandable (>500 chars)
+  result = result.replace(/<blockquote>([\s\S]{500,}?)<\/blockquote>/g, '<blockquote expandable>$1</blockquote>');
+
   // restore protected blocks
   result = result.replace(/\x00CB(\d+)\x00/g, (_, idx) => codeBlocks[Number(idx)]);
   result = result.replace(/\x00IC(\d+)\x00/g, (_, idx) => inlineCodes[Number(idx)]);
+  result = result.replace(/\x00HT(\d+)\x00/g, (_, idx) => htmlTags[Number(idx)]);
 
   return result;
 }

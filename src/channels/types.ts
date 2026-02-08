@@ -32,6 +32,7 @@ export type ChannelHandler = {
   send: (target: string, message: string, opts?: SendOptions) => Promise<OutboundResult>;
   edit: (messageId: string, message: string, chatId?: string) => Promise<void>;
   delete: (messageId: string, chatId?: string) => Promise<void>;
+  typing?: (chatId: string) => Promise<void>;
 };
 
 export type ChannelStatus = {
