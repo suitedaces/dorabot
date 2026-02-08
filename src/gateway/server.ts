@@ -393,6 +393,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       if (pending.timeout) clearTimeout(pending.timeout);
       pending.resolve({ approved, reason });
     },
+    onQuestionResponse: (requestId, _selectedIndex, label) => {
+      const pending = pendingTgQuestions.get(requestId);
+      if (!pending) return;
+      pendingTgQuestions.delete(requestId);
+      pending.resolve(label);
+    },
     onStatus: (status) => {
       broadcast({ event: 'channel.status', data: status });
     },
@@ -443,6 +449,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     reject: (err: Error) => void;
   }>();
 
+  // pending AskUserQuestion requests waiting for telegram inline keyboard answers
+  const pendingTgQuestions = new Map<string, {
+    resolve: (label: string) => void;
+    options: { label: string }[];
+  }>();
+
   // pending tool approval requests waiting for user decision
   const pendingApprovals = new Map<string, {
     resolve: (decision: { approved: boolean; reason?: string; modifiedInput?: Record<string, unknown> }) => void;
@@ -477,24 +489,58 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     return { allowedPaths: ch.allowedPaths, deniedPaths: ch.deniedPaths };
   }
 
-  function makeCanUseTool(runChannel?: string) {
+  function makeCanUseTool(runChannel?: string, runChatId?: string) {
     return async (toolName: string, input: Record<string, unknown>) => {
-      return canUseToolImpl(toolName, input, runChannel);
+      return canUseToolImpl(toolName, input, runChannel, runChatId);
     };
   }
 
   const canUseTool = async (toolName: string, input: Record<string, unknown>) => {
-    return canUseToolImpl(toolName, input, undefined);
+    return canUseToolImpl(toolName, input, undefined, undefined);
   };
 
-  const canUseToolImpl = async (toolName: string, input: Record<string, unknown>, runChannel?: string) => {
-    // AskUserQuestion — route to desktop
+  const canUseToolImpl = async (toolName: string, input: Record<string, unknown>, runChannel?: string, runChatId?: string) => {
+    // AskUserQuestion — route to telegram or desktop
     if (toolName === 'AskUserQuestion') {
       const questions = input.questions as unknown[];
       if (!questions) {
         return { behavior: 'allow' as const, updatedInput: input };
       }
 
+      // telegram: send inline keyboard per question
+      if (runChannel === 'telegram' && runChatId) {
+        const answers: Record<string, string> = {};
+        for (let qi = 0; qi < (questions as any[]).length; qi++) {
+          const q = (questions as any[])[qi];
+          const opts = (q.options || []) as { label: string; description?: string }[];
+          if (!opts.length) continue;
+
+          const requestId = randomUUID();
+          channelManager.sendQuestion({
+            requestId,
+            chatId: runChatId,
+            question: q.question || `Question ${qi + 1}`,
+            options: opts,
+          }).catch(() => {});
+
+          const label = await new Promise<string>((resolve) => {
+            pendingTgQuestions.set(requestId, { resolve, options: opts });
+            setTimeout(() => {
+              if (pendingTgQuestions.has(requestId)) {
+                pendingTgQuestions.delete(requestId);
+                resolve(opts[0]?.label || ''); // default to first option on timeout
+              }
+            }, 120000);
+          });
+          answers[`q${qi}`] = label;
+        }
+        return {
+          behavior: 'allow' as const,
+          updatedInput: { questions, answers },
+        };
+      }
+
+      // desktop: broadcast and wait
       const authCount = Array.from(clients.values()).filter(c => c.authenticated).length;
       if (authCount === 0) {
         return {
@@ -645,7 +691,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           channel,
           connectedChannels: connected,
           extraContext,
-          canUseTool: makeCanUseTool(channel),
+          canUseTool: makeCanUseTool(channel, messageMetadata?.chatId),
           abortController,
           messageMetadata,
         });

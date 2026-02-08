@@ -11,6 +11,13 @@ export type ApprovalRequest = {
   input: Record<string, unknown>;
 };
 
+export type QuestionRequest = {
+  requestId: string;
+  chatId: string;
+  question: string;
+  options: { label: string; description?: string }[];
+};
+
 export type TelegramMonitorOptions = {
   botToken?: string;
   tokenFile?: string;
@@ -20,12 +27,14 @@ export type TelegramMonitorOptions = {
   onMessage?: (msg: InboundMessage) => Promise<void>;
   onCommand?: (cmd: string, chatId: string) => Promise<string | void>;
   onApprovalResponse?: (requestId: string, approved: boolean, reason?: string) => void;
+  onQuestionResponse?: (requestId: string, selectedIndex: number, label: string) => void;
   abortSignal?: AbortSignal;
 };
 
 export type TelegramMonitorHandle = {
   stop: () => Promise<void>;
   sendApprovalRequest: (req: ApprovalRequest) => Promise<void>;
+  sendQuestion: (req: QuestionRequest) => Promise<void>;
 };
 
 export async function startTelegramMonitor(opts: TelegramMonitorOptions): Promise<TelegramMonitorHandle> {
@@ -75,15 +84,38 @@ export async function startTelegramMonitor(opts: TelegramMonitorOptions): Promis
     });
   }
 
-  // handle approval callback queries (inline keyboard buttons)
+  // handle callback queries (approvals + questions)
   bot.on('callback_query:data', async (ctx) => {
     const data = ctx.callbackQuery.data;
     const sep = data.indexOf(':');
     if (sep < 0) return;
 
     const action = data.slice(0, sep);
-    const requestId = data.slice(sep + 1);
 
+    // question response: q:{requestId}:{optionIndex}
+    if (action === 'q') {
+      const rest = data.slice(sep + 1);
+      const sep2 = rest.indexOf(':');
+      if (sep2 < 0) return;
+      const requestId = rest.slice(0, sep2);
+      const optionIndex = parseInt(rest.slice(sep2 + 1), 10);
+      const buttonText = ctx.callbackQuery.data;
+      // find the label from the inline keyboard
+      const label = (ctx.callbackQuery.message as any)?.reply_markup?.inline_keyboard
+        ?.flat()?.find((b: any) => b.callback_data === buttonText)?.text || `Option ${optionIndex + 1}`;
+      opts.onQuestionResponse?.(requestId, optionIndex, label);
+      try {
+        await ctx.editMessageText(
+          `${ctx.callbackQuery.message?.text || ''}\n\n\u2705 ${escapeHtml(label)}`,
+          { parse_mode: 'HTML' },
+        );
+      } catch {}
+      await ctx.answerCallbackQuery(label);
+      return;
+    }
+
+    // approval response
+    const requestId = data.slice(sep + 1);
     if (action !== 'approve' && action !== 'deny') return;
 
     const approved = action === 'approve';
@@ -173,13 +205,35 @@ export async function startTelegramMonitor(opts: TelegramMonitorOptions): Promis
     }
   };
 
+  const sendQuestion = async (req: QuestionRequest) => {
+    const keyboard = new InlineKeyboard();
+    for (let i = 0; i < req.options.length; i++) {
+      keyboard.text(req.options[i].label, `q:${req.requestId}:${i}`);
+      if (i % 2 === 1) keyboard.row(); // 2 buttons per row
+    }
+
+    const lines = [`\u2753 ${escapeHtml(req.question)}`];
+    for (const opt of req.options) {
+      if (opt.description) lines.push(`  \u2022 <b>${escapeHtml(opt.label)}</b> — ${escapeHtml(opt.description)}`);
+    }
+
+    try {
+      await bot.api.sendMessage(Number(req.chatId), lines.join('\n'), {
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
+    } catch (err) {
+      console.error('[telegram] failed to send question:', err);
+    }
+  };
+
   const stop = async () => {
     if (runner.isRunning()) {
       runner.stop();
     }
   };
 
-  return { stop, sendApprovalRequest };
+  return { stop, sendApprovalRequest, sendQuestion };
 }
 
 function escapeHtml(s: string): string {
