@@ -113,7 +113,7 @@ export type Config = {
 const DEFAULT_CONFIG: Config = {
   model: 'claude-sonnet-4-5-20250929',
   systemPromptMode: 'full',
-  permissionMode: 'dontAsk',
+  permissionMode: 'default',
   skills: {
     enabled: [],
     disabled: [],
