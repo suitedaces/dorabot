@@ -735,6 +735,32 @@ export function useGateway(url = 'ws://localhost:18789') {
     };
   }, []);
 
+  // tool policy RPCs
+  const getToolPolicies = useCallback(async () => {
+    return await rpc('security.tools.get') as {
+      global: { allow?: string[]; deny?: string[] };
+      whatsapp: { allow?: string[]; deny?: string[] };
+      telegram: { allow?: string[]; deny?: string[] };
+    };
+  }, [rpc]);
+
+  const setToolPolicy = useCallback(async (target: string, allow?: string[], deny?: string[]) => {
+    await rpc('security.tools.set', { target, allow, deny });
+  }, [rpc]);
+
+  // path access RPCs
+  const getPathPolicies = useCallback(async () => {
+    return await rpc('security.paths.get') as {
+      global: { allowed: string[]; denied: string[]; alwaysDenied: string[] };
+      whatsapp: { allowed: string[]; denied: string[] };
+      telegram: { allowed: string[]; denied: string[] };
+    };
+  }, [rpc]);
+
+  const setPathPolicy = useCallback(async (target: string, allowed?: string[], denied?: string[]) => {
+    await rpc('security.paths.set', { target, allowed, denied });
+  }, [rpc]);
+
   return {
     connectionState,
     chatItems,
@@ -768,5 +794,9 @@ export function useGateway(url = 'ws://localhost:18789') {
     removeSender,
     setChannelPolicy,
     restartChannel,
+    getToolPolicies,
+    setToolPolicy,
+    getPathPolicies,
+    setPathPolicy,
   };
 }

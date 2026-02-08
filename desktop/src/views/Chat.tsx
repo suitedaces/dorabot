@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
-import { Send, Square, Plus, ChevronDown, ChevronRight, Check, X } from 'lucide-react';
+import { Send, Square, Plus, ChevronDown, ChevronRight, Check, X, Sparkles } from 'lucide-react';
 
 type Props = {
   gateway: ReturnType<typeof useGateway>;
@@ -227,6 +227,8 @@ function AskUserQuestionPanel({
   );
 }
 
+const ONBOARD_PROMPT = `help me personalize you`;
+
 export function ChatView({ gateway }: Props) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -331,12 +333,23 @@ export function ChatView({ gateway }: Props) {
         <div className="px-4 py-3">
           {gateway.chatItems.length === 0 && (
             <AuroraBackground className="h-full min-h-[300px]">
-              <div className="text-center space-y-2">
+              <div className="text-center space-y-3">
                 <img src="/robot.gif" alt="robot" className="w-24 h-24 mx-auto" />
                 <div className="text-muted-foreground text-sm">send a message to start</div>
                 <div className="text-[10px] text-muted-foreground">
                   {gateway.connectionState === 'connected' ? 'connected to gateway' : 'waiting for gateway...'}
                 </div>
+                {gateway.connectionState === 'connected' && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs px-4 gap-1.5 mt-2"
+                    onClick={() => gateway.sendMessage(ONBOARD_PROMPT)}
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    set up your soul
+                  </Button>
+                )}
               </div>
             </AuroraBackground>
           )}
