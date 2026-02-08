@@ -395,12 +395,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     },
     onQuestionResponse: (requestId, selectedIndex, label) => {
       console.log(`[canUseTool] question response: requestId=${requestId} index=${selectedIndex} label=${label}`);
-      const pending = pendingTgQuestions.get(requestId);
+      const pending = pendingChannelQuestions.get(requestId);
       if (!pending) {
-        console.log(`[canUseTool] no pending question for ${requestId} (map size: ${pendingTgQuestions.size})`);
+        console.log(`[canUseTool] no pending question for ${requestId} (map size: ${pendingChannelQuestions.size})`);
         return;
       }
-      pendingTgQuestions.delete(requestId);
+      pendingChannelQuestions.delete(requestId);
       pending.resolve(label);
     },
     onStatus: (status) => {
@@ -453,8 +453,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     reject: (err: Error) => void;
   }>();
 
-  // pending AskUserQuestion requests waiting for telegram inline keyboard answers
-  const pendingTgQuestions = new Map<string, {
+  // pending AskUserQuestion requests waiting for channel responses (telegram inline keyboard / whatsapp text reply)
+  const pendingChannelQuestions = new Map<string, {
     resolve: (label: string) => void;
     options: { label: string }[];
   }>();
@@ -504,16 +504,16 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   };
 
   const canUseToolImpl = async (toolName: string, input: Record<string, unknown>, runChannel?: string, runChatId?: string) => {
-    // AskUserQuestion — route to telegram or desktop
+    // AskUserQuestion — route to channel or desktop
     if (toolName === 'AskUserQuestion') {
       const questions = input.questions as unknown[];
       if (!questions) {
         return { behavior: 'allow' as const, updatedInput: input };
       }
 
-      // telegram: send inline keyboard per question
-      if (runChannel === 'telegram' && runChatId) {
-        console.log(`[canUseTool] AskUserQuestion on telegram, chatId=${runChatId}, ${(questions as any[]).length} question(s)`);
+      // channel (telegram/whatsapp): send question and wait for response
+      if ((runChannel === 'telegram' || runChannel === 'whatsapp') && runChatId) {
+        console.log(`[canUseTool] AskUserQuestion on ${runChannel}, chatId=${runChatId}, ${(questions as any[]).length} question(s)`);
         const answers: Record<string, string> = {};
         for (let qi = 0; qi < (questions as any[]).length; qi++) {
           const q = (questions as any[])[qi];
@@ -528,8 +528,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               chatId: runChatId,
               question: questionText,
               options: opts,
-            });
-            console.log(`[canUseTool] sent question inline keyboard: ${requestId}`);
+            }, runChannel);
+            console.log(`[canUseTool] sent question to ${runChannel}: ${requestId}`);
           } catch (err) {
             console.error(`[canUseTool] failed to send question:`, err);
             answers[questionText] = opts[0]?.label || '';
@@ -537,15 +537,15 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
 
           const label = await new Promise<string>((resolve) => {
-            pendingTgQuestions.set(requestId, { resolve, options: opts });
+            pendingChannelQuestions.set(requestId, { resolve, options: opts });
             setTimeout(() => {
-              if (pendingTgQuestions.has(requestId)) {
-                pendingTgQuestions.delete(requestId);
+              if (pendingChannelQuestions.has(requestId)) {
+                pendingChannelQuestions.delete(requestId);
                 resolve(opts[0]?.label || '');
               }
             }, 120000);
           });
-          // SDK expects question text as key, not q0/q1
+          // SDK expects question text as key
           answers[questionText] = label;
         }
         return {
@@ -624,7 +624,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         event: 'agent.tool_approval',
         data: { requestId, toolName: cleanName, input, tier: 'require-approval', timestamp: Date.now() },
       });
-      channelManager.sendApprovalRequest({ requestId, toolName: cleanName, input }).catch(() => {});
+      channelManager.sendApprovalRequest({ requestId, toolName: cleanName, input, chatId: runChatId }, runChannel).catch(() => {});
       const decision = await waitForApproval(requestId, cleanName, input);
       if (decision.approved) {
         return { behavior: 'allow' as const, updatedInput: decision.modifiedInput || input };
@@ -647,7 +647,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         event: 'agent.tool_approval',
         data: { requestId, toolName: cleanName, input, tier, timestamp: Date.now() },
       });
-      channelManager.sendApprovalRequest({ requestId, toolName: cleanName, input }).catch(() => {});
+      channelManager.sendApprovalRequest({ requestId, toolName: cleanName, input, chatId: runChatId }, runChannel).catch(() => {});
 
       const decision = await waitForApproval(requestId, cleanName, input);
 
