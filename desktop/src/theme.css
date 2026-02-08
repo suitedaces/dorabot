@@ -12,7 +12,7 @@
   --accent-amber: #d29922;
   --accent-red: #f85149;
   --accent-purple: #bc8cff;
-  --font-mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --font-mono: 'JetBrains Mono', monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --radius: 6px;
   --sidebar-width: 200px;
@@ -645,6 +645,92 @@ input, textarea, select, button {
   margin-top: 8px;
   color: var(--text-secondary);
   font-size: 12px;
+}
+
+/* channel security */
+.policy-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.policy-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  min-width: 90px;
+}
+
+.policy-select {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  outline: none;
+}
+
+.policy-select:focus {
+  border-color: var(--accent-blue);
+}
+
+.sender-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  margin-bottom: 8px;
+}
+
+.sender-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.sender-remove {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.sender-remove:hover {
+  color: var(--accent-red);
+}
+
+.sender-add-row {
+  display: flex;
+  gap: 6px;
+}
+
+.sender-add-btn {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.sender-add-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sender-add-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* badges */

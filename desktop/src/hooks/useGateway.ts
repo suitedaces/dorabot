@@ -673,6 +673,27 @@ export function useGateway(url = 'ws://localhost:18789') {
     setModel(newModel);
   }, [rpc]);
 
+  const getSecuritySenders = useCallback(async () => {
+    return await rpc('security.senders.list') as { telegram: string[]; whatsapp: string[] };
+  }, [rpc]);
+
+  const addSender = useCallback(async (channel: string, senderId: string) => {
+    await rpc('security.senders.add', { channel, senderId });
+  }, [rpc]);
+
+  const removeSender = useCallback(async (channel: string, senderId: string) => {
+    await rpc('security.senders.remove', { channel, senderId });
+  }, [rpc]);
+
+  const setChannelPolicy = useCallback(async (key: string, value: string) => {
+    await rpc('config.set', { key, value });
+  }, [rpc]);
+
+  const restartChannel = useCallback(async (channel: string) => {
+    await rpc('channels.stop', { channel });
+    await rpc('channels.start', { channel });
+  }, [rpc]);
+
   const onFileChange = useCallback((listener: (path: string) => void) => {
     fsChangeListenersRef.current.add(listener);
     return () => {
@@ -705,5 +726,10 @@ export function useGateway(url = 'ws://localhost:18789') {
     approveToolUse,
     denyToolUse,
     onFileChange,
+    getSecuritySenders,
+    addSender,
+    removeSender,
+    setChannelPolicy,
+    restartChannel,
   };
 }

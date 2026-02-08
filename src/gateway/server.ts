@@ -290,6 +290,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         ].join('\n');
       }
     },
+    onApprovalResponse: (requestId, approved, reason) => {
+      const pending = pendingApprovals.get(requestId);
+      if (!pending) return;
+      pendingApprovals.delete(requestId);
+      if (pending.timeout) clearTimeout(pending.timeout);
+      pending.resolve({ approved, reason });
+    },
     onStatus: (status) => {
       broadcast({ event: 'channel.status', data: status });
     },
@@ -415,6 +422,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         event: 'agent.tool_approval',
         data: { requestId, toolName, input, tier, timestamp: Date.now() },
       });
+      // also forward to telegram inline keyboard
+      channelManager.sendApprovalRequest({ requestId, toolName, input }).catch(() => {});
 
       const decision = await waitForApproval(requestId, toolName, input);
 
@@ -811,6 +820,25 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             broadcast({ event: 'status.update', data: { model: value } });
             return { id, result: { model: value } };
           }
+
+          // channel policy keys: channels.<channel>.dmPolicy / groupPolicy
+          const policyMatch = key.match(/^channels\.(telegram|whatsapp)\.(dmPolicy|groupPolicy)$/);
+          if (policyMatch) {
+            const ch = policyMatch[1] as 'telegram' | 'whatsapp';
+            const field = policyMatch[2] as 'dmPolicy' | 'groupPolicy';
+            if (field === 'dmPolicy' && value !== 'open' && value !== 'allowlist') {
+              return { id, error: 'dmPolicy must be open or allowlist' };
+            }
+            if (field === 'groupPolicy' && value !== 'open' && value !== 'allowlist' && value !== 'disabled') {
+              return { id, error: 'groupPolicy must be open, allowlist, or disabled' };
+            }
+            if (!config.channels) config.channels = {};
+            if (!config.channels[ch]) config.channels[ch] = {};
+            (config.channels[ch] as any)[field] = value;
+            saveConfig(config);
+            return { id, result: { key, value } };
+          }
+
           return { id, error: `unsupported config key: ${key}` };
         }
 

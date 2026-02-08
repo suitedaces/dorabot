@@ -2,8 +2,14 @@ import { createTelegramBot, resolveTelegramToken } from './bot.js';
 import { sendTelegramMessage, editTelegramMessage, deleteTelegramMessage } from './send.js';
 import { registerChannelHandler } from '../../tools/messaging.js';
 import type { InboundMessage } from '../types.js';
-import type { Bot } from 'grammy';
+import { InlineKeyboard, type Bot } from 'grammy';
 import { run, type RunnerHandle } from '@grammyjs/runner';
+
+export type ApprovalRequest = {
+  requestId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+};
 
 export type TelegramMonitorOptions = {
   botToken?: string;
@@ -13,10 +19,16 @@ export type TelegramMonitorOptions = {
   groupPolicy?: 'open' | 'allowlist' | 'disabled';
   onMessage?: (msg: InboundMessage) => Promise<void>;
   onCommand?: (cmd: string, chatId: string) => Promise<string | void>;
+  onApprovalResponse?: (requestId: string, approved: boolean, reason?: string) => void;
   abortSignal?: AbortSignal;
 };
 
-export async function startTelegramMonitor(opts: TelegramMonitorOptions): Promise<() => Promise<void>> {
+export type TelegramMonitorHandle = {
+  stop: () => Promise<void>;
+  sendApprovalRequest: (req: ApprovalRequest) => Promise<void>;
+};
+
+export async function startTelegramMonitor(opts: TelegramMonitorOptions): Promise<TelegramMonitorHandle> {
   const token = resolveTelegramToken(opts.tokenFile);
   const bot: Bot = createTelegramBot({ token });
 
@@ -57,6 +69,27 @@ export async function startTelegramMonitor(opts: TelegramMonitorOptions): Promis
       if (reply) await ctx.reply(reply);
     });
   }
+
+  // handle approval callback queries (inline keyboard buttons)
+  bot.on('callback_query:data', async (ctx) => {
+    const data = ctx.callbackQuery.data;
+    const sep = data.indexOf(':');
+    if (sep < 0) return;
+
+    const action = data.slice(0, sep);
+    const requestId = data.slice(sep + 1);
+
+    if (action !== 'approve' && action !== 'deny') return;
+
+    const approved = action === 'approve';
+    opts.onApprovalResponse?.(requestId, approved, approved ? undefined : 'denied via telegram');
+
+    try {
+      const label = approved ? '\u2705 Approved' : '\u274c Denied';
+      await ctx.editMessageText(`${ctx.callbackQuery.message?.text || ''}\n\n${label}`, { parse_mode: 'HTML' });
+    } catch {}
+    await ctx.answerCallbackQuery(approved ? 'Approved' : 'Denied');
+  });
 
   // handle incoming text messages
   bot.on('message:text', async (ctx) => {
@@ -110,10 +143,40 @@ export async function startTelegramMonitor(opts: TelegramMonitorOptions): Promis
     throw err;
   }
 
-  // return stop function
-  return async () => {
+  // send approval request as inline keyboard to the owner
+  const sendApprovalRequest = async (req: ApprovalRequest) => {
+    const adminChatId = opts.allowFrom?.[0];
+    if (!adminChatId) return;
+
+    const detail = req.toolName === 'Bash' || req.toolName === 'bash'
+      ? `<code>${escapeHtml(String(req.input.command || ''))}</code>`
+      : `<pre>${escapeHtml(JSON.stringify(req.input, null, 2).slice(0, 500))}</pre>`;
+
+    const text = `\u26a0\ufe0f <b>Approval Required</b>\n\nTool: <b>${escapeHtml(req.toolName)}</b>\n${detail}`;
+
+    const keyboard = new InlineKeyboard()
+      .text('\u2705 Allow', `approve:${req.requestId}`)
+      .text('\u274c Deny', `deny:${req.requestId}`);
+
+    try {
+      await bot.api.sendMessage(Number(adminChatId), text, {
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
+    } catch (err) {
+      console.error('[telegram] failed to send approval request:', err);
+    }
+  };
+
+  const stop = async () => {
     if (runner.isRunning()) {
       runner.stop();
     }
   };
+
+  return { stop, sendApprovalRequest };
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

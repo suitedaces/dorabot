@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import type { useGateway } from '../hooks/useGateway';
+import { ChannelSecurity } from '../components/ChannelSecurity';
 
 type Props = {
   channel: 'whatsapp' | 'telegram';
@@ -61,6 +62,8 @@ export function ChannelView({ channel, gateway, onViewSession }: Props) {
       </div>
 
       <div className="view-body">
+        <ChannelSecurity channel={channel} gateway={gateway} />
+
         {channelSessions.length === 0 && messages.length === 0 && (
           <div className="empty-state">
             <div className="empty-state-icon">{channel === 'whatsapp' ? 'W' : 'T'}</div>
