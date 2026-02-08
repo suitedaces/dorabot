@@ -66,12 +66,18 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const host = opts.host || config.gateway?.host || DEFAULT_HOST;
   const startedAt = Date.now();
 
-  // generate gateway auth token
+  // stable gateway auth token — reuse existing, only generate on first run
   const tokenPath = join(homedir(), '.my-agent', 'gateway-token');
-  const gatewayToken = randomBytes(32).toString('hex');
   mkdirSync(join(homedir(), '.my-agent'), { recursive: true });
-  writeFileSync(tokenPath, gatewayToken, { mode: 0o600 });
-  console.log(`[gateway] auth token written to ${tokenPath}`);
+  let gatewayToken: string;
+  if (existsSync(tokenPath)) {
+    gatewayToken = readFileSync(tokenPath, 'utf-8').trim();
+    console.log(`[gateway] reusing auth token from ${tokenPath}`);
+  } else {
+    gatewayToken = randomBytes(32).toString('hex');
+    writeFileSync(tokenPath, gatewayToken, { mode: 0o600 });
+    console.log(`[gateway] auth token created at ${tokenPath}`);
+  }
 
   const clients = new Map<WebSocket, { authenticated: boolean }>();
 

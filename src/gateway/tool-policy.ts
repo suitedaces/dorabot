@@ -3,21 +3,26 @@ import type { Config } from '../config.js';
 export type Tier = 'auto-allow' | 'notify' | 'require-approval';
 
 const DESTRUCTIVE_PATTERNS = [
-  /rm\s+-rf\s+\//,
-  /rm\s+-rf\s+~/,
-  /rm\s+-rf\s+\.\.\//,
-  /mkfs\./,
-  /dd\s+if=/,
+  /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*\s+|--recursive)/,
+  /\brm\s+/,
+  /\bmkfs\./,
+  /\bdd\s+if=/,
   />\s*\/dev\/sd/,
   /curl\s+.*\|\s*(ba)?sh/,
   /wget\s+.*\|\s*(ba)?sh/,
-  /chmod\s+777/,
+  /\bchmod\s+[0-7]*7[0-7]*/,
   /:()\{\s*:\|:&\s*\};:/,
-  /shutdown|reboot|halt/,
-  /launchctl\s+unload/,
-  /defaults\s+delete/,
-  /find\s+\/\s+-delete/,
-  />\s*\/dev\/null\s*2>&1\s*&/,
+  /\b(shutdown|reboot|halt|poweroff)\b/,
+  /\blaunchctl\s+(unload|remove)/,
+  /\bdefaults\s+(delete|write)/,
+  /\bfind\s+.*-delete/,
+  /\bkill\s+-9/,
+  /\bkillall\b/,
+  /\bpkill\b/,
+  /\bsudo\b/,
+  /\bmv\s+/,
+  /\bnpm\s+(publish|unpublish)/,
+  /\bgit\s+(push|reset\s+--hard|clean\s+-[a-z]*f)/,
 ];
 
 function classifyBashCommand(command: string): Tier {

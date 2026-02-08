@@ -1,5 +1,10 @@
 import { useState, useEffect } from 'react';
 import type { useGateway } from '../hooks/useGateway';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { BentoGrid, BentoGridItem } from '@/components/aceternity/bento-grid';
+import { Shield, Wifi, Radio, Database, FileJson } from 'lucide-react';
 
 type Props = {
   gateway: ReturnType<typeof useGateway>;
@@ -15,109 +20,140 @@ export function StatusView({ gateway }: Props) {
       .catch(() => {});
   }, [gateway.connectionState, gateway.rpc]);
 
-  const hasToken = !!(window as any).electronAPI?.gatewayToken || !!localStorage.getItem('my-agent:gateway-token');
+  const hasToken = !!(window as any).electronAPI?.getGatewayToken?.() || !!(window as any).electronAPI?.gatewayToken || !!localStorage.getItem('my-agent:gateway-token');
 
   return (
-    <div className="chat-view">
-      <div className="view-header">
-        Status
-        <span
-          className={`badge ${gateway.connectionState === 'connected' ? 'connected' : 'disconnected'}`}
-          style={{ marginLeft: 8 }}
-        >
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0">
+        <span className="font-semibold text-sm">Status</span>
+        <Badge variant={gateway.connectionState === 'connected' ? 'default' : 'destructive'}>
           {gateway.connectionState}
-        </span>
+        </Badge>
       </div>
-      <div className="view-body">
-        {/* security */}
-        <div className="card">
-          <div className="card-title">Security</div>
-          <div className="card-body">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
-              <span>gateway auth:</span>
-              <span className={`badge ${hasToken ? 'connected' : 'disconnected'}`}>
-                {hasToken ? 'token active' : 'no token'}
-              </span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
-              <span>pending approvals:</span>
-              <span style={{ color: gateway.pendingApprovals.length > 0 ? 'var(--accent-amber)' : 'var(--text-muted)' }}>
-                {gateway.pendingApprovals.length}
-              </span>
-            </div>
-          </div>
-        </div>
 
-        {/* gateway */}
-        <div className="card">
-          <div className="card-title">Gateway</div>
-          <div className="card-body">
-            <div>connection: {gateway.connectionState}</div>
-            <div>agent: {gateway.agentStatus}</div>
-            <div>session: {gateway.currentSessionId || 'none'}</div>
-          </div>
-        </div>
+      <ScrollArea className="flex-1">
+        <div className="p-4">
+          <BentoGrid className="grid-cols-2 gap-3">
+            <BentoGridItem className="col-span-1">
+              <Card>
+                <CardContent className="p-3">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Shield className="w-4 h-4 text-primary" />
+                    <span className="text-xs font-semibold">Security</span>
+                  </div>
+                  <div className="space-y-2 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="text-muted-foreground">gateway auth:</span>
+                      <Badge variant={hasToken ? 'default' : 'destructive'} className="text-[9px] h-4">
+                        {hasToken ? 'token active' : 'no token'}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-muted-foreground">pending approvals:</span>
+                      <span className={gateway.pendingApprovals.length > 0 ? 'text-warning' : 'text-muted-foreground'}>
+                        {gateway.pendingApprovals.length}
+                      </span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </BentoGridItem>
 
-        {/* channels */}
-        <div className="card">
-          <div className="card-title">Channels</div>
-          <div className="card-body">
-            {gateway.channelStatuses.length === 0 && (
-              <div style={{ color: 'var(--text-muted)' }}>no channels configured</div>
+            <BentoGridItem className="col-span-1">
+              <Card>
+                <CardContent className="p-3">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Wifi className="w-4 h-4 text-primary" />
+                    <span className="text-xs font-semibold">Gateway</span>
+                  </div>
+                  <div className="space-y-1 text-xs text-muted-foreground">
+                    <div>connection: <span className="text-foreground">{gateway.connectionState}</span></div>
+                    <div>agent: <span className="text-foreground">{gateway.agentStatus}</span></div>
+                    <div>session: <span className="text-foreground font-mono text-[10px]">{gateway.currentSessionId || 'none'}</span></div>
+                  </div>
+                </CardContent>
+              </Card>
+            </BentoGridItem>
+
+            <BentoGridItem className="col-span-1">
+              <Card>
+                <CardContent className="p-3">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Radio className="w-4 h-4 text-primary" />
+                    <span className="text-xs font-semibold">Channels</span>
+                  </div>
+                  {gateway.channelStatuses.length === 0 ? (
+                    <div className="text-xs text-muted-foreground">no channels configured</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {gateway.channelStatuses.map(ch => (
+                        <div key={ch.channel} className="flex items-center gap-2 text-xs">
+                          <span className="font-semibold">{ch.channel}</span>
+                          <Badge
+                            variant={ch.connected ? 'default' : ch.running ? 'outline' : 'destructive'}
+                            className="text-[9px] h-4"
+                          >
+                            {ch.connected ? 'connected' : ch.running ? 'connecting' : 'stopped'}
+                          </Badge>
+                          {ch.accountId && <span className="text-[10px] text-muted-foreground">{ch.accountId}</span>}
+                          {ch.lastError && <span className="text-[10px] text-destructive">{ch.lastError}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </BentoGridItem>
+
+            <BentoGridItem className="col-span-1">
+              <Card>
+                <CardContent className="p-3">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Database className="w-4 h-4 text-primary" />
+                    <span className="text-xs font-semibold">Sessions</span>
+                  </div>
+                  {gateway.sessions.length === 0 ? (
+                    <div className="text-xs text-muted-foreground">no sessions</div>
+                  ) : (
+                    <div className="space-y-1">
+                      {gateway.sessions.slice(0, 10).map(s => (
+                        <div
+                          key={s.id}
+                          className="flex items-center gap-2 text-[10px] cursor-pointer hover:text-foreground transition-colors"
+                          style={{ color: s.id === gateway.currentSessionId ? undefined : 'var(--muted-foreground)' }}
+                          onClick={() => gateway.setCurrentSessionId(s.id)}
+                        >
+                          <span className={`font-mono ${s.id === gateway.currentSessionId ? 'text-primary' : ''}`}>
+                            {s.id.slice(0, 8)}
+                          </span>
+                          <span>{s.messageCount} msgs</span>
+                          <span>{s.updatedAt}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </BentoGridItem>
+
+            {statusData && (
+              <BentoGridItem className="col-span-2">
+                <Card>
+                  <CardContent className="p-3">
+                    <div className="flex items-center gap-2 mb-3">
+                      <FileJson className="w-4 h-4 text-primary" />
+                      <span className="text-xs font-semibold">Raw Status</span>
+                    </div>
+                    <pre className="whitespace-pre-wrap text-[11px] text-muted-foreground overflow-auto max-h-[300px]">
+                      {JSON.stringify(statusData, null, 2)}
+                    </pre>
+                  </CardContent>
+                </Card>
+              </BentoGridItem>
             )}
-            {gateway.channelStatuses.map(ch => (
-              <div key={ch.channel} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
-                <span style={{ fontWeight: 600 }}>{ch.channel}</span>
-                <span className={`badge ${ch.connected ? 'connected' : ch.running ? 'running' : 'disconnected'}`}>
-                  {ch.connected ? 'connected' : ch.running ? 'connecting' : 'stopped'}
-                </span>
-                {ch.accountId && <span className="card-meta">{ch.accountId}</span>}
-                {ch.lastError && <span style={{ color: 'var(--accent-red)', fontSize: 11 }}>{ch.lastError}</span>}
-              </div>
-            ))}
-          </div>
+          </BentoGrid>
         </div>
-
-        {/* sessions */}
-        <div className="card">
-          <div className="card-title">Sessions</div>
-          <div className="card-body">
-            {gateway.sessions.length === 0 && (
-              <div style={{ color: 'var(--text-muted)' }}>no sessions</div>
-            )}
-            {gateway.sessions.slice(0, 10).map(s => (
-              <div
-                key={s.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '4px 0',
-                  cursor: 'pointer',
-                  color: s.id === gateway.currentSessionId ? 'var(--accent-blue)' : 'var(--text-secondary)',
-                }}
-                onClick={() => gateway.setCurrentSessionId(s.id)}
-              >
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{s.id.slice(0, 8)}</span>
-                <span className="card-meta">{s.messageCount} msgs</span>
-                <span className="card-meta">{s.updatedAt}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* raw status */}
-        {statusData && (
-          <div className="card">
-            <div className="card-title">Raw Status</div>
-            <div className="card-body">
-              <pre style={{ whiteSpace: 'pre-wrap', fontSize: 11, color: 'var(--text-muted)' }}>
-                {JSON.stringify(statusData, null, 2)}
-              </pre>
-            </div>
-          </div>
-        )}
-      </div>
+      </ScrollArea>
     </div>
   );
 }

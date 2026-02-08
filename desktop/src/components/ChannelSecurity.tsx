@@ -1,5 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { useGateway } from '../hooks/useGateway';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { ChevronDown, ChevronRight, X, Plus, RotateCw } from 'lucide-react';
 
 type Props = {
   channel: 'whatsapp' | 'telegram';
@@ -58,80 +65,101 @@ export function ChannelSecurity({ channel, gateway }: Props) {
   };
 
   return (
-    <div className="card" style={{ marginBottom: 12 }}>
-      <div
-        className="card-title"
-        style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
-        onClick={() => setExpanded(!expanded)}
-      >
-        <span>security</span>
-        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
-          {senders.length > 0 ? `${senders.length} allowed` : 'open to all'}
-          {' '}{expanded ? '▾' : '▸'}
-        </span>
-      </div>
-
-      {expanded && (
-        <div className="card-body" style={{ paddingTop: 8 }}>
-          <div className="policy-row">
-            <span className="policy-label">dm policy</span>
-            <select className="policy-select" value={dmPolicy} onChange={e => handleDmPolicy(e.target.value)}>
-              <option value="open">open</option>
-              <option value="allowlist">allowlist</option>
-            </select>
-          </div>
-
-          <div className="policy-row">
-            <span className="policy-label">group policy</span>
-            <select className="policy-select" value={groupPolicy} onChange={e => handleGroupPolicy(e.target.value)}>
-              <option value="open">open</option>
-              <option value="allowlist">allowlist</option>
-              <option value="disabled">disabled</option>
-            </select>
-          </div>
-
-          <div style={{ marginTop: 10 }}>
-            <span className="policy-label">allowed senders</span>
-            {senders.length === 0 && (
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                no sender restrictions — anyone can message
+    <Collapsible open={expanded} onOpenChange={setExpanded}>
+      <Card className="mb-3">
+        <CollapsibleTrigger className="w-full">
+          <CardContent className="p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold">security</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-muted-foreground">
+                  {senders.length > 0 ? `${senders.length} allowed` : 'open to all'}
+                </span>
+                {expanded ? <ChevronDown className="w-3 h-3 text-muted-foreground" /> : <ChevronRight className="w-3 h-3 text-muted-foreground" />}
               </div>
-            )}
-            <div className="sender-list">
-              {senders.map(id => (
-                <div key={id} className="sender-item">
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{id}</span>
-                  <button className="sender-remove" onClick={() => handleRemoveSender(id)}>×</button>
-                </div>
-              ))}
             </div>
-            <div className="sender-add-row">
-              <input
-                className="policy-select"
-                style={{ flex: 1 }}
-                placeholder="sender id"
-                value={newSender}
-                onChange={e => setNewSender(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleAddSender()}
-              />
-              <button
-                className="sender-add-btn"
-                onClick={handleAddSender}
-                disabled={!newSender.trim()}
-              >
-                add
-              </button>
+          </CardContent>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="px-3 pb-3 pt-0 border-t border-border mt-1 space-y-3">
+            <div className="flex items-center gap-3 mt-2">
+              <span className="text-[11px] text-muted-foreground w-20">dm policy</span>
+              <Select value={dmPolicy} onValueChange={handleDmPolicy}>
+                <SelectTrigger className="h-7 text-[11px] w-28">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="open" className="text-[11px]">open</SelectItem>
+                  <SelectItem value="allowlist" className="text-[11px]">allowlist</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-          </div>
 
-          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <button className="sender-add-btn" onClick={handleRestart}>restart channel</button>
-            <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
-              policy changes apply after restart
-            </span>
+            <div className="flex items-center gap-3">
+              <span className="text-[11px] text-muted-foreground w-20">group policy</span>
+              <Select value={groupPolicy} onValueChange={handleGroupPolicy}>
+                <SelectTrigger className="h-7 text-[11px] w-28">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="open" className="text-[11px]">open</SelectItem>
+                  <SelectItem value="allowlist" className="text-[11px]">allowlist</SelectItem>
+                  <SelectItem value="disabled" className="text-[11px]">disabled</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <span className="text-[11px] text-muted-foreground">allowed senders</span>
+              {senders.length === 0 && (
+                <div className="text-[10px] text-muted-foreground mt-1">
+                  no sender restrictions — anyone can message
+                </div>
+              )}
+              <div className="space-y-1 mt-1">
+                {senders.map(id => (
+                  <div key={id} className="flex items-center gap-2 text-[11px] bg-secondary rounded px-2 py-1">
+                    <code className="flex-1 text-foreground">{id}</code>
+                    <button
+                      className="text-muted-foreground hover:text-destructive transition-colors"
+                      onClick={() => handleRemoveSender(id)}
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-1.5 mt-2">
+                <Input
+                  placeholder="sender id"
+                  value={newSender}
+                  onChange={e => setNewSender(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAddSender()}
+                  className="flex-1 h-7 text-[11px]"
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-[11px] px-2"
+                  onClick={handleAddSender}
+                  disabled={!newSender.trim()}
+                >
+                  <Plus className="w-3 h-3 mr-1" />add
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" className="h-7 text-[11px] px-2" onClick={handleRestart}>
+                <RotateCw className="w-3 h-3 mr-1" />restart channel
+              </Button>
+              <span className="text-[10px] text-muted-foreground">
+                policy changes apply after restart
+              </span>
+            </div>
           </div>
-        </div>
-      )}
-    </div>
+        </CollapsibleContent>
+      </Card>
+    </Collapsible>
   );
 }

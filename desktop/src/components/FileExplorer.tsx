@@ -1,5 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import type React from 'react';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
+import { Folder, File, ChevronRight, ChevronDown, FolderPlus, Pencil, Trash2 } from 'lucide-react';
 
 type FileEntry = {
   name: string;
@@ -36,7 +41,6 @@ function buildCrumbs(root: string, current: string): { label: string; path: stri
   const short = shortenPath(current);
   const parts = short.split('/').filter(Boolean);
   const crumbs: { label: string; path: string }[] = [];
-  // first part is ~ or absolute root
   let abs = short.startsWith('~') ? root.match(/^\/Users\/[^/]+/)?.[0] || '' : '';
   for (const part of parts) {
     if (part === '~') {
@@ -93,24 +97,13 @@ export function FileExplorer({ rpc, connected, onFileClick, onFileChange }: Prop
     }).catch(() => {});
   }, [rpc, loadDir, connected, viewRoot]);
 
-  // watch current viewRoot directory for changes
   useEffect(() => {
     if (!viewRoot || !connected) return;
-
-    // start watching
     rpc('fs.watch.start', { path: viewRoot }).catch(() => {});
-
-    // listen to file change events
     const unsubscribe = onFileChange?.((changedPath) => {
-      // refresh if the changed path is the current viewRoot
-      if (changedPath === viewRoot) {
-        console.log('[file-explorer] reloading due to fs change:', changedPath);
-        loadDir(viewRoot);
-      }
+      if (changedPath === viewRoot) loadDir(viewRoot);
     });
-
     return () => {
-      // stop watching
       rpc('fs.watch.stop', { path: viewRoot }).catch(() => {});
       unsubscribe?.();
     };
@@ -138,7 +131,6 @@ export function FileExplorer({ rpc, connected, onFileClick, onFileChange }: Prop
   const createFolder = useCallback(async () => {
     const folderName = prompt('Enter folder name:');
     if (!folderName) return;
-
     const newPath = viewRoot + '/' + folderName;
     try {
       await rpc('fs.mkdir', { path: newPath });
@@ -151,7 +143,6 @@ export function FileExplorer({ rpc, connected, onFileClick, onFileChange }: Prop
   const deleteItem = useCallback(async (path: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!confirm(`Delete ${path}?`)) return;
-
     try {
       await rpc('fs.delete', { path });
       const parentPath = path.substring(0, path.lastIndexOf('/'));
@@ -167,10 +158,8 @@ export function FileExplorer({ rpc, connected, onFileClick, onFileChange }: Prop
     const oldName = oldPath.substring(oldPath.lastIndexOf('/') + 1);
     const newName = prompt('Enter new name:', oldName);
     if (!newName || newName === oldName) return;
-
     const parentPath = oldPath.substring(0, oldPath.lastIndexOf('/'));
     const newPath = parentPath + '/' + newName;
-
     try {
       await rpc('fs.rename', { oldPath, newPath });
       loadDir(parentPath);
@@ -190,39 +179,62 @@ export function FileExplorer({ rpc, connected, onFileClick, onFileChange }: Prop
     if (!state) return [];
 
     if (state.loading && state.entries.length === 0) {
-      return [<div key="loading" className="fe-entry" style={{ paddingLeft: depth * 16 + 12 }}>...</div>];
+      return [<div key="loading" className="text-[11px] text-muted-foreground py-1" style={{ paddingLeft: depth * 16 + 12 }}>...</div>];
     }
 
     if (state.error) {
-      return [<div key="error" className="fe-entry fe-error" style={{ paddingLeft: depth * 16 + 12 }}>{state.error}</div>];
+      return [<div key="error" className="text-[11px] text-destructive py-1" style={{ paddingLeft: depth * 16 + 12 }}>{state.error}</div>];
     }
 
     const items: React.JSX.Element[] = [];
     for (const entry of state.entries) {
       const fullPath = parentPath + '/' + entry.name;
       const isDir = entry.type === 'directory';
-      const isExpanded = expanded.has(fullPath);
+      const isExpanded2 = expanded.has(fullPath);
       const isDot = entry.name.startsWith('.');
 
       items.push(
         <div
           key={fullPath}
-          className={`fe-entry${isDot ? ' fe-dimmed' : ''}${selectedPath === fullPath ? ' fe-selected' : ''}`}
+          className={cn(
+            'flex items-center gap-1.5 py-0.5 px-1 rounded-sm text-[11px] cursor-pointer group transition-colors',
+            isDot && 'opacity-50',
+            selectedPath === fullPath ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'
+          )}
           style={{ paddingLeft: depth * 16 + 12 }}
           onClick={isDir ? () => toggleDir(fullPath) : () => handleFileClick(fullPath)}
           onDoubleClick={isDir ? () => navigateTo(fullPath) : undefined}
         >
-          <span className="fe-icon">{isDir ? (isExpanded ? 'v' : '>') : ' '}</span>
-          <span className={isDir ? 'fe-dir-name' : 'fe-file-name'}>{entry.name}</span>
-          {entry.size != null && <span className="fe-size">{formatSize(entry.size)}</span>}
-          <span className="fe-actions">
-            <button className="fe-action-btn" onClick={(e) => renameItem(fullPath, e)} title="Rename">✎</button>
-            <button className="fe-action-btn" onClick={(e) => deleteItem(fullPath, e)} title="Delete">×</button>
+          {isDir ? (
+            isExpanded2 ? <ChevronDown className="w-3 h-3 shrink-0" /> : <ChevronRight className="w-3 h-3 shrink-0" />
+          ) : (
+            <span className="w-3 shrink-0" />
+          )}
+          {isDir ? <Folder className="w-3 h-3 shrink-0 text-primary" /> : <File className="w-3 h-3 shrink-0" />}
+          <span className={cn('flex-1 truncate', isDir && 'font-semibold')}>{entry.name}</span>
+          {entry.size != null && <span className="text-[9px] text-muted-foreground shrink-0">{formatSize(entry.size)}</span>}
+          <span className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button className="p-0.5 hover:text-primary transition-colors" onClick={(e) => renameItem(fullPath, e)}>
+                  <Pencil className="w-2.5 h-2.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="text-[10px]">Rename</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button className="p-0.5 hover:text-destructive transition-colors" onClick={(e) => deleteItem(fullPath, e)}>
+                  <Trash2 className="w-2.5 h-2.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="text-[10px]">Delete</TooltipContent>
+            </Tooltip>
           </span>
         </div>
       );
 
-      if (isDir && isExpanded) {
+      if (isDir && isExpanded2) {
         items.push(...renderEntries(fullPath, depth + 1));
       }
     }
@@ -233,25 +245,37 @@ export function FileExplorer({ rpc, connected, onFileClick, onFileChange }: Prop
   const crumbs = viewRoot ? buildCrumbs(homeCwd, viewRoot) : [];
 
   return (
-    <div className="file-explorer-panel">
-      <div className="fe-header">
-        <span>files</span>
-        <button className="fe-new-folder-btn" onClick={createFolder} title="New Folder">+</button>
-        <div className="fe-breadcrumbs">
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
+        <span className="text-xs font-semibold">files</span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={createFolder}>
+              <FolderPlus className="w-3 h-3" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="text-[10px]">New Folder</TooltipContent>
+        </Tooltip>
+        <div className="flex items-center gap-0.5 text-[10px] text-muted-foreground flex-1 overflow-hidden ml-1">
           {crumbs.map((c, i) => (
-            <span key={c.path}>
-              {i > 0 && <span className="fe-crumb-sep">/</span>}
+            <span key={c.path} className="flex items-center gap-0.5 shrink-0">
+              {i > 0 && <span>/</span>}
               <span
-                className={`fe-crumb${i === crumbs.length - 1 ? ' fe-crumb-active' : ''}`}
+                className={cn(
+                  'hover:text-foreground transition-colors',
+                  i === crumbs.length - 1 ? 'text-foreground font-semibold' : 'cursor-pointer'
+                )}
                 onClick={i < crumbs.length - 1 ? () => navigateTo(c.path) : undefined}
               >{c.label}</span>
             </span>
           ))}
         </div>
       </div>
-      <div className="fe-body">
-        {viewRoot ? renderEntries(viewRoot, 0) : <div className="fe-entry">loading...</div>}
-      </div>
+      <ScrollArea className="flex-1">
+        <div className="py-1">
+          {viewRoot ? renderEntries(viewRoot, 0) : <div className="text-[11px] text-muted-foreground p-3">loading...</div>}
+        </div>
+      </ScrollArea>
     </div>
   );
 }

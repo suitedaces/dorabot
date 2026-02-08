@@ -3,6 +3,9 @@ import { CodeViewer } from './viewers/CodeViewer';
 import { MarkdownViewer } from './viewers/MarkdownViewer';
 import { PDFViewer } from './viewers/PDFViewer';
 import { ExcelViewer } from './viewers/ExcelViewer';
+import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
+import { X } from 'lucide-react';
 
 type Props = {
   filePath: string;
@@ -23,12 +26,10 @@ const EXCEL_EXTENSIONS = ['xlsx', 'xls', 'csv'];
 function getFileType(path: string): FileType {
   const ext = path.split('.').pop()?.toLowerCase();
   if (!ext) return 'unsupported';
-
   if (ext === 'md') return 'markdown';
   if (ext === 'pdf') return 'pdf';
   if (EXCEL_EXTENSIONS.includes(ext)) return 'excel';
   if (CODE_EXTENSIONS.includes(ext)) return 'code';
-
   return 'unsupported';
 }
 
@@ -50,7 +51,6 @@ export function FileViewer({ filePath, rpc, onClose }: Props) {
       return;
     }
 
-    // pdf and excel handle their own file reading
     if (fileType === 'pdf' || fileType === 'excel') {
       setLoading(false);
       return;
@@ -73,11 +73,18 @@ export function FileViewer({ filePath, rpc, onClose }: Props) {
 
   const renderViewer = () => {
     if (loading) {
-      return <div className="file-viewer-loading">Loading...</div>;
+      return (
+        <div className="p-4 space-y-2">
+          <Skeleton className="h-4 w-3/4" />
+          <Skeleton className="h-4 w-1/2" />
+          <Skeleton className="h-4 w-2/3" />
+          <Skeleton className="h-4 w-1/4" />
+        </div>
+      );
     }
 
     if (error) {
-      return <div className="file-viewer-error">Error: {error}</div>;
+      return <div className="p-4 text-destructive text-xs">{error}</div>;
     }
 
     switch (fileType) {
@@ -90,17 +97,19 @@ export function FileViewer({ filePath, rpc, onClose }: Props) {
       case 'excel':
         return <ExcelViewer filePath={filePath} rpc={rpc} />;
       default:
-        return <div className="file-viewer-unsupported">Unsupported file type</div>;
+        return <div className="p-4 text-muted-foreground text-xs">Unsupported file type</div>;
     }
   };
 
   return (
-    <div className="file-viewer">
-      <div className="file-viewer-header">
-        <span className="file-viewer-title">{fileName}</span>
-        <button className="file-viewer-close" onClick={onClose}>✕</button>
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0">
+        <span className="font-semibold text-sm flex-1 truncate">{fileName}</span>
+        <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={onClose}>
+          <X className="w-3.5 h-3.5" />
+        </Button>
       </div>
-      <div className="file-viewer-body">
+      <div className="flex-1 overflow-auto">
         {renderViewer()}
       </div>
     </div>

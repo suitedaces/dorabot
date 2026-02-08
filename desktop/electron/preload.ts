@@ -13,5 +13,5 @@ function readGatewayToken(): string | null {
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
-  gatewayToken: readGatewayToken(),
+  getGatewayToken: readGatewayToken,
 });
