@@ -17,17 +17,10 @@ import type { InboundMessage } from '../channels/types.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { setCronRunner } from '../tools/index.js';
 import { randomUUID, randomBytes } from 'node:crypto';
-import { classifyToolCall, type Tier } from './tool-policy.js';
+import { classifyToolCall, cleanToolName, type Tier } from './tool-policy.js';
 
 const DEFAULT_PORT = 18789;
 const DEFAULT_HOST = 'localhost';
-
-// strip mcp__<server>__ prefix from SDK tool names
-function cleanToolName(name: string): string {
-  if (!name.startsWith('mcp__')) return name;
-  const idx = name.indexOf('__', 5);
-  return idx >= 0 ? name.slice(idx + 2) : name;
-}
 
 const TOOL_PENDING_TEXT: Record<string, string> = {
   Read: 'reading file', Write: 'writing file', Edit: 'editing file',
@@ -410,15 +403,16 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       };
     }
 
-    // classify tool call
-    const tier = classifyToolCall(toolName, input);
+    // classify tool call (use clean name so FORM_MAP in desktop matches)
+    const cleanName = cleanToolName(toolName);
+    const tier = classifyToolCall(cleanName, input);
 
     if (tier === 'auto-allow') {
       return { behavior: 'allow' as const, updatedInput: input };
     }
 
     if (tier === 'notify') {
-      broadcast({ event: 'agent.tool_notify', data: { toolName, input, tier, timestamp: Date.now() } });
+      broadcast({ event: 'agent.tool_notify', data: { toolName: cleanName, input, tier, timestamp: Date.now() } });
       return { behavior: 'allow' as const, updatedInput: input };
     }
 
@@ -426,12 +420,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       const requestId = randomUUID();
       broadcast({
         event: 'agent.tool_approval',
-        data: { requestId, toolName, input, tier, timestamp: Date.now() },
+        data: { requestId, toolName: cleanName, input, tier, timestamp: Date.now() },
       });
-      // also forward to telegram inline keyboard
-      channelManager.sendApprovalRequest({ requestId, toolName, input }).catch(() => {});
+      channelManager.sendApprovalRequest({ requestId, toolName: cleanName, input }).catch(() => {});
 
-      const decision = await waitForApproval(requestId, toolName, input);
+      const decision = await waitForApproval(requestId, cleanName, input);
 
       if (decision.approved) {
         return { behavior: 'allow' as const, updatedInput: decision.modifiedInput || input };
