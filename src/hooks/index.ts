@@ -144,13 +144,8 @@ const sessionTrackingHook: HookCallback = async (input) => {
 
 // default hooks configuration
 export function createDefaultHooks(config: Config): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
+  // bash validation is handled by canUseTool + tool-policy.ts approval flow
   return {
-    PreToolUse: [
-      {
-        matcher: 'Bash',
-        hooks: [bashValidationHook],
-      },
-    ],
     SessionStart: [
       {
         hooks: [sessionTrackingHook],
