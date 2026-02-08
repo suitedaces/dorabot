@@ -4,7 +4,7 @@ import { join, dirname, resolve } from 'node:path';
 
 let loadedConfigPath: string | undefined;
 
-export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
+export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk';
 
 export type SandboxSettings = {
   enabled?: boolean;
@@ -113,7 +113,7 @@ export type Config = {
 const DEFAULT_CONFIG: Config = {
   model: 'claude-sonnet-4-5-20250929',
   systemPromptMode: 'full',
-  permissionMode: 'default',
+  permissionMode: 'dontAsk',
   skills: {
     enabled: [],
     disabled: [],

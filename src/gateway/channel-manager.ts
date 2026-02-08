@@ -1,12 +1,13 @@
 import type { Config } from '../config.js';
 import type { InboundMessage, ChannelStatus } from '../channels/types.js';
 import { startWhatsAppMonitor } from '../channels/whatsapp/monitor.js';
-import { startTelegramMonitor } from '../channels/telegram/monitor.js';
+import { startTelegramMonitor, type ApprovalRequest } from '../channels/telegram/monitor.js';
 
 export type ChannelManagerOptions = {
   config: Config;
   onMessage: (msg: InboundMessage) => Promise<void>;
   onCommand?: (channel: string, cmd: string, chatId: string) => Promise<string | void>;
+  onApprovalResponse?: (requestId: string, approved: boolean, reason?: string) => void;
   onStatus?: (status: ChannelStatus) => void;
 };
 
@@ -17,12 +18,14 @@ type ChannelState = {
   accountId: string;
   lastError: string | null;
   stop: (() => Promise<void>) | null;
+  sendApprovalRequest?: (req: ApprovalRequest) => Promise<void>;
 };
 
 export class ChannelManager {
   private config: Config;
   private onMessage: (msg: InboundMessage) => Promise<void>;
   private onStatus?: (status: ChannelStatus) => void;
+  private onApprovalResponse?: (requestId: string, approved: boolean, reason?: string) => void;
   private channels = new Map<string, ChannelState>();
 
   private onCommand?: (channel: string, cmd: string, chatId: string) => Promise<string | void>;
@@ -31,6 +34,7 @@ export class ChannelManager {
     this.config = opts.config;
     this.onMessage = opts.onMessage;
     this.onCommand = opts.onCommand;
+    this.onApprovalResponse = opts.onApprovalResponse;
     this.onStatus = opts.onStatus;
   }
 
@@ -102,7 +106,7 @@ export class ChannelManager {
     state.running = true;
     this.emitStatus(state);
 
-    const stop = await startTelegramMonitor({
+    const result = await startTelegramMonitor({
       tokenFile: tgConfig.tokenFile,
       accountId: tgConfig.accountId,
       allowFrom: tgConfig.allowFrom,
@@ -116,10 +120,12 @@ export class ChannelManager {
       onCommand: this.onCommand
         ? async (cmd, chatId) => this.onCommand!('telegram', cmd, chatId)
         : undefined,
+      onApprovalResponse: this.onApprovalResponse,
     });
 
     state.connected = true;
-    state.stop = stop;
+    state.stop = result.stop;
+    state.sendApprovalRequest = result.sendApprovalRequest;
     this.emitStatus(state);
   }
 
@@ -153,6 +159,13 @@ export class ChannelManager {
   async stopAll(): Promise<void> {
     const promises = Array.from(this.channels.keys()).map(id => this.stopChannel(id));
     await Promise.allSettled(promises);
+  }
+
+  async sendApprovalRequest(req: ApprovalRequest): Promise<void> {
+    const tg = this.channels.get('telegram');
+    if (tg?.connected && tg.sendApprovalRequest) {
+      await tg.sendApprovalRequest(req);
+    }
   }
 
   getStatuses(): ChannelStatus[] {
