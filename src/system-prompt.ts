@@ -7,6 +7,7 @@ export type SystemPromptOptions = {
   skills?: Skill[];
   tools?: string[];
   channel?: string;
+  connectedChannels?: { channel: string; chatId: string }[];
   timezone?: string;
   ownerIdentity?: string;
   extraContext?: string;
@@ -105,7 +106,6 @@ ${now.toLocaleString('en-US', { timeZone: timezone })} (${timezone})`);
   ];
   if (channel) {
     runtimeParts.push(`channel=${channel}`);
-    // channel capabilities (what the current channel supports)
     const capabilities: Record<string, string[]> = {
       whatsapp: ['send', 'edit', 'delete', 'react', 'reply', 'media'],
       telegram: ['send', 'edit', 'delete', 'react', 'reply', 'media'],
@@ -114,10 +114,17 @@ ${now.toLocaleString('en-US', { timeZone: timezone })} (${timezone})`);
     const channelCaps = capabilities[channel] || ['send'];
     runtimeParts.push(`capabilities=${channelCaps.join(',')}`);
   }
-
   sections.push(`## Runtime
 
 ${runtimeParts.join(' | ')}`);
+
+  if (opts.connectedChannels && opts.connectedChannels.length > 0) {
+    const lines = opts.connectedChannels.map(c => `- ${c.channel}: chatId=${c.chatId}`);
+    sections.push(`## Connected Channels
+
+You can reach the owner on these channels using the message tool with the given chatId as target:
+${lines.join('\n')}`);
+  }
 
   // messaging section (only in full mode)
   if (config.systemPromptMode === 'full') {

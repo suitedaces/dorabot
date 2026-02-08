@@ -33,6 +33,7 @@ export type AgentOptions = {
   resumeId?: string;
   config: Config;
   channel?: string;
+  connectedChannels?: { channel: string; chatId: string }[];
   timezone?: string;
   ownerIdentity?: string;
   extraContext?: string;
@@ -103,6 +104,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     skills,
     tools: allTools,
     channel,
+    connectedChannels: opts.connectedChannels,
     timezone,
     ownerIdentity,
     extraContext,
@@ -263,6 +265,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
     skills,
     tools: allTools,
     channel,
+    connectedChannels: opts.connectedChannels,
     timezone,
     ownerIdentity,
     extraContext,

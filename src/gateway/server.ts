@@ -135,11 +135,14 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const IDLE_TIMEOUT_MS = 4 * 60 * 60 * 1000; // 4h
   // status messages sent to channels while agent is working
   const statusMessages = new Map<string, { channel: string; chatId: string; messageId: string }>();
+  // remember the owner's chat ID per channel so the agent can reach them cross-channel
+  const ownerChatIds = new Map<string, string>();
   // queued messages for sessions with active runs
   const pendingMessages = new Map<string, InboundMessage[]>();
 
   // process a channel message (or batched messages) through the agent
   async function processChannelMessage(msg: InboundMessage, batchedBodies?: string[]) {
+    ownerChatIds.set(msg.channel, msg.chatId);
     const session = sessionRegistry.getOrCreate({
       channel: msg.channel,
       chatType: msg.chatType,
@@ -465,8 +468,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       try {
         const session = sessionRegistry.get(sessionKey);
         const connected = getAllChannelStatuses()
-          .filter(s => s.connected)
-          .map(s => s.channel);
+          .filter(s => s.connected && ownerChatIds.has(s.channel))
+          .map(s => ({ channel: s.channel, chatId: ownerChatIds.get(s.channel)! }));
         const gen = streamAgent({
           prompt,
           sessionId: session?.sessionId,
