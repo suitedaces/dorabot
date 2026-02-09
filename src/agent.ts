@@ -23,7 +23,7 @@ import { createAgentMcpServer, getCustomToolNames } from './tools/index.js';
 import { getEligibleSkills, matchSkillToPrompt, type Skill } from './skills/loader.js';
 import { createDefaultHooks, mergeHooks, type HookEvent, type HookCallbackMatcher } from './hooks/index.js';
 import { getAllAgents } from './agents/definitions.js';
-import { SessionManager, sdkMessageToSession, type SessionMessage } from './session/manager.js';
+import { SessionManager, sdkMessageToSession, type SessionMessage, type MessageMetadata } from './session/manager.js';
 import { loadWorkspaceFiles, ensureWorkspace } from './workspace.js';
 
 // clean env for SDK subprocess - strip vscode vars that cause file watcher crashes
@@ -37,7 +37,7 @@ function cleanEnvForSdk(): Record<string, string> {
     env[key] = val;
   }
   // use a clean tmpdir so SDK file watcher doesn't hit socket files
-  const sdkTmp = join(homedir(), '.my-agent', 'tmp');
+  const sdkTmp = join(homedir(), '.dorabot', 'tmp');
   mkdirSync(sdkTmp, { recursive: true });
   env.TMPDIR = sdkTmp;
   return env;
@@ -59,6 +59,7 @@ export type AgentOptions = {
   hooks?: Partial<Record<HookEvent, HookCallbackMatcher[]>>;
   canUseTool?: (toolName: string, input: Record<string, unknown>, options: unknown) => Promise<unknown>;
   abortController?: AbortController;
+  messageMetadata?: MessageMetadata;
 };
 
 export type AgentResult = {
@@ -88,6 +89,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     onToolUse,
     onToolResult,
     hooks: customHooks,
+    messageMetadata,
   } = opts;
 
   const startTime = Date.now();
@@ -154,7 +156,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
       tools: { type: 'preset', preset: 'claude_code' } as any,
       agents: agents as any,
       hooks: hooks as any,
-      mcpServers: { 'my-agent-tools': mcpServer } as any,
+      mcpServers: { 'dorabot-tools': mcpServer } as any,
       resume: resumeId,
       permissionMode: config.permissionMode as any,
       allowDangerouslySkipPermissions: config.permissionMode === 'bypassPermissions',
@@ -178,18 +180,18 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
   };
   let usedMessageTool = false;
 
-  // store user message only for new runs (resume replays history)
-  if (!resumeId) {
-    const userMsg: SessionMessage = {
-      type: 'user',
-      timestamp: new Date().toISOString(),
-      content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } },
-    };
-    messages.push(userMsg);
-    sessionManager.append(sessionId, userMsg);
-  }
+  // always store user message to our session log
+  const userMsg: SessionMessage = {
+    type: 'user',
+    timestamp: messageMetadata?.body ? new Date(Date.now()).toISOString() : new Date().toISOString(),
+    content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: messageMetadata?.body || prompt }] } },
+    metadata: messageMetadata,
+  };
+  messages.push(userMsg);
+  sessionManager.append(sessionId, userMsg);
 
   // stream messages
+  const toolsUsed: string[] = [];
   for await (const msg of q) {
     const m = msg as Record<string, unknown>;
 
@@ -213,12 +215,10 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
         for (const block of content) {
           const b = block as Record<string, unknown>;
           if (b.type === 'tool_use') {
-            if (b.name === 'message') {
-              usedMessageTool = true;
-            }
-            if (onToolUse) {
-              onToolUse(b.name as string, b.input);
-            }
+            const tn = b.name as string;
+            if (tn === 'message') usedMessageTool = true;
+            if (!toolsUsed.includes(tn)) toolsUsed.push(tn);
+            if (onToolUse) onToolUse(tn, b.input);
           }
           if (b.type === 'text') {
             result = b.text as string;
@@ -238,6 +238,21 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
   }
 
   const durationMs = Date.now() - startTime;
+
+  // enrich result message with metadata
+  const resultMeta: MessageMetadata = {
+    channel,
+    tools: toolsUsed.length > 0 ? toolsUsed : undefined,
+    usage,
+    durationMs,
+  };
+  const resultMsg: SessionMessage = {
+    type: 'result',
+    timestamp: new Date().toISOString(),
+    content: { result },
+    metadata: resultMeta,
+  };
+  sessionManager.append(sessionId, resultMsg);
 
   return {
     sessionId,
@@ -261,6 +276,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
     ownerIdentity,
     extraContext,
     hooks: customHooks,
+    messageMetadata,
   } = opts;
 
   const startTime = Date.now();
@@ -316,7 +332,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
       tools: { type: 'preset', preset: 'claude_code' },
       agents,
       hooks: hooks as any,
-      mcpServers: { 'my-agent-tools': mcpServer },
+      mcpServers: { 'dorabot-tools': mcpServer },
       resume: resumeId,
       permissionMode: config.permissionMode,
       allowDangerouslySkipPermissions: config.permissionMode === 'bypassPermissions',
@@ -336,16 +352,17 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
   let usage = { inputTokens: 0, outputTokens: 0, totalCostUsd: 0 };
   let usedMessageTool = false;
 
-  if (!resumeId) {
-    const userMsg: SessionMessage = {
-      type: 'user',
-      timestamp: new Date().toISOString(),
-      content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } },
-    };
-    messages.push(userMsg);
-    sessionManager.append(sessionId, userMsg);
-  }
+  // always store user message to our session log
+  const userMsg: SessionMessage = {
+    type: 'user',
+    timestamp: new Date().toISOString(),
+    content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: messageMetadata?.body || prompt }] } },
+    metadata: messageMetadata,
+  };
+  messages.push(userMsg);
+  sessionManager.append(sessionId, userMsg);
 
+  const toolsUsed: string[] = [];
   for await (const msg of q) {
     const sessionMsg = sdkMessageToSession(msg);
     if (sessionMsg) {
@@ -363,8 +380,10 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
       if (Array.isArray(content)) {
         for (const block of content) {
           const b = block as Record<string, unknown>;
-          if (b.type === 'tool_use' && b.name === 'message') {
-            usedMessageTool = true;
+          if (b.type === 'tool_use') {
+            const tn = b.name as string;
+            if (tn === 'message') usedMessageTool = true;
+            if (!toolsUsed.includes(tn)) toolsUsed.push(tn);
           }
           if (b.type === 'text') {
             result = b.text as string;
@@ -383,12 +402,21 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
     }
   }
 
+  const durationMs = Date.now() - startTime;
+  const resultMeta: MessageMetadata = {
+    channel,
+    tools: toolsUsed.length > 0 ? toolsUsed : undefined,
+    usage,
+    durationMs,
+  };
+  sessionManager.append(sessionId, { type: 'result', timestamp: new Date().toISOString(), content: { result }, metadata: resultMeta });
+
   return {
     sessionId,
     result,
     messages,
     usage,
-    durationMs: Date.now() - startTime,
+    durationMs,
     usedMessageTool,
   };
 }

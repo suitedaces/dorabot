@@ -139,7 +139,7 @@ const DEFAULT_CONFIG: Config = {
     disabled: [],
     dirs: [
       join(process.cwd(), 'skills'),
-      join(homedir(), '.my-agent', 'skills'),
+      join(homedir(), '.dorabot', 'skills'),
     ],
   },
   agents: {},
@@ -147,15 +147,15 @@ const DEFAULT_CONFIG: Config = {
     enabled: false,
     autoAllowBashIfSandboxed: false,
   },
-  sessionDir: join(homedir(), '.my-agent', 'sessions'),
+  sessionDir: join(homedir(), '.dorabot', 'sessions'),
   cwd: process.cwd(),
 };
 
 export async function loadConfig(configPath?: string): Promise<Config> {
   const paths = [
     configPath,
-    join(process.cwd(), 'my-agent.config.json'),
-    join(homedir(), '.my-agent', 'config.json'),
+    join(process.cwd(), 'dorabot.config.json'),
+    join(homedir(), '.dorabot', 'config.json'),
   ].filter(Boolean) as string[];
 
   for (const p of paths) {
@@ -198,7 +198,7 @@ export function getConfigValue<K extends keyof Config>(config: Config, key: K): 
 }
 
 export function getConfigPath(): string {
-  return loadedConfigPath || join(homedir(), '.my-agent', 'config.json');
+  return loadedConfigPath || join(homedir(), '.dorabot', 'config.json');
 }
 
 export function saveConfig(config: Config): void {
@@ -212,8 +212,8 @@ export const ALWAYS_DENIED = [
   '~/.ssh',
   '~/.gnupg',
   '~/.aws',
-  '~/.my-agent/whatsapp/auth',
-  '~/.my-agent/gateway-token',
+  '~/.dorabot/whatsapp/auth',
+  '~/.dorabot/gateway-token',
   '~/.config/nanoclaw',
 ];
 

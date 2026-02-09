@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 
 // strip mcp__<server>__ prefix from SDK tool names
 function cleanToolName(name: string): string {
@@ -27,6 +27,8 @@ export type ChatItem =
   | { type: 'thinking'; content: string; streaming?: boolean; timestamp: number }
   | { type: 'result'; cost?: number; timestamp: number }
   | { type: 'error'; content: string; timestamp: number };
+
+export type ProgressItem = { content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm: string };
 
 export type ChannelMessage = {
   id: string;
@@ -198,10 +200,10 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
   return items;
 }
 
-const SESSION_STORAGE_KEY = 'my-agent:sessionId';
+const SESSION_STORAGE_KEY = 'dorabot:sessionId';
 
 export function useGateway(url = 'ws://localhost:18789') {
-  const getToken = () => (window as any).electronAPI?.getGatewayToken?.() || (window as any).electronAPI?.gatewayToken || localStorage.getItem('my-agent:gateway-token') || '';
+  const getToken = () => (window as any).electronAPI?.getGatewayToken?.() || (window as any).electronAPI?.gatewayToken || localStorage.getItem('dorabot:gateway-token') || '';
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [chatItems, setChatItems] = useState<ChatItem[]>([]);
   const [channelMessages, setChannelMessages] = useState<ChannelMessage[]>([]);
@@ -214,6 +216,9 @@ export function useGateway(url = 'ws://localhost:18789') {
   const [pendingQuestion, setPendingQuestion] = useState<AskUserQuestion | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<ToolApproval[]>([]);
   const [notifications, setNotifications] = useState<ToolNotification[]>([]);
+  const [whatsappQr, setWhatsappQr] = useState<string | null>(null);
+  const [whatsappLoginStatus, setWhatsappLoginStatus] = useState<string>('unknown');
+  const [whatsappLoginError, setWhatsappLoginError] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const rpcIdRef = useRef(0);
@@ -223,7 +228,7 @@ export function useGateway(url = 'ws://localhost:18789') {
   // track which session key we're viewing - only show stream events for this key
   const activeSessionKeyRef = useRef<string>('desktop:dm:default');
 
-  const rpc = useCallback(async (method: string, params?: Record<string, unknown>): Promise<unknown> => {
+  const rpc = useCallback(async (method: string, params?: Record<string, unknown>, timeoutMs = 30000): Promise<unknown> => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       throw new Error('Not connected to gateway');
@@ -234,13 +239,13 @@ export function useGateway(url = 'ws://localhost:18789') {
       pendingRpcRef.current.set(id, { resolve, reject });
       ws.send(JSON.stringify({ method, params, id }));
 
-      // timeout after 30s
+      // timeout after default 30s unless caller overrides
       setTimeout(() => {
         if (pendingRpcRef.current.has(id)) {
           pendingRpcRef.current.delete(id);
           reject(new Error(`RPC timeout: ${method}`));
         }
-      }, 30000);
+      }, timeoutMs);
     });
   }, []);
 
@@ -475,6 +480,29 @@ export function useGateway(url = 'ws://localhost:18789') {
         const d = data as { path: string; eventType: string; filename: string | null };
         // notify all listeners
         fsChangeListenersRef.current.forEach(listener => listener(d.path));
+        break;
+      }
+
+      case 'whatsapp.qr': {
+        const d = data as { qr: string };
+        setWhatsappQr(d.qr);
+        break;
+      }
+
+      case 'whatsapp.login_status': {
+        const d = data as { status: string; error?: string };
+        setWhatsappLoginStatus(d.status);
+        if (d.status === 'failed') {
+          setWhatsappLoginError(d.error || 'WhatsApp login failed');
+          setWhatsappQr(null);
+          break;
+        }
+        if (d.status === 'connecting' || d.status === 'qr_ready' || d.status === 'connected' || d.status === 'disconnected' || d.status === 'not_linked') {
+          setWhatsappLoginError(null);
+        }
+        if (d.status === 'connected' || d.status === 'failed' || d.status === 'disconnected') {
+          setWhatsappQr(null);
+        }
         break;
       }
     }
@@ -761,9 +789,41 @@ export function useGateway(url = 'ws://localhost:18789') {
     await rpc('security.paths.set', { target, allowed, denied });
   }, [rpc]);
 
+  const whatsappCheckStatus = useCallback(async () => {
+    const res = await rpc('channels.whatsapp.status') as { linked: boolean };
+    setWhatsappLoginStatus(res.linked ? 'connected' : 'not_linked');
+    if (!res.linked) setWhatsappLoginError(null);
+    return res;
+  }, [rpc]);
+
+  const whatsappLogin = useCallback(async () => {
+    setWhatsappLoginStatus('connecting');
+    setWhatsappQr(null);
+    setWhatsappLoginError(null);
+    return await rpc('channels.whatsapp.login', undefined, 10000) as { success: boolean; started?: boolean; inProgress?: boolean; selfJid?: string; error?: string };
+  }, [rpc]);
+
+  const whatsappLogout = useCallback(async () => {
+    await rpc('channels.whatsapp.logout');
+    setWhatsappLoginStatus('not_linked');
+    setWhatsappQr(null);
+    setWhatsappLoginError(null);
+  }, [rpc]);
+
+  const progress = useMemo<ProgressItem[]>(() => {
+    for (let i = chatItems.length - 1; i >= 0; i--) {
+      const item = chatItems[i];
+      if (item.type === 'tool_use' && item.name === 'TodoWrite' && !item.streaming) {
+        try { return JSON.parse(item.input).todos || []; } catch { return []; }
+      }
+    }
+    return [];
+  }, [chatItems]);
+
   return {
     connectionState,
     chatItems,
+    progress,
     channelMessages,
     channelStatuses,
     agentStatus,
@@ -798,5 +858,11 @@ export function useGateway(url = 'ws://localhost:18789') {
     setToolPolicy,
     getPathPolicies,
     setPathPolicy,
+    whatsappQr,
+    whatsappLoginStatus,
+    whatsappLoginError,
+    whatsappCheckStatus,
+    whatsappLogin,
+    whatsappLogout,
   };
 }

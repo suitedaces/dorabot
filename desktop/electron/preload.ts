@@ -4,7 +4,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 
 function readGatewayToken(): string | null {
-  const tokenPath = join(homedir(), '.my-agent', 'gateway-token');
+  const tokenPath = join(homedir(), '.dorabot', 'gateway-token');
   if (existsSync(tokenPath)) {
     return readFileSync(tokenPath, 'utf-8').trim();
   }

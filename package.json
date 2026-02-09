@@ -1,11 +1,11 @@
 {
-  "name": "my-agent",
+  "name": "dorabot",
   "version": "1.0.0",
   "type": "module",
   "description": "OpenClaw-style agent built with Claude Agent SDK",
   "main": "dist/index.js",
   "bin": {
-    "my-agent": "dist/index.js"
+    "dorabot": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",

@@ -19,7 +19,7 @@ const customTools = [
 
 export function createAgentMcpServer() {
   return createSdkMcpServer({
-    name: 'my-agent-tools',
+    name: 'dorabot-tools',
     version: '1.0.0',
     tools: customTools,
   });

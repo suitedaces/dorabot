@@ -2,7 +2,7 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
-export const WORKSPACE_DIR = join(homedir(), '.my-agent', 'workspace');
+export const WORKSPACE_DIR = join(homedir(), '.dorabot', 'workspace');
 
 // files loaded into system prompt (order matters)
 const WORKSPACE_FILES = ['SOUL.md', 'USER.md', 'AGENTS.md', 'MEMORY.md'] as const;
@@ -60,7 +60,7 @@ export function buildWorkspaceSection(files: WorkspaceFiles): string | null {
 
   if (parts.length === 0) return null;
 
-  return `## Project Context\n\nThese files are loaded from ~/.my-agent/workspace/ and are user-editable.\nIf SOUL.md is present, embody its persona and tone.\n\n${parts.join('\n\n')}`;
+  return `## Project Context\n\nThese files are loaded from ~/.dorabot/workspace/ and are user-editable.\nIf SOUL.md is present, embody its persona and tone.\n\n${parts.join('\n\n')}`;
 }
 
 const DEFAULT_SOUL = `# Soul

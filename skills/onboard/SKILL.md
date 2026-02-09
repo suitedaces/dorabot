@@ -7,16 +7,16 @@ description: "Personalize the agent — interview the user to build their profil
 
 you're setting up this agent for a new user (or re-personalizing for an existing one). the goal is to build two files:
 
-1. `~/.my-agent/workspace/USER.md` — who this person is
-2. `~/.my-agent/workspace/SOUL.md` — who you should be for them
+1. `~/.dorabot/workspace/USER.md` — who this person is
+2. `~/.dorabot/workspace/SOUL.md` — who you should be for them
 
 ## before you start
 
 read the existing files first:
 
 ```
-Read ~/.my-agent/workspace/USER.md
-Read ~/.my-agent/workspace/SOUL.md
+Read ~/.dorabot/workspace/USER.md
+Read ~/.dorabot/workspace/SOUL.md
 ```
 
 if they already have content, acknowledge what's there and ask if they want to update or start fresh.
@@ -67,7 +67,7 @@ things to learn (ask or discover via lookup):
 
 don't ask all of these if they volunteer info early. 3-4 rounds of AskUserQuestion max. read the room.
 
-after gathering enough, write `~/.my-agent/workspace/USER.md` using this structure:
+after gathering enough, write `~/.dorabot/workspace/USER.md` using this structure:
 
 ```markdown
 # User Profile
@@ -104,7 +104,7 @@ use AskUserQuestion for each of these:
 - **boundaries** — anything you should never do? always do?
 - **vibe** — any reference points? "like talking to a senior engineer" or "like a friend who happens to know everything"
 
-2-3 rounds of AskUserQuestion here. then write `~/.my-agent/workspace/SOUL.md`. keep it short and punchy — this isn't a constitution, it's a personality sketch. aim for 5-10 lines of actual guidance.
+2-3 rounds of AskUserQuestion here. then write `~/.dorabot/workspace/SOUL.md`. keep it short and punchy — this isn't a constitution, it's a personality sketch. aim for 5-10 lines of actual guidance.
 
 example output (don't copy this, craft it from their answers):
 
@@ -129,7 +129,7 @@ show them the draft. iterate if they want changes.
 after both files are written, give a brief summary:
 - "here's what i know about you: {1-liner}"
 - "here's how i'll talk to you: {1-liner}"
-- remind them they can edit these anytime in the Soul tab or directly at `~/.my-agent/workspace/`
+- remind them they can edit these anytime in the Soul tab or directly at `~/.dorabot/workspace/`
 
 ## rules
 

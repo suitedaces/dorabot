@@ -51,11 +51,11 @@ function createTray(): void {
   icon.setTemplateImage(true);
 
   tray = new Tray(icon);
-  tray.setToolTip('my-agent');
+  tray.setToolTip('dorabot');
   updateTrayTitle('idle');
 
   const contextMenu = Menu.buildFromTemplate([
-    { label: 'Open my-agent', click: showWindow },
+    { label: 'Open dorabot', click: showWindow },
     { type: 'separator' },
     { label: 'Status: idle', enabled: false, id: 'status' },
     { type: 'separator' },

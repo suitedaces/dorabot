@@ -12,7 +12,7 @@ export function resolveTelegramToken(tokenFile?: string): string {
     return readFileSync(tokenFile, 'utf-8').trim();
   }
 
-  const defaultFile = join(homedir(), '.my-agent', 'telegram', 'token');
+  const defaultFile = join(homedir(), '.dorabot', 'telegram', 'token');
   if (existsSync(defaultFile)) {
     return readFileSync(defaultFile, 'utf-8').trim();
   }
@@ -21,7 +21,7 @@ export function resolveTelegramToken(tokenFile?: string): string {
     return process.env.TELEGRAM_BOT_TOKEN;
   }
 
-  throw new Error('No Telegram bot token found. Set TELEGRAM_BOT_TOKEN env or save to ~/.my-agent/telegram/token');
+  throw new Error('No Telegram bot token found. Set TELEGRAM_BOT_TOKEN env or save to ~/.dorabot/telegram/token');
 }
 
 export function createTelegramBot(opts: CreateBotOptions): Bot {

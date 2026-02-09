@@ -1,13 +1,29 @@
 import type { Config } from '../config.js';
 import type { InboundMessage, ChannelStatus } from '../channels/types.js';
-import { startWhatsAppMonitor } from '../channels/whatsapp/monitor.js';
-import { startTelegramMonitor, type ApprovalRequest } from '../channels/telegram/monitor.js';
+import { startWhatsAppMonitor, type WhatsAppMonitorHandle } from '../channels/whatsapp/monitor.js';
+import { startTelegramMonitor, type TelegramMonitorHandle } from '../channels/telegram/monitor.js';
+
+// unified request types (superset of both channels)
+export type ApprovalRequest = {
+  requestId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  chatId?: string;
+};
+
+export type QuestionRequest = {
+  requestId: string;
+  chatId: string;
+  question: string;
+  options: { label: string; description?: string }[];
+};
 
 export type ChannelManagerOptions = {
   config: Config;
   onMessage: (msg: InboundMessage) => Promise<void>;
   onCommand?: (channel: string, cmd: string, chatId: string) => Promise<string | void>;
   onApprovalResponse?: (requestId: string, approved: boolean, reason?: string) => void;
+  onQuestionResponse?: (requestId: string, selectedIndex: number, label: string) => void;
   onStatus?: (status: ChannelStatus) => void;
 };
 
@@ -18,7 +34,8 @@ type ChannelState = {
   accountId: string;
   lastError: string | null;
   stop: (() => Promise<void>) | null;
-  sendApprovalRequest?: (req: ApprovalRequest) => Promise<void>;
+  sendApprovalRequest?: (req: any) => Promise<void>;
+  sendQuestion?: (req: QuestionRequest) => Promise<void>;
 };
 
 export class ChannelManager {
@@ -26,6 +43,7 @@ export class ChannelManager {
   private onMessage: (msg: InboundMessage) => Promise<void>;
   private onStatus?: (status: ChannelStatus) => void;
   private onApprovalResponse?: (requestId: string, approved: boolean, reason?: string) => void;
+  private onQuestionResponse?: (requestId: string, selectedIndex: number, label: string) => void;
   private channels = new Map<string, ChannelState>();
 
   private onCommand?: (channel: string, cmd: string, chatId: string) => Promise<string | void>;
@@ -35,6 +53,7 @@ export class ChannelManager {
     this.onMessage = opts.onMessage;
     this.onCommand = opts.onCommand;
     this.onApprovalResponse = opts.onApprovalResponse;
+    this.onQuestionResponse = opts.onQuestionResponse;
     this.onStatus = opts.onStatus;
   }
 
@@ -77,7 +96,7 @@ export class ChannelManager {
     state.running = true;
     this.emitStatus(state);
 
-    const stop = await startWhatsAppMonitor({
+    const result = await startWhatsAppMonitor({
       authDir: waConfig.authDir,
       accountId: waConfig.accountId,
       allowFrom: waConfig.allowFrom,
@@ -88,10 +107,17 @@ export class ChannelManager {
         state.lastError = null;
         await this.onMessage(msg);
       },
+      onCommand: this.onCommand
+        ? async (cmd, chatId) => this.onCommand!('whatsapp', cmd, chatId)
+        : undefined,
+      onApprovalResponse: this.onApprovalResponse,
+      onQuestionResponse: this.onQuestionResponse,
     });
 
     state.connected = true;
-    state.stop = stop;
+    state.stop = result.stop;
+    state.sendApprovalRequest = result.sendApprovalRequest;
+    state.sendQuestion = result.sendQuestion;
     this.emitStatus(state);
   }
 
@@ -121,11 +147,13 @@ export class ChannelManager {
         ? async (cmd, chatId) => this.onCommand!('telegram', cmd, chatId)
         : undefined,
       onApprovalResponse: this.onApprovalResponse,
+      onQuestionResponse: this.onQuestionResponse,
     });
 
     state.connected = true;
     state.stop = result.stop;
     state.sendApprovalRequest = result.sendApprovalRequest;
+    state.sendQuestion = result.sendQuestion;
     this.emitStatus(state);
   }
 
@@ -161,10 +189,36 @@ export class ChannelManager {
     await Promise.allSettled(promises);
   }
 
-  async sendApprovalRequest(req: ApprovalRequest): Promise<void> {
-    const tg = this.channels.get('telegram');
-    if (tg?.connected && tg.sendApprovalRequest) {
-      await tg.sendApprovalRequest(req);
+  async sendApprovalRequest(req: ApprovalRequest, targetChannel?: string): Promise<void> {
+    if (targetChannel) {
+      const ch = this.channels.get(targetChannel);
+      if (ch?.connected && ch.sendApprovalRequest) {
+        await ch.sendApprovalRequest(req);
+        return;
+      }
+    }
+    // fallback: send to all connected channels
+    for (const ch of this.channels.values()) {
+      if (ch.connected && ch.sendApprovalRequest) {
+        try { await ch.sendApprovalRequest(req); } catch {}
+      }
+    }
+  }
+
+  async sendQuestion(req: QuestionRequest, targetChannel?: string): Promise<void> {
+    if (targetChannel) {
+      const ch = this.channels.get(targetChannel);
+      if (ch?.connected && ch.sendQuestion) {
+        await ch.sendQuestion(req);
+        return;
+      }
+    }
+    // fallback: send to first connected channel with question support
+    for (const ch of this.channels.values()) {
+      if (ch.connected && ch.sendQuestion) {
+        await ch.sendQuestion(req);
+        return;
+      }
     }
   }
 

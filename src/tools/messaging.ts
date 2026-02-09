@@ -5,6 +5,7 @@ export type ChannelHandler = {
   send(target: string, message: string, opts?: { media?: string; replyTo?: string }): Promise<{ id: string; chatId: string }>;
   edit(messageId: string, message: string, chatId?: string): Promise<void>;
   delete(messageId: string, chatId?: string): Promise<void>;
+  typing?(chatId: string): Promise<void>;
 };
 
 // registry for channel handlers (populated at runtime)

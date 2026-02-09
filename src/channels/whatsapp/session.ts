@@ -16,22 +16,24 @@ export type CreateSocketOptions = {
   authDir: string;
   onQr?: (qr: string) => void;
   onConnection?: (state: 'open' | 'connecting' | 'close', error?: Error) => void;
+  version?: [number, number, number];
   verbose?: boolean;
 };
 
 export function getDefaultAuthDir(): string {
-  return join(homedir(), '.my-agent', 'whatsapp', 'auth');
+  return join(homedir(), '.dorabot', 'whatsapp', 'auth');
 }
 
 export async function createWaSocket(opts: CreateSocketOptions): Promise<WASocket> {
   const { state, saveCreds } = await useMultiFileAuthState(opts.authDir);
 
   const sock = makeWASocket({
+    ...(opts.version ? { version: opts.version } : {}),
     auth: {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys),
     },
-    browser: Browsers.macOS('my-agent'),
+    browser: Browsers.macOS('dorabot'),
     printQRInTerminal: !opts.onQr,
     markOnlineOnConnect: false,
     getMessage: async () => undefined,
@@ -57,19 +59,35 @@ export async function createWaSocket(opts: CreateSocketOptions): Promise<WASocke
   return sock;
 }
 
-export function waitForConnection(sock: WASocket): Promise<void> {
+export function waitForConnection(sock: WASocket, timeoutMs = 180000): Promise<void> {
   return new Promise((resolve, reject) => {
+    let timer: NodeJS.Timeout | null = null;
+
     const handler = (update: any) => {
       if (update.connection === 'open') {
         sock.ev.off('connection.update', handler);
+        if (timer) clearTimeout(timer);
         resolve();
       } else if (update.connection === 'close') {
         sock.ev.off('connection.update', handler);
+        if (timer) clearTimeout(timer);
         const code = (update.lastDisconnect?.error as any)?.output?.statusCode;
-        reject(new Error(`Connection closed: ${code}`));
+        reject(new Error(code ? `Connection closed: ${code}` : 'Connection closed'));
       }
     };
+
     sock.ev.on('connection.update', handler);
+
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        sock.ev.off('connection.update', handler);
+        try {
+          sock.end(undefined);
+        } catch {}
+        const timeoutS = Math.round(timeoutMs / 1000);
+        reject(new Error(`Connection timed out after ${timeoutS}s`));
+      }, timeoutMs);
+    }
   });
 }
 

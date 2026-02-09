@@ -1,4 +1,4 @@
-# my-agent
+# dorabot
 
 Personal AI agent with multi-channel messaging, browser automation, and persistent memory.
 
@@ -8,10 +8,10 @@ Personal AI agent with multi-channel messaging, browser automation, and persiste
 - **Gateway**: WebSocket RPC server on port 18789 (`src/gateway/server.ts`)
 - **Desktop**: Electron + Vite + React in `desktop/`
 - **Channels**: WhatsApp (Baileys), Telegram (grammy)
-- **Sessions**: JSONL-based, `~/.my-agent/sessions/`
+- **Sessions**: JSONL-based, `~/.dorabot/sessions/`
 - **Tools**: MCP server — `message`, `browser`, `screenshot`, `cron`
-- **Browser**: Playwright-core via CDP, persistent profile at `~/.my-agent/browser/profile/`, port 19222
-- **Skills**: Markdown files in `./skills/` and `~/.my-agent/skills/`, YAML frontmatter for metadata
+- **Browser**: Playwright-core via CDP, persistent profile at `~/.dorabot/browser/profile/`, port 19222
+- **Skills**: Markdown files in `./skills/` and `~/.dorabot/skills/`, YAML frontmatter for metadata
 
 ## Build
 
@@ -26,7 +26,7 @@ cd desktop && npx vite build         # outputs to desktop/dist/
 cd desktop && npx tsc -p tsconfig.electron.json  # outputs to desktop/dist-electron/
 
 # run
-my-agent -g                          # gateway mode
+dorabot -g                          # gateway mode
 cd desktop && npm run electron:dev   # desktop dev (vite 5173 + electron)
 ```
 
@@ -36,7 +36,7 @@ cd desktop && npm run electron:dev   # desktop dev (vite 5173 + electron)
 - `src/agent.ts` — `runAgent()` and `streamAgent()`, orchestrates SDK `query()` with config, skills, workspace, hooks
 - `src/system-prompt.ts` — dynamic system prompt builder, 17 sections, 3 modes (full/minimal/none)
 - `src/config.ts` — config loading, merging, path allowlisting via `isPathAllowed()`
-- `src/workspace.ts` — loads SOUL.md, USER.md, AGENTS.md, MEMORY.md from `~/.my-agent/workspace/`
+- `src/workspace.ts` — loads SOUL.md, USER.md, AGENTS.md, MEMORY.md from `~/.dorabot/workspace/`
 - `src/index.ts` — CLI entry point
 
 ### Gateway
@@ -83,7 +83,7 @@ response: { result?: any, error?: string, id: string }
 event:    { event: string, data: any }
 ```
 
-Auth: token from `~/.my-agent/gateway-token` (hex, 64 chars), sent via `{method: 'auth', params: {token}}`.
+Auth: token from `~/.dorabot/gateway-token` (hex, 64 chars), sent via `{method: 'auth', params: {token}}`.
 
 ## Data Flow
 
@@ -103,7 +103,7 @@ Channel messages wrapped in `<incoming_message>` tags. Desktop auto-sends respon
 
 ## Workspace
 
-`~/.my-agent/workspace/` — user-editable files loaded into system prompt each session:
+`~/.dorabot/workspace/` — user-editable files loaded into system prompt each session:
 
 | File | Purpose |
 |------|---------|
@@ -118,13 +118,13 @@ YAML frontmatter is stripped before injection. `ensureWorkspace()` creates defau
 
 SKILL.md format with YAML frontmatter (`name`, `description`, `user-invocable`, `metadata.requires`).
 
-Loaded from `config.skills.dirs` (default: `./skills/`, `~/.my-agent/skills/`). Matched to prompts via name or description keywords. Skill content prepended to user prompt when matched.
+Loaded from `config.skills.dirs` (default: `./skills/`, `~/.dorabot/skills/`). Matched to prompts via name or description keywords. Skill content prepended to user prompt when matched.
 
 Eligibility checks: required binaries (`which`), env vars, config keys.
 
 ## Config
 
-Loaded from (first found): explicit path → `./my-agent.config.json` → `~/.my-agent/config.json` → defaults.
+Loaded from (first found): explicit path → `./dorabot.config.json` → `~/.dorabot/config.json` → defaults.
 
 Key settings:
 - `model` — default `claude-sonnet-4-5-20250929`
@@ -134,7 +134,7 @@ Key settings:
 - `sandbox.mode` — off | non-main | all
 - `security.approvalMode` — approve-sensitive | autonomous | lockdown
 
-Path access: `isPathAllowed()` checks ALWAYS_DENIED list first (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.my-agent/whatsapp/auth`, `~/.my-agent/gateway-token`), then allowed list (default: `~/`, `/tmp`). Channel-specific overrides supported.
+Path access: `isPathAllowed()` checks ALWAYS_DENIED list first (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.dorabot/whatsapp/auth`, `~/.dorabot/gateway-token`), then allowed list (default: `~/`, `/tmp`). Channel-specific overrides supported.
 
 ## Patterns
 

@@ -4,6 +4,8 @@ import type { Api } from 'grammy';
 import { InputFile } from 'grammy';
 import { markdownToTelegramHtml } from './format.js';
 
+const MSG_LIMIT = 4000; // safe margin below telegram's 4096
+
 export function normalizeTelegramChatId(target: string): number | string {
   const trimmed = target.trim();
   // numeric chat id
@@ -11,6 +13,55 @@ export function normalizeTelegramChatId(target: string): number | string {
   if (!isNaN(num) && String(num) === trimmed) return num;
   // @username or channel id
   return trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
+}
+
+// split long text into chunks that respect paragraph/line/sentence boundaries
+// avoids splitting inside <pre> or <blockquote> tags
+export function splitTelegramMessage(text: string, limit = MSG_LIMIT): string[] {
+  if (text.length <= limit) return [text];
+
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > limit) {
+    let splitAt = -1;
+
+    // try paragraph break
+    const paraIdx = remaining.lastIndexOf('\n\n', limit);
+    if (paraIdx > limit * 0.3) {
+      splitAt = paraIdx;
+    }
+
+    // try line break
+    if (splitAt < 0) {
+      const lineIdx = remaining.lastIndexOf('\n', limit);
+      if (lineIdx > limit * 0.3) {
+        splitAt = lineIdx;
+      }
+    }
+
+    // try sentence break
+    if (splitAt < 0) {
+      const sentIdx = remaining.lastIndexOf('. ', limit);
+      if (sentIdx > limit * 0.3) {
+        splitAt = sentIdx + 1;
+      }
+    }
+
+    // hard split as last resort
+    if (splitAt < 0) {
+      splitAt = limit;
+    }
+
+    chunks.push(remaining.slice(0, splitAt).trimEnd());
+    remaining = remaining.slice(splitAt).trimStart();
+  }
+
+  if (remaining.length > 0) {
+    chunks.push(remaining);
+  }
+
+  return chunks;
 }
 
 async function sendMedia(
@@ -60,10 +111,19 @@ export async function sendTelegramMessage(
   }
 
   const html = markdownToTelegramHtml(text);
-  const result = await api.sendMessage(chatId, html, {
+  const chunks = splitTelegramMessage(html);
+
+  // send first chunk (with reply-to if any)
+  const result = await api.sendMessage(chatId, chunks[0], {
     parse_mode: 'HTML',
     reply_parameters: opts?.replyTo ? { message_id: opts.replyTo } : undefined,
   });
+
+  // send remaining chunks sequentially
+  for (let i = 1; i < chunks.length; i++) {
+    await api.sendMessage(chatId, chunks[i], { parse_mode: 'HTML' });
+  }
+
   return {
     id: String(result.message_id),
     chatId: String(result.chat.id),
@@ -77,7 +137,16 @@ export async function editTelegramMessage(
   newText: string
 ): Promise<void> {
   const cid = normalizeTelegramChatId(chatId);
-  await api.editMessageText(cid, Number(messageId), markdownToTelegramHtml(newText), { parse_mode: 'HTML' });
+  const html = markdownToTelegramHtml(newText);
+  const chunks = splitTelegramMessage(html);
+
+  // edit the original message with the first chunk
+  await api.editMessageText(cid, Number(messageId), chunks[0], { parse_mode: 'HTML' });
+
+  // overflow chunks sent as new messages
+  for (let i = 1; i < chunks.length; i++) {
+    await api.sendMessage(cid, chunks[i], { parse_mode: 'HTML' });
+  }
 }
 
 export async function deleteTelegramMessage(

@@ -1,19 +1,142 @@
-import { useMemo } from 'react';
+import { useMemo, useEffect, useState } from 'react';
 import type { useGateway } from '../hooks/useGateway';
 import { ChannelSecurity } from '../components/ChannelSecurity';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { FocusCards } from '@/components/aceternity/focus-cards';
+import { QRCodeSVG } from 'qrcode.react';
+import { Loader2, LogOut, Smartphone } from 'lucide-react';
 
 type Props = {
   channel: 'whatsapp' | 'telegram';
   gateway: ReturnType<typeof useGateway>;
   onViewSession?: (sessionId: string, channel?: string, chatId?: string) => void;
+  onSwitchChannel?: (channel: 'whatsapp' | 'telegram') => void;
 };
 
-export function ChannelView({ channel, gateway, onViewSession }: Props) {
+function WhatsAppSetup({ gateway }: { gateway: ReturnType<typeof useGateway> }) {
+  const [localError, setLocalError] = useState<string | null>(null);
+  const loginStatus = gateway.whatsappLoginStatus;
+  const qr = gateway.whatsappQr;
+  const error = localError || gateway.whatsappLoginError;
+
+  useEffect(() => {
+    gateway.whatsappCheckStatus().catch(() => {});
+  }, [gateway.whatsappCheckStatus]);
+
+  const handleLogin = async () => {
+    setLocalError(null);
+    try {
+      const res = await gateway.whatsappLogin();
+      if (!res.success) setLocalError(res.error || 'login failed');
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleLogout = async () => {
+    setLocalError(null);
+    try {
+      await gateway.whatsappLogout();
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  // already connected
+  if (loginStatus === 'connected') {
+    return (
+      <Card className="mb-3">
+        <CardContent className="p-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Smartphone className="w-3.5 h-3.5 text-success" />
+              <span className="text-xs font-semibold">WhatsApp linked</span>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-[11px] text-destructive hover:text-destructive px-2"
+              onClick={handleLogout}
+            >
+              <LogOut className="w-3 h-3 mr-1" />unlink
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // showing QR
+  if (loginStatus === 'connecting' || loginStatus === 'qr_ready') {
+    return (
+      <Card className="mb-3">
+        <CardContent className="p-4">
+          <div className="flex flex-col items-center gap-4">
+            {qr ? (
+              <>
+                <div className="bg-white p-3 rounded-lg">
+                  <QRCodeSVG value={qr} size={200} />
+                </div>
+                <div className="text-center space-y-1">
+                  <div className="text-xs font-semibold">scan with WhatsApp</div>
+                  <div className="text-[10px] text-muted-foreground">
+                    open WhatsApp → settings → linked devices → link a device
+                  </div>
+                </div>
+                {error && (
+                  <div className="text-[11px] text-destructive text-center">{error}</div>
+                )}
+              </>
+            ) : (
+              <div className="flex flex-col items-center gap-2 py-8">
+                <div className="flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                  <span className="text-xs text-muted-foreground">connecting to WhatsApp...</span>
+                </div>
+                {error && (
+                  <div className="text-[11px] text-destructive text-center">{error}</div>
+                )}
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // not linked / unknown / failed
+  return (
+    <Card className="mb-3">
+      <CardContent className="p-4">
+        <div className="flex flex-col items-center gap-3 py-4">
+          <Smartphone className="w-8 h-8 text-muted-foreground opacity-40" />
+          <div className="text-center space-y-1">
+            <div className="text-sm font-semibold">set up WhatsApp</div>
+            <div className="text-[10px] text-muted-foreground">
+              link your WhatsApp account to send and receive messages
+            </div>
+          </div>
+          {error && (
+            <div className="text-[11px] text-destructive">{error}</div>
+          )}
+          <Button
+            size="sm"
+            className="h-8 text-xs px-4"
+            onClick={handleLogin}
+          >
+            link WhatsApp
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function ChannelView({ channel, gateway, onViewSession, onSwitchChannel }: Props) {
   const status = gateway.channelStatuses.find(s => s.channel === channel);
   const messages = useMemo(
     () => gateway.channelMessages.filter(m => m.channel === channel),
@@ -51,7 +174,28 @@ export function ChannelView({ channel, gateway, onViewSession }: Props) {
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0">
-        <span className="font-semibold text-sm">{label}</span>
+        {onSwitchChannel ? (
+          <div className="flex items-center gap-1">
+            {(['whatsapp', 'telegram'] as const).map(ch => (
+              <button
+                key={ch}
+                onClick={() => onSwitchChannel(ch)}
+                className={`px-2.5 py-1 rounded text-[11px] transition-colors ${
+                  channel === ch
+                    ? 'bg-secondary text-foreground font-semibold'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
+                }`}
+              >
+                <span className="flex items-center gap-1.5">
+                  <img src={ch === 'whatsapp' ? '/whatsapp.png' : '/telegram.png'} className="w-3.5 h-3.5" alt="" />
+                  {ch === 'whatsapp' ? 'WhatsApp' : 'Telegram'}
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <span className="font-semibold text-sm">{label}</span>
+        )}
         {statusBadge()}
         {status?.accountId && (
           <span className="text-muted-foreground text-[11px]">{status.accountId}</span>
@@ -63,6 +207,8 @@ export function ChannelView({ channel, gateway, onViewSession }: Props) {
 
       <ScrollArea className="flex-1 min-h-0">
         <div className="p-4 space-y-4">
+          {channel === 'whatsapp' && <WhatsAppSetup gateway={gateway} />}
+
           <ChannelSecurity channel={channel} gateway={gateway} />
 
           {channelSessions.length === 0 && messages.length === 0 && (

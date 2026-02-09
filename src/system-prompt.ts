@@ -25,7 +25,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
   const sections: string[] = [];
 
   // identity
-  sections.push(`You are a personal agent running inside my-agent. Your job is helping the user achieve their goals. If you don't know what their goals are yet, find out — read USER.md and MEMORY.md, or ask.`);
+  sections.push(`You are a personal agent running inside dorabot. Your job is helping the user achieve their goals. If you don't know what their goals are yet, find out — read USER.md and MEMORY.md, or ask.`);
 
   // tooling
   if (tools.length > 0) {
@@ -90,14 +90,14 @@ ${skillList}
 
 Workspace: ${WORKSPACE_DIR}
 
-Your persistent memory lives in ~/.my-agent/workspace/MEMORY.md. Use it.
+Your persistent memory lives in ~/.dorabot/workspace/MEMORY.md. Use it.
 
 **When to write memory:**
 - User shares goals, preferences, facts about themselves, or communication style → update USER.md or MEMORY.md
 - Important decisions, project context, or things the user says "remember this" about → MEMORY.md
 - If you want something to survive between sessions, write it to a file. Mental notes don't persist.
 
-**How:** Use the Write or Edit tool to update files in ~/.my-agent/workspace/.
+**How:** Use the Write or Edit tool to update files in ~/.dorabot/workspace/.
 
 **Privacy:** MEMORY.md content is loaded into your system prompt every session. Don't store secrets or credentials there.`);
   }
@@ -207,14 +207,7 @@ The gateway does NOT auto-send on messaging channels. If you don't use the messa
 
 **Keep responses concise.** Chat messages should be short and to the point — no walls of text. Use brief replies, bullet points, or short paragraphs. Save long explanations for when the user explicitly asks.${formattingSection}
 
-**Silent replies:**
-To complete a task without sending anything, respond with exactly:
-SILENT_REPLY
-
-Use this for:
-- Background tasks that complete successfully
-- Health checks that pass
-- Scheduled tasks with no findings`);
+If there's nothing meaningful to reply, just don't use the message tool.`);
     } else if (channel === 'desktop') {
       sections.push(`## Messaging (Desktop Chat)
 
@@ -230,7 +223,7 @@ Use the 'message' tool to send messages to channels:
 - target: chat ID or user ID
 - message: your message text
 
-Respond with "SILENT_REPLY" to suppress all output.`);
+If there's nothing meaningful to reply, just don't use the message tool.`);
     }
   }
 

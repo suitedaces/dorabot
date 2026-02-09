@@ -22,11 +22,25 @@ export type SessionInfo = {
   senderName?: string;
 };
 
+export type MessageMetadata = {
+  channel?: string;
+  chatId?: string;
+  chatType?: string;
+  senderName?: string;
+  body?: string;
+  replyToId?: string;
+  mediaType?: string;
+  tools?: string[];
+  usage?: { inputTokens: number; outputTokens: number; totalCostUsd: number };
+  durationMs?: number;
+};
+
 export type SessionMessage = {
   type: 'user' | 'assistant' | 'system' | 'result';
   uuid?: string;
   timestamp: string;
   content: unknown;
+  metadata?: MessageMetadata;
 };
 
 function sanitizeSessionId(id: string): string {
