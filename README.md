@@ -27,7 +27,7 @@ https://github.com/user-attachments/assets/2a734272-b1e6-4978-9d00-cc051daf7401
 ### Prerequisites
 
 - Node.js 22+
-- An Anthropic API key (`ANTHROPIC_API_KEY`)
+- An Anthropic API key (`ANTHROPIC_API_KEY`) or a [Claude Pro/Max subscription](https://claude.ai) logged in via the `claude` CLI
 - Chrome, Brave, or Edge (for browser features)
 
 ### Install
