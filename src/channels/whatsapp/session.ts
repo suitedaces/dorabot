@@ -16,6 +16,7 @@ export type CreateSocketOptions = {
   authDir: string;
   onQr?: (qr: string) => void;
   onConnection?: (state: 'open' | 'connecting' | 'close', error?: Error) => void;
+  version?: [number, number, number];
   verbose?: boolean;
 };
 
@@ -27,6 +28,7 @@ export async function createWaSocket(opts: CreateSocketOptions): Promise<WASocke
   const { state, saveCreds } = await useMultiFileAuthState(opts.authDir);
 
   const sock = makeWASocket({
+    ...(opts.version ? { version: opts.version } : {}),
     auth: {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys),
