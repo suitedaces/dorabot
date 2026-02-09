@@ -336,7 +336,7 @@ export function ChatView({ gateway }: Props) {
       case 'text':
         return (
           <div key={i} className="prose-chat py-1.5">
-            <Markdown>{item.content}</Markdown>
+            <Markdown remarkPlugins={[remarkGfm]}>{item.content}</Markdown>
             {item.streaming && <span className="streaming-cursor" />}
           </div>
         );
