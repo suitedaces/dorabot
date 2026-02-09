@@ -34,10 +34,10 @@ export function SearchStream({ input, output, isError, streaming }: ToolUIProps)
   }
 
   return (
-    <div className="rounded-lg overflow-hidden border border-border/60 bg-[oklch(0.12_0.005_280)]">
+    <div className="rounded-lg overflow-hidden border border-border/60 bg-[var(--stream-base)]">
       {/* search bar */}
-      <div className="px-3 py-2.5 bg-[oklch(0.15_0.005_280)]">
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[oklch(0.10_0.005_280)] border border-border/30">
+      <div className="px-3 py-2.5 bg-[var(--stream-raised)]">
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[var(--stream-deep)] border border-border/30">
           <Search className={`w-3.5 h-3.5 shrink-0 ${streaming ? 'text-primary' : 'text-muted-foreground/60'}`} />
           <span className="text-[12px] text-foreground/80 truncate flex-1">
             {query || "..."}

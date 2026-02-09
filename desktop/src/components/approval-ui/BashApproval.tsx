@@ -15,7 +15,7 @@ export function BashApproval({ input, onModify }: ApprovalUIProps) {
       <Textarea
         value={command}
         onChange={e => onModify({ ...input, command: e.target.value })}
-        className="font-mono text-[11px] min-h-[60px] bg-[oklch(0.13_0_0)] text-success"
+        className="font-mono text-[11px] min-h-[60px] bg-[var(--stream-base)] text-success"
         placeholder="command..."
       />
     </div>

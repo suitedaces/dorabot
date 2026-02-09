@@ -29,9 +29,9 @@ export function WebFetchStream({ input, output, isError, streaming }: ToolUIProp
   try { host = new URL(url).hostname } catch {}
 
   return (
-    <div className="rounded-lg overflow-hidden border border-border/60 bg-[oklch(0.12_0.005_280)]">
+    <div className="rounded-lg overflow-hidden border border-border/60 bg-[var(--stream-base)]">
       {/* url bar */}
-      <div className="flex items-center gap-2 px-3 py-2 bg-[oklch(0.15_0.005_280)] border-b border-border/30">
+      <div className="flex items-center gap-2 px-3 py-2 bg-[var(--stream-raised)] border-b border-border/30">
         <Globe className={`w-3.5 h-3.5 shrink-0 ${streaming ? 'text-primary' : 'text-muted-foreground/60'}`} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 text-[11px]">

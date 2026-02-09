@@ -14,10 +14,10 @@ export function ProgressStream({ input, output, isError, streaming }: ToolUIProp
   const finished = !streaming && output != null
 
   return (
-    <div className="rounded-lg overflow-hidden border border-border/60 bg-[oklch(0.10_0.005_280)] font-mono">
+    <div className="rounded-lg overflow-hidden border border-border/60 bg-[var(--stream-deep)] font-mono">
       {/* tab bar */}
-      <div className="flex items-center bg-[oklch(0.14_0.005_280)] border-b border-border/30">
-        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[oklch(0.10_0.005_280)] border-r border-border/30 relative">
+      <div className="flex items-center bg-[var(--stream-mid)] border-b border-border/30">
+        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[var(--stream-deep)] border-r border-border/30 relative">
           <ListChecks className="w-3 h-3 text-primary" />
           <span className="text-[10px] text-foreground/80">tasks</span>
           <span className="text-[9px] text-muted-foreground/50 ml-1">{done}/{total}</span>

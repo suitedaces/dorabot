@@ -57,7 +57,7 @@ export function CronStream({ name, input, output, isError, streaming }: ToolUIPr
   const Icon = TOOL_ICONS[name] || Clock
 
   return (
-    <div className="rounded-lg overflow-hidden border border-border/60 bg-[oklch(0.12_0.005_280)]">
+    <div className="rounded-lg overflow-hidden border border-border/60 bg-[var(--stream-base)]">
       <div className="flex items-center gap-3 px-3 py-3">
         {/* animated clock */}
         <AnimatedClock streaming={streaming} />

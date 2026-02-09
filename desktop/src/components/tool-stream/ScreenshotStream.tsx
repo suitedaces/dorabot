@@ -55,9 +55,9 @@ export function ScreenshotStream({ input, output, imageData, isError, streaming 
   const done = !streaming && output != null
 
   return (
-    <div className="rounded-lg overflow-hidden border border-border/60 bg-[oklch(0.10_0.005_280)]">
+    <div className="rounded-lg overflow-hidden border border-border/60 bg-[var(--stream-deep)]">
       {/* header */}
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-[oklch(0.14_0.005_280)] border-b border-border/30">
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-[var(--stream-mid)] border-b border-border/30">
         <Camera className={`w-3.5 h-3.5 ${streaming ? 'text-primary' : 'text-muted-foreground/60'}`} />
         <span className="text-[10px] text-muted-foreground/60">
           {streaming ? "capturing..." : done ? "captured" : "screenshot"}

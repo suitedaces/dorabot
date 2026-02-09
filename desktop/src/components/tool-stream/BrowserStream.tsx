@@ -22,9 +22,9 @@ export function BrowserStream({ input, output, imageData, isError, streaming }: 
   const done = !streaming && output != null
 
   return (
-    <div className="rounded-lg overflow-hidden border border-border/60 bg-[oklch(0.14_0.005_280)]">
+    <div className="rounded-lg overflow-hidden border border-border/60 bg-[var(--stream-mid)]">
       {/* title bar */}
-      <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[oklch(0.18_0.005_280)] border-b border-border/30">
+      <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[var(--stream-elevated)] border-b border-border/30">
         <div className="flex gap-1.5">
           <div className="w-2.5 h-2.5 rounded-full bg-destructive/70" />
           <div className="w-2.5 h-2.5 rounded-full bg-warning/70" />
@@ -42,8 +42,8 @@ export function BrowserStream({ input, output, imageData, isError, streaming }: 
       </div>
 
       {/* address bar */}
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-[oklch(0.16_0.005_280)]">
-        <div className="flex-1 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[oklch(0.12_0.005_280)] border border-border/20">
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-[var(--stream-raised)]">
+        <div className="flex-1 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[var(--stream-base)] border border-border/20">
           {url && <Lock className="w-2.5 h-2.5 text-success/70 shrink-0" />}
           <span className="text-[11px] font-mono text-foreground/80 truncate">
             {url || "about:blank"}

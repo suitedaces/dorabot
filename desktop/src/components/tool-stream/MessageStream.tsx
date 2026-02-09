@@ -31,10 +31,10 @@ export function MessageStream({ input, output, isError, streaming }: ToolUIProps
   const isTelegram = channel === "telegram"
 
   const bubbleBg = isWhatsapp
-    ? "bg-[oklch(0.25_0.04_155)]"
+    ? "bg-[var(--stream-bubble-wa)]"
     : isTelegram
-      ? "bg-[oklch(0.25_0.04_250)]"
-      : "bg-[oklch(0.20_0.01_280)]"
+      ? "bg-[var(--stream-bubble-tg)]"
+      : "bg-[var(--stream-bubble-default)]"
 
   const accentColor = isWhatsapp
     ? "text-[oklch(0.70_0.15_155)]"
@@ -45,9 +45,9 @@ export function MessageStream({ input, output, isError, streaming }: ToolUIProps
   const channelImg = isWhatsapp ? "/whatsapp.png" : isTelegram ? "/telegram.png" : null
 
   return (
-    <div className="rounded-lg overflow-hidden border border-border/60 bg-[oklch(0.12_0.005_280)]">
+    <div className="rounded-lg overflow-hidden border border-border/60 bg-[var(--stream-base)]">
       {/* chat header */}
-      <div className="flex items-center gap-2 px-3 py-2 bg-[oklch(0.15_0.005_280)] border-b border-border/30">
+      <div className="flex items-center gap-2 px-3 py-2 bg-[var(--stream-raised)] border-b border-border/30">
         {channelImg ? (
           <img src={channelImg} className="w-4 h-4" alt={channel} />
         ) : (

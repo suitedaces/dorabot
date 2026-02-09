@@ -10,7 +10,7 @@ export function TerminalStream({ input, output, isError, streaming }: ToolUIProp
   const done = !streaming && output != null
 
   return (
-    <div className="rounded-lg overflow-hidden border border-border/60 bg-[oklch(0.10_0.005_280)] font-mono relative">
+    <div className="rounded-lg overflow-hidden border border-border/60 bg-[var(--stream-deep)] font-mono relative">
       {/* scanline overlay */}
       {streaming && (
         <div
@@ -22,7 +22,7 @@ export function TerminalStream({ input, output, isError, streaming }: ToolUIProp
       )}
 
       {/* title bar */}
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-[oklch(0.15_0.005_280)] border-b border-border/30">
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-[var(--stream-raised)] border-b border-border/30">
         <div className="flex gap-1.5">
           <div className="w-2.5 h-2.5 rounded-full bg-destructive/70" />
           <div className="w-2.5 h-2.5 rounded-full bg-warning/70" />

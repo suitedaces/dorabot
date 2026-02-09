@@ -34,10 +34,10 @@ export function FileStream({ name, input, output, isError, streaming }: ToolUIPr
   const isGrep = name === "Grep"
 
   return (
-    <div className="rounded-lg overflow-hidden border border-border/60 bg-[oklch(0.10_0.005_280)] font-mono">
+    <div className="rounded-lg overflow-hidden border border-border/60 bg-[var(--stream-deep)] font-mono">
       {/* tab bar */}
-      <div className="flex items-center bg-[oklch(0.14_0.005_280)] border-b border-border/30">
-        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[oklch(0.10_0.005_280)] border-r border-border/30 border-b-0 relative">
+      <div className="flex items-center bg-[var(--stream-mid)] border-b border-border/30">
+        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[var(--stream-deep)] border-r border-border/30 border-b-0 relative">
           <Icon className={`w-3 h-3 ${meta.color}`} />
           <span className="text-[10px] text-foreground/80 max-w-[180px] truncate">
             {filePath ? filename(filePath) : (isGlob || isGrep ? (command || "...") : "untitled")}
@@ -66,7 +66,7 @@ export function FileStream({ name, input, output, isError, streaming }: ToolUIPr
 
       {/* file path breadcrumb */}
       {filePath && (
-        <div className="px-3 py-1 bg-[oklch(0.12_0.005_280)] border-b border-border/20">
+        <div className="px-3 py-1 bg-[var(--stream-base)] border-b border-border/20">
           <span className="text-[9px] text-muted-foreground/50 truncate block">{filePath}</span>
         </div>
       )}
@@ -116,7 +116,7 @@ export function FileStream({ name, input, output, isError, streaming }: ToolUIPr
       {/* search pattern for Glob/Grep */}
       {(isGlob || isGrep) && command && !isEdit && (
         <div className="px-3 py-2 border-b border-border/20">
-          <div className="flex items-center gap-2 px-2 py-1 rounded bg-[oklch(0.14_0.005_280)] border border-border/20">
+          <div className="flex items-center gap-2 px-2 py-1 rounded bg-[var(--stream-mid)] border border-border/20">
             <span className="text-[9px] text-muted-foreground/50">pattern:</span>
             <span className="text-[11px] text-primary/80">{command}</span>
             {streaming && (

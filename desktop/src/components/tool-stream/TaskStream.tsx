@@ -29,7 +29,7 @@ export function TaskStream({ input, output, isError, streaming }: ToolUIProps) {
   const done = !streaming && output != null
 
   return (
-    <div className="rounded-lg overflow-hidden border border-border/60 bg-[oklch(0.12_0.005_280)]">
+    <div className="rounded-lg overflow-hidden border border-border/60 bg-[var(--stream-base)]">
       <div className="flex items-center gap-3 px-3 py-2.5">
         {streaming ? <BrainPulse /> : (
           <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">

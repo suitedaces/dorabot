@@ -12,7 +12,7 @@ export function BashTool({ input, output, isError, streaming }: ToolUIProps) {
   const bg = parsed.run_in_background
 
   return (
-    <div className="rounded-md bg-[oklch(0.13_0_0)] border border-border overflow-hidden">
+    <div className="rounded-md bg-[var(--stream-base)] border border-border overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/50">
         <Terminal className="w-3 h-3 text-success" />
         <span className="text-[10px] text-muted-foreground">terminal</span>
