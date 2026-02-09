@@ -179,11 +179,11 @@ export function FileExplorer({ rpc, connected, onFileClick, onFileChange }: Prop
     if (!state) return [];
 
     if (state.loading && state.entries.length === 0) {
-      return [<div key="loading" className="text-[11px] text-muted-foreground py-1" style={{ paddingLeft: depth * 16 + 12 }}>...</div>];
+      return [<div key="loading" className="text-[11px] text-muted-foreground py-1" style={{ paddingLeft: Math.min(depth * 16, 128) + 12 }}>...</div>];
     }
 
     if (state.error) {
-      return [<div key="error" className="text-[11px] text-destructive py-1" style={{ paddingLeft: depth * 16 + 12 }}>{state.error}</div>];
+      return [<div key="error" className="text-[11px] text-destructive py-1 truncate" style={{ paddingLeft: Math.min(depth * 16, 128) + 12 }}>{state.error}</div>];
     }
 
     const items: React.JSX.Element[] = [];
@@ -197,11 +197,11 @@ export function FileExplorer({ rpc, connected, onFileClick, onFileChange }: Prop
         <div
           key={fullPath}
           className={cn(
-            'flex items-center gap-1.5 py-0.5 px-1 rounded-sm text-[11px] cursor-pointer group transition-colors',
+            'flex items-center gap-1.5 py-0.5 px-1 rounded-sm text-[11px] cursor-pointer group transition-colors min-w-0',
             isDot && 'opacity-50',
             selectedPath === fullPath ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'
           )}
-          style={{ paddingLeft: depth * 16 + 12 }}
+          style={{ paddingLeft: Math.min(depth * 16, 128) + 12 }}
           onClick={isDir ? () => toggleDir(fullPath) : () => handleFileClick(fullPath)}
           onDoubleClick={isDir ? () => navigateTo(fullPath) : undefined}
         >
@@ -211,7 +211,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onFileChange }: Prop
             <span className="w-3 shrink-0" />
           )}
           {isDir ? <Folder className="w-3 h-3 shrink-0 text-primary" /> : <File className="w-3 h-3 shrink-0" />}
-          <span className={cn('flex-1 truncate', isDir && 'font-semibold')}>{entry.name}</span>
+          <span className={cn('flex-1 truncate min-w-0', isDir && 'font-semibold')}>{entry.name}</span>
           {entry.size != null && <span className="text-[9px] text-muted-foreground shrink-0">{formatSize(entry.size)}</span>}
           <span className="hidden group-hover:flex items-center gap-0.5 shrink-0">
             <Tooltip>
@@ -256,13 +256,13 @@ export function FileExplorer({ rpc, connected, onFileClick, onFileChange }: Prop
           </TooltipTrigger>
           <TooltipContent side="bottom" className="text-[10px]">New Folder</TooltipContent>
         </Tooltip>
-        <div className="flex items-center gap-0.5 text-[10px] text-muted-foreground flex-1 overflow-hidden ml-1">
+        <div className="flex items-center gap-0.5 text-[10px] text-muted-foreground flex-1 min-w-0 overflow-hidden ml-1">
           {crumbs.map((c, i) => (
-            <span key={c.path} className="flex items-center gap-0.5 shrink-0">
-              {i > 0 && <span>/</span>}
+            <span key={c.path} className="flex items-center gap-0.5 shrink min-w-0">
+              {i > 0 && <span className="shrink-0">/</span>}
               <span
                 className={cn(
-                  'hover:text-foreground transition-colors',
+                  'hover:text-foreground transition-colors truncate',
                   i === crumbs.length - 1 ? 'text-foreground font-semibold' : 'cursor-pointer'
                 )}
                 onClick={i < crumbs.length - 1 ? () => navigateTo(c.path) : undefined}

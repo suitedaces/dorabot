@@ -274,23 +274,23 @@ export function ChatView({ gateway }: Props) {
     switch (item.type) {
       case 'user':
         return (
-          <div key={i} className="flex gap-2 px-2 py-1.5 my-1 bg-secondary rounded-md">
+          <div key={i} className="flex gap-2 px-2 py-1.5 my-1 bg-secondary rounded-md min-w-0">
             <span className="text-primary font-semibold shrink-0">{'>'}</span>
-            <span className="text-foreground">{item.content}</span>
+            <span className="text-foreground break-words min-w-0">{item.content}</span>
           </div>
         );
       case 'text':
         return (
-          <div key={i} className="prose-chat py-0.5">
+          <div key={i} className="prose-chat py-1.5">
             <Markdown>{item.content}</Markdown>
             {item.streaming && <span className="streaming-cursor" />}
           </div>
         );
       case 'tool_use':
-        return <ToolUseItem key={i} item={item} />;
+        return <div key={i} className="my-1.5"><ToolUseItem item={item} /></div>;
       case 'thinking':
         return (
-          <div key={i} className="text-muted-foreground italic text-xs border-l-2 border-border pl-2 my-1">
+          <div key={i} className="text-muted-foreground italic text-xs border-l-2 border-border pl-2 my-1 break-words min-w-0">
             {item.content}
             {item.streaming && <span className="streaming-cursor" />}
           </div>
@@ -304,7 +304,7 @@ export function ChatView({ gateway }: Props) {
         );
       case 'error':
         return (
-          <div key={i} className="text-destructive py-1">
+          <div key={i} className="text-destructive py-1 break-words min-w-0">
             {item.content}
           </div>
         );
@@ -312,9 +312,9 @@ export function ChatView({ gateway }: Props) {
   };
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className="flex flex-col h-full min-h-0 min-w-0">
       {/* header */}
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0">
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0 min-w-0">
         <span className="text-muted-foreground text-[11px] font-mono">
           {gateway.currentSessionId ? gateway.currentSessionId.slice(0, 8) : 'new task'}
         </span>
@@ -330,8 +330,8 @@ export function ChatView({ gateway }: Props) {
       </div>
 
       {/* messages */}
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="px-4 py-3">
+      <ScrollArea className="flex-1 min-h-0 min-w-0">
+        <div className="px-4 py-3 min-w-0 overflow-hidden">
           {gateway.chatItems.length === 0 && (
             <AuroraBackground className="h-full min-h-[300px]">
               <div className="text-center space-y-3">
@@ -387,8 +387,8 @@ export function ChatView({ gateway }: Props) {
       )}
 
       {/* input area */}
-      <div className="px-4 py-3 border-t border-border shrink-0">
-        <div className="flex gap-2 items-end">
+      <div className="px-4 py-3 border-t border-border shrink-0 min-w-0">
+        <div className="flex gap-2 items-end min-w-0">
           <Textarea
             ref={inputRef}
             value={input}
@@ -396,7 +396,7 @@ export function ChatView({ gateway }: Props) {
             onKeyDown={handleKeyDown}
             placeholder={gateway.connectionState === 'connected' ? 'type a message...' : 'waiting for gateway...'}
             disabled={gateway.connectionState !== 'connected' || !!gateway.pendingQuestion}
-            className="flex-1 min-h-[40px] max-h-[200px] resize-none text-[13px]"
+            className="flex-1 min-w-0 min-h-[40px] max-h-[200px] resize-none text-[13px]"
             rows={1}
           />
           <Select value={gateway.model} onValueChange={gateway.changeModel} disabled={gateway.connectionState !== 'connected'}>

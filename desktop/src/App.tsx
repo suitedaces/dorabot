@@ -213,8 +213,8 @@ export default function App() {
         <ResizableHandle withHandle />
 
         {/* main content */}
-        <ResizablePanel defaultSize={showFiles ? "55%" : "85%"} minSize="30%" className="overflow-hidden">
-          <div className="flex flex-col h-full min-h-0">
+        <ResizablePanel defaultSize={showFiles ? "55%" : "85%"} minSize="30%" className="overflow-hidden min-w-0">
+          <div className="flex flex-col h-full min-h-0 min-w-0">
             {renderView()}
           </div>
         </ResizablePanel>
