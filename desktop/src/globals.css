@@ -232,6 +232,21 @@
   border-right: none;
 }
 
+/* dorabot idle animation */
+@keyframes dorabot-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+@keyframes dorabot-glow {
+  0%, 100% { filter: brightness(1) drop-shadow(0 0 0px transparent); }
+  50% { filter: brightness(1.15) drop-shadow(0 0 8px oklch(0.72 0.22 250 / 0.4)); }
+}
+
+.dorabot-alive {
+  animation: dorabot-float 3s ease-in-out infinite, dorabot-glow 2s ease-in-out infinite;
+}
+
 /* markdown viewer (file viewer) */
 .markdown-viewer {
   @apply p-5 max-w-3xl mx-auto text-foreground;

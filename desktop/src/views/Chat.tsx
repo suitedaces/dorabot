@@ -335,7 +335,7 @@ export function ChatView({ gateway }: Props) {
           {gateway.chatItems.length === 0 && (
             <AuroraBackground className="h-full min-h-[300px]">
               <div className="text-center space-y-3">
-                <img src="/robot.gif" alt="robot" className="w-24 h-24 mx-auto" />
+                <img src="/dorabot-computer.png" alt="dorabot" className="w-40 h-40 mx-auto dorabot-alive" />
                 <div className="text-muted-foreground text-sm">send a message to start</div>
                 <div className="text-[10px] text-muted-foreground">
                   {gateway.connectionState === 'connected' ? 'connected to gateway' : 'waiting for gateway...'}
