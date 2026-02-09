@@ -7,6 +7,12 @@ let isQuitting = false;
 
 const isDev = !app.isPackaged;
 
+function getIconPath(): string {
+  return isDev
+    ? path.join(__dirname, '..', 'public', 'dorabot.png')
+    : path.join(__dirname, '..', 'dist', 'dorabot.png');
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -15,6 +21,7 @@ function createWindow(): void {
     minHeight: 600,
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0d1117',
+    icon: getIconPath(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -44,11 +51,7 @@ function createWindow(): void {
 }
 
 function createTray(): void {
-  // simple 16x16 template icon
-  const icon = nativeImage.createFromDataURL(
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAAbwAAAG8B8aLcQwAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAABkSURBVDiN5dIxDgAgCATA/f+n8QEkxorGQoZiCwgDBAAgCZJJ8t4ySSbJ0+YzSW63eRXYAlcCpwI2xhfAlqA9cTYBp4KdvhY4EmwPNAQ2BVcFVgVngl5gSdATrA28CXqBx/kAYSgbh6hEzLwAAAAASUVORK5CYII='
-  );
-  icon.setTemplateImage(true);
+  const icon = nativeImage.createFromPath(getIconPath()).resize({ width: 18, height: 18 });
 
   tray = new Tray(icon);
   tray.setToolTip('dorabot');
@@ -88,6 +91,9 @@ function updateTrayTitle(status: string): void {
 }
 
 app.on('ready', () => {
+  if (app.dock) {
+    app.dock.setIcon(getIconPath());
+  }
   createTray();
   createWindow();
 });

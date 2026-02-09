@@ -104,8 +104,9 @@ export default function App() {
       />
 
       {/* titlebar — pure drag chrome */}
-      <div className="h-9 bg-card border-b border-border flex items-center pl-[78px] pr-4 shrink-0" style={{ WebkitAppRegion: 'drag' } as any}>
-        <span className="text-xs text-muted-foreground font-medium">dorabot</span>
+      <div className="h-11 bg-card border-b border-border flex items-center pl-[78px] pr-4 shrink-0" style={{ WebkitAppRegion: 'drag' } as any}>
+        <img src="/dorabot.png" alt="dorabot" className="w-10 h-10 mr-1" />
+        <span className="text-base text-muted-foreground font-medium">dorabot</span>
       </div>
 
       {/* main layout */}
@@ -212,8 +213,8 @@ export default function App() {
         <ResizableHandle withHandle />
 
         {/* main content */}
-        <ResizablePanel defaultSize={showFiles ? "55%" : "85%"} minSize="30%" className="overflow-hidden">
-          <div className="flex flex-col h-full min-h-0">
+        <ResizablePanel defaultSize={showFiles ? "55%" : "85%"} minSize="30%" className="overflow-hidden min-w-0">
+          <div className="flex flex-col h-full min-h-0 min-w-0">
             {renderView()}
           </div>
         </ResizablePanel>

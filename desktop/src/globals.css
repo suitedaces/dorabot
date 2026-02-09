@@ -185,16 +185,26 @@
 }
 
 /* prose styles for markdown in chat */
+.prose-chat {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  min-width: 0;
+}
 .prose-chat p { margin: 0 0 8px; }
 .prose-chat p:last-child { margin-bottom: 0; }
 .prose-chat code {
   @apply bg-secondary px-1.5 py-0.5 rounded text-xs;
+  overflow-wrap: break-word;
+  word-break: break-all;
 }
 .prose-chat pre {
   @apply bg-card border border-border rounded-md p-3 my-2 overflow-x-auto text-xs;
+  max-width: 100%;
 }
 .prose-chat pre code {
   @apply bg-transparent p-0 rounded-none;
+  word-break: normal;
+  overflow-wrap: normal;
 }
 .prose-chat ul, .prose-chat ol {
   padding-left: 20px;
@@ -215,9 +225,14 @@
 }
 .prose-chat a {
   @apply text-primary hover:underline;
+  overflow-wrap: break-word;
+  word-break: break-all;
 }
 .prose-chat table {
   @apply border-collapse my-2 text-xs;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
 }
 .prose-chat th, .prose-chat td {
   @apply border border-border px-2 py-1;
@@ -230,6 +245,21 @@
   border-bottom: none;
   border-left: none;
   border-right: none;
+}
+
+/* dorabot idle animation */
+@keyframes dorabot-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+@keyframes dorabot-glow {
+  0%, 100% { filter: brightness(1) drop-shadow(0 0 0px transparent); }
+  50% { filter: brightness(1.15) drop-shadow(0 0 8px oklch(0.72 0.22 250 / 0.4)); }
+}
+
+.dorabot-alive {
+  animation: dorabot-float 3s ease-in-out infinite, dorabot-glow 2s ease-in-out infinite;
 }
 
 /* markdown viewer (file viewer) */
