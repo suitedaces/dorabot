@@ -214,6 +214,8 @@ export function useGateway(url = 'ws://localhost:18789') {
   const [pendingQuestion, setPendingQuestion] = useState<AskUserQuestion | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<ToolApproval[]>([]);
   const [notifications, setNotifications] = useState<ToolNotification[]>([]);
+  const [whatsappQr, setWhatsappQr] = useState<string | null>(null);
+  const [whatsappLoginStatus, setWhatsappLoginStatus] = useState<string>('unknown');
 
   const wsRef = useRef<WebSocket | null>(null);
   const rpcIdRef = useRef(0);
@@ -475,6 +477,21 @@ export function useGateway(url = 'ws://localhost:18789') {
         const d = data as { path: string; eventType: string; filename: string | null };
         // notify all listeners
         fsChangeListenersRef.current.forEach(listener => listener(d.path));
+        break;
+      }
+
+      case 'whatsapp.qr': {
+        const d = data as { qr: string };
+        setWhatsappQr(d.qr);
+        break;
+      }
+
+      case 'whatsapp.login_status': {
+        const d = data as { status: string; error?: string };
+        setWhatsappLoginStatus(d.status);
+        if (d.status === 'connected' || d.status === 'failed' || d.status === 'disconnected') {
+          setWhatsappQr(null);
+        }
         break;
       }
     }
@@ -761,6 +778,24 @@ export function useGateway(url = 'ws://localhost:18789') {
     await rpc('security.paths.set', { target, allowed, denied });
   }, [rpc]);
 
+  const whatsappCheckStatus = useCallback(async () => {
+    const res = await rpc('channels.whatsapp.status') as { linked: boolean };
+    setWhatsappLoginStatus(res.linked ? 'connected' : 'not_linked');
+    return res;
+  }, [rpc]);
+
+  const whatsappLogin = useCallback(async () => {
+    setWhatsappLoginStatus('connecting');
+    setWhatsappQr(null);
+    return await rpc('channels.whatsapp.login') as { success: boolean; selfJid?: string; error?: string };
+  }, [rpc]);
+
+  const whatsappLogout = useCallback(async () => {
+    await rpc('channels.whatsapp.logout');
+    setWhatsappLoginStatus('not_linked');
+    setWhatsappQr(null);
+  }, [rpc]);
+
   return {
     connectionState,
     chatItems,
@@ -798,5 +833,10 @@ export function useGateway(url = 'ws://localhost:18789') {
     setToolPolicy,
     getPathPolicies,
     setPathPolicy,
+    whatsappQr,
+    whatsappLoginStatus,
+    whatsappCheckStatus,
+    whatsappLogin,
+    whatsappLogout,
   };
 }

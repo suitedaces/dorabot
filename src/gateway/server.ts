@@ -17,6 +17,8 @@ import { startCronRunner, loadCronJobs, saveCronJobs, type CronRunner } from '..
 import { checkSkillEligibility, loadAllSkills } from '../skills/loader.js';
 import type { InboundMessage } from '../channels/types.js';
 import { getAllChannelStatuses } from '../channels/index.js';
+import { loginWhatsApp, logoutWhatsApp, isWhatsAppLinked } from '../channels/whatsapp/login.js';
+import { getDefaultAuthDir } from '../channels/whatsapp/session.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { setCronRunner } from '../tools/index.js';
 import { randomUUID, randomBytes } from 'node:crypto';
@@ -1070,6 +1072,60 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!channelId) return { id, error: 'channel required' };
           await channelManager.stopChannel(channelId);
           return { id, result: { stopped: channelId } };
+        }
+
+        case 'channels.whatsapp.status': {
+          const authDir = config.channels?.whatsapp?.authDir || getDefaultAuthDir();
+          const linked = isWhatsAppLinked(authDir);
+          return { id, result: { linked } };
+        }
+
+        case 'channels.whatsapp.login': {
+          const authDir = config.channels?.whatsapp?.authDir || getDefaultAuthDir();
+          broadcast({ event: 'whatsapp.login_status', data: { status: 'connecting' } });
+
+          try {
+            const result = await loginWhatsApp(authDir, (qr) => {
+              broadcast({ event: 'whatsapp.qr', data: { qr } });
+              broadcast({ event: 'whatsapp.login_status', data: { status: 'qr_ready' } });
+            });
+
+            if (result.success) {
+              // auto-enable whatsapp in config
+              if (!config.channels) config.channels = {};
+              if (!config.channels.whatsapp) config.channels.whatsapp = {};
+              config.channels.whatsapp.enabled = true;
+              saveConfig(config);
+
+              broadcast({ event: 'whatsapp.login_status', data: { status: 'connected' } });
+
+              // auto-start the monitor
+              await channelManager.startChannel('whatsapp');
+
+              return { id, result: { success: true, selfJid: result.selfJid } };
+            } else {
+              broadcast({ event: 'whatsapp.login_status', data: { status: 'failed', error: result.error } });
+              return { id, result: { success: false, error: result.error } };
+            }
+          } catch (err) {
+            const error = err instanceof Error ? err.message : String(err);
+            broadcast({ event: 'whatsapp.login_status', data: { status: 'failed', error } });
+            return { id, error };
+          }
+        }
+
+        case 'channels.whatsapp.logout': {
+          await channelManager.stopChannel('whatsapp');
+          const authDir = config.channels?.whatsapp?.authDir || getDefaultAuthDir();
+          await logoutWhatsApp(authDir);
+
+          if (config.channels?.whatsapp) {
+            config.channels.whatsapp.enabled = false;
+            saveConfig(config);
+          }
+
+          broadcast({ event: 'whatsapp.login_status', data: { status: 'disconnected' } });
+          return { id, result: { success: true } };
         }
 
         case 'cron.list': {

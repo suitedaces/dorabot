@@ -3,7 +3,7 @@ import { createWaSocket, waitForConnection, getDefaultAuthDir, isAuthenticated }
 
 export type LoginResult = { success: boolean; error?: string; selfJid?: string };
 
-export async function loginWhatsApp(authDir?: string): Promise<LoginResult> {
+export async function loginWhatsApp(authDir?: string, onQr?: (qr: string) => void): Promise<LoginResult> {
   const dir = authDir || getDefaultAuthDir();
   mkdirSync(dir, { recursive: true });
 
@@ -13,11 +13,15 @@ export async function loginWhatsApp(authDir?: string): Promise<LoginResult> {
     const sock = await createWaSocket({
       authDir: dir,
       onQr: (qr) => {
-        try {
-          const qrt = require('qrcode-terminal');
-          qrt.generate(qr, { small: true });
-        } catch {
-          console.log('QR code:', qr);
+        if (onQr) {
+          onQr(qr);
+        } else {
+          try {
+            const qrt = require('qrcode-terminal');
+            qrt.generate(qr, { small: true });
+          } catch {
+            console.log('QR code:', qr);
+          }
         }
       },
       onConnection: (state, err) => {
