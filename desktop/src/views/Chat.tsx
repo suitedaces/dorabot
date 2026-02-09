@@ -3,6 +3,7 @@ import Markdown from 'react-markdown';
 import type { useGateway, ChatItem, AskUserQuestion } from '../hooks/useGateway';
 import { ApprovalUI } from '@/components/approval-ui';
 import { ToolUI } from '@/components/tool-ui';
+import { ToolStreamCard, hasStreamCard } from '@/components/tool-stream';
 import { AuroraBackground } from '@/components/aceternity/aurora-background';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
@@ -68,7 +69,25 @@ function ToolUseItem({ item }: { item: Extract<ChatItem, { type: 'tool_use' }> }
   const hasOutput = item.output != null;
   const isPending = item.streaming || !hasOutput;
   const displayName = toolText(item.name, isPending ? 'pending' : 'done');
+  const useStreamCard = hasStreamCard(item.name);
 
+  // stream card: full visual component, always visible
+  if (useStreamCard) {
+    return (
+      <div className="max-w-md">
+        <ToolStreamCard
+          name={item.name}
+          input={item.input}
+          output={item.output}
+          imageData={item.imageData}
+          isError={item.is_error}
+          streaming={item.streaming}
+        />
+      </div>
+    );
+  }
+
+  // fallback: old collapsible style for unmapped tools
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <Card className="my-1 overflow-hidden border-border/50 max-w-md">
