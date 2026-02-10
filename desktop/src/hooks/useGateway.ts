@@ -219,7 +219,7 @@ export function useGateway(url = 'ws://localhost:18789') {
   const [whatsappQr, setWhatsappQr] = useState<string | null>(null);
   const [whatsappLoginStatus, setWhatsappLoginStatus] = useState<string>('unknown');
   const [whatsappLoginError, setWhatsappLoginError] = useState<string | null>(null);
-  const [providerInfo, setProviderInfo] = useState<{ name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string } } | null>(null);
+  const [providerInfo, setProviderInfo] = useState<{ name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } } | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const rpcIdRef = useRef(0);
@@ -508,7 +508,7 @@ export function useGateway(url = 'ws://localhost:18789') {
       }
 
       case 'provider.auth_complete': {
-        const d = data as { provider: string; status: { authenticated: boolean; method?: string; identity?: string; error?: string } };
+        const d = data as { provider: string; status: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } };
         setProviderInfo(prev => prev ? { ...prev, auth: d.status } : { name: d.provider, auth: d.status });
         break;
       }
@@ -544,7 +544,7 @@ export function useGateway(url = 'ws://localhost:18789') {
               if (c.model) setModel(c.model as string);
             }).catch(() => {});
             rpc('provider.get').then((res) => {
-              const p = res as { name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string } };
+              const p = res as { name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } };
               setProviderInfo(p);
             }).catch(() => {});
             rpc('sessions.list').then((res) => {
@@ -823,14 +823,14 @@ export function useGateway(url = 'ws://localhost:18789') {
 
   // provider helpers
   const getProviderStatus = useCallback(async () => {
-    const res = await rpc('provider.get') as { name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string } };
+    const res = await rpc('provider.get') as { name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } };
     setProviderInfo(res);
     return res;
   }, [rpc]);
 
   const setProvider = useCallback(async (name: string) => {
     await rpc('provider.set', { name });
-    const res = await rpc('provider.get') as { name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string } };
+    const res = await rpc('provider.get') as { name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } };
     setProviderInfo(res);
     return res;
   }, [rpc]);
