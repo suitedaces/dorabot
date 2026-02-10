@@ -32,6 +32,8 @@ export function ProviderCard({ gateway, disabled }: Props) {
   const authenticated = providerInfo?.auth?.authenticated ?? false;
   const authMethod = providerInfo?.auth?.method;
   const authIdentity = providerInfo?.auth?.identity;
+  const authModel = providerInfo?.auth?.model;
+  const cliVersion = providerInfo?.auth?.cliVersion;
 
   const handleProviderChange = useCallback(async (name: string) => {
     try {
@@ -98,9 +100,14 @@ export function ProviderCard({ gateway, disabled }: Props) {
                 <div className="text-[11px] font-medium text-foreground">authentication</div>
                 <div className="text-[10px] text-muted-foreground">
                   {authenticated
-                    ? `connected via ${authIdentity || (authMethod === 'oauth' ? 'OAuth' : 'API key')}`
+                    ? `connected via ${authIdentity || (authMethod === 'oauth' ? 'Claude subscription' : 'API key')}`
                     : 'not authenticated'}
                 </div>
+                {authenticated && cliVersion && (
+                  <div className="text-[9px] text-muted-foreground/60 font-mono">
+                    CLI v{cliVersion}
+                  </div>
+                )}
               </div>
               <Button
                 variant="outline"
