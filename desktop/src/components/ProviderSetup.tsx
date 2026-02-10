@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import type { useGateway } from '../hooks/useGateway';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ArrowLeft, ExternalLink, Loader2, AlertCircle } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Loader2, AlertCircle, ClipboardPaste } from 'lucide-react';
 
 type Props = {
   provider: 'claude' | 'codex';
@@ -23,83 +23,62 @@ export function ProviderSetup({ provider, gateway, onSuccess, onBack, compact, p
 type ClaudeProps = Omit<Props, 'provider'> & { preferredMethod?: 'oauth' | 'apikey' };
 
 function ClaudeSetup({ gateway, onSuccess, onBack, compact, preferredMethod }: ClaudeProps) {
-  const [mode, setMode] = useState<'choose' | 'oauth-waiting' | 'apikey' | 'not-installed'>(
+  const [mode, setMode] = useState<'choose' | 'oauth-paste' | 'apikey'>(
     preferredMethod === 'apikey' ? 'apikey' : 'choose'
   );
   const [apiKey, setApiKey] = useState('');
+  const [authCode, setAuthCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const loginIdRef = useRef<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoStartedRef = useRef(false);
 
-  useEffect(() => {
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    };
-  }, []);
-
-  // Auto-start OAuth detection if preferredMethod is 'oauth'
+  // Auto-start OAuth if preferredMethod is 'oauth'
   useEffect(() => {
     if (preferredMethod === 'oauth' && !autoStartedRef.current) {
       autoStartedRef.current = true;
-      startSetupToken();
+      startOAuthFlow();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preferredMethod]);
 
-  const startSetupToken = useCallback(async () => {
+  const startOAuthFlow = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      // Check if Claude CLI is installed
-      const check = await gateway.checkProvider('claude');
-      if (!check.ready && check.reason?.includes('CLI not found')) {
-        setMode('not-installed');
-        setLoading(false);
-        return;
-      }
+      const { authUrl } = await gateway.startOAuth('claude');
+      setMode('oauth-paste');
+      setLoading(false);
 
-      const { authUrl, loginId } = await gateway.startOAuth('claude');
-      loginIdRef.current = loginId;
-      setMode('oauth-waiting');
-
-      // Open browser if a real URL was captured
-      if (authUrl && !authUrl.startsWith('claude://')) {
+      // Open browser with the auth URL
+      if (authUrl) {
         (window as any).electronAPI?.openExternal?.(authUrl) || window.open(authUrl, '_blank');
       }
-
-      // Poll for completion
-      pollRef.current = setInterval(async () => {
-        try {
-          const res = await gateway.completeOAuth('claude', loginId);
-          if (res.authenticated) {
-            if (pollRef.current) clearInterval(pollRef.current);
-            if (timeoutRef.current) clearTimeout(timeoutRef.current);
-            pollRef.current = null;
-            setLoading(false);
-            onSuccess();
-          }
-        } catch {
-          // still waiting
-        }
-      }, 2000);
-
-      // Timeout after 120s
-      timeoutRef.current = setTimeout(() => {
-        if (pollRef.current) clearInterval(pollRef.current);
-        pollRef.current = null;
-        setLoading(false);
-        setMode('choose');
-        setError('Login timed out. Please try again.');
-      }, 120_000);
     } catch (err) {
       setLoading(false);
-      setError(err instanceof Error ? err.message : 'Setup token failed');
+      setError(err instanceof Error ? err.message : 'Failed to start OAuth');
     }
-  }, [gateway, onSuccess]);
+  }, [gateway]);
+
+  const submitAuthCode = useCallback(async () => {
+    const code = authCode.trim();
+    if (!code) return;
+    setLoading(true);
+    setError(null);
+    try {
+      // The auth code is the "code#state" string from the callback page
+      // We pass it as loginId to completeOAuth which feeds it to completeOAuthLogin
+      const res = await gateway.completeOAuth('claude', code);
+      if (res.authenticated) {
+        onSuccess();
+      } else {
+        setError(res.error || 'Authentication failed');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to authenticate');
+    } finally {
+      setLoading(false);
+    }
+  }, [authCode, gateway, onSuccess]);
 
   const submitApiKey = useCallback(async () => {
     if (!apiKey.startsWith('sk-ant-') || apiKey.length < 20) return;
@@ -119,17 +98,13 @@ function ClaudeSetup({ gateway, onSuccess, onBack, compact, preferredMethod }: C
     }
   }, [apiKey, gateway, onSuccess]);
 
-  const cancelOAuth = useCallback(() => {
-    if (pollRef.current) clearInterval(pollRef.current);
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    pollRef.current = null;
-    setLoading(false);
-    setMode('choose');
-  }, []);
-
-  const openInstallLink = useCallback(() => {
-    const url = 'https://docs.anthropic.com/en/docs/claude-code/getting-started';
-    (window as any).electronAPI?.openExternal?.(url) || window.open(url, '_blank');
+  const pasteFromClipboard = useCallback(async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) setAuthCode(text.trim());
+    } catch {
+      // clipboard access denied
+    }
   }, []);
 
   return (
@@ -146,53 +121,63 @@ function ClaudeSetup({ gateway, onSuccess, onBack, compact, preferredMethod }: C
           <div className="text-sm font-semibold">Claude Code (Anthropic)</div>
           <div className="text-[11px] text-muted-foreground">
             {mode === 'apikey' ? 'enter your Anthropic API key' :
-             mode === 'not-installed' ? 'Claude Code CLI required' :
+             mode === 'oauth-paste' ? 'paste the auth code from your browser' :
              'use your Claude subscription or API key'}
           </div>
         </div>
       )}
 
-      {mode === 'not-installed' ? (
-        <div className="flex flex-col items-center gap-3 py-2">
-          <AlertCircle className="w-6 h-6 text-muted-foreground" />
-          <div className="text-[11px] text-muted-foreground text-center">
-            Claude Code CLI is not installed.
+      {mode === 'oauth-paste' ? (
+        <div className="space-y-3">
+          <div className="text-[10px] text-muted-foreground text-center">
+            sign in with your Claude account in the browser, then paste the code shown on the callback page
           </div>
-          <Button
-            size="sm"
-            className="h-7 text-[11px]"
-            onClick={openInstallLink}
-          >
-            <ExternalLink className="w-3 h-3 mr-1.5" />
-            install Claude Code
-          </Button>
-          <div className="flex items-center gap-2 text-[10px] text-muted-foreground w-full">
-            <div className="flex-1 h-px bg-border" />
-            or use an API key
-            <div className="flex-1 h-px bg-border" />
+
+          <div className="flex gap-1.5">
+            <Input
+              type="text"
+              placeholder="paste auth code here..."
+              value={authCode}
+              onChange={e => { setAuthCode(e.target.value); setError(null); }}
+              onKeyDown={e => e.key === 'Enter' && submitAuthCode()}
+              className="h-8 text-[11px] font-mono flex-1"
+              disabled={loading}
+              autoFocus
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 px-2"
+              onClick={pasteFromClipboard}
+              disabled={loading}
+              title="paste from clipboard"
+            >
+              <ClipboardPaste className="w-3.5 h-3.5" />
+            </Button>
           </div>
+
           <Button
-            variant="outline"
             size="sm"
             className="h-7 text-[11px] w-full"
-            onClick={() => { setMode('apikey'); setError(null); }}
+            onClick={submitAuthCode}
+            disabled={!authCode.trim() || loading}
           >
-            enter API key instead
+            {loading ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : null}
+            {loading ? 'connecting...' : 'connect'}
           </Button>
-        </div>
-      ) : mode === 'oauth-waiting' ? (
-        <div className="flex flex-col items-center gap-3 py-4">
-          <Loader2 className="w-6 h-6 animate-spin text-primary" />
-          <div className="text-[11px] text-muted-foreground">waiting for login in browser...</div>
-          <div className="text-[10px] text-muted-foreground">complete the sign-in in your browser</div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 text-[10px]"
-            onClick={cancelOAuth}
+
+          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+            <div className="flex-1 h-px bg-border" />
+            or
+            <div className="flex-1 h-px bg-border" />
+          </div>
+
+          <button
+            onClick={() => { setMode('choose'); setError(null); setAuthCode(''); }}
+            className="text-[10px] text-muted-foreground hover:text-foreground transition-colors w-full text-center"
           >
-            cancel
-          </Button>
+            go back
+          </button>
         </div>
       ) : mode === 'apikey' ? (
         <>
@@ -244,12 +229,12 @@ function ClaudeSetup({ gateway, onSuccess, onBack, compact, preferredMethod }: C
           )}
         </>
       ) : (
-        // Choose mode - setup-token button + API key fallback
+        // Choose mode - OAuth button + API key fallback
         <>
           <Button
             size="sm"
             className="h-8 text-[11px] w-full"
-            onClick={startSetupToken}
+            onClick={startOAuthFlow}
             disabled={loading}
           >
             {loading ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : null}
@@ -292,7 +277,7 @@ function ClaudeSetup({ gateway, onSuccess, onBack, compact, preferredMethod }: C
         </div>
       )}
 
-      {!compact && mode !== 'apikey' && mode !== 'not-installed' && (
+      {!compact && mode !== 'apikey' && (
         <div className="text-[10px] text-muted-foreground text-center">
           stored locally, never leaves your machine
         </div>

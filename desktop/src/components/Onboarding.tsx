@@ -3,8 +3,7 @@ import type { useGateway } from '../hooks/useGateway';
 import { ProviderSetup } from './ProviderSetup';
 import { AuroraBackground } from './aceternity/aurora-background';
 import { Card, CardContent } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Brain, Sparkles, Key, Check, Loader2, X } from 'lucide-react';
+import { Brain, Sparkles, Key, Check, Loader2 } from 'lucide-react';
 
 type Props = {
   gateway: ReturnType<typeof useGateway>;
@@ -16,96 +15,80 @@ type ProviderChoice = {
   method: 'oauth' | 'apikey';
 };
 
-type Step = 'auto-detect' | 'choose' | 'auth' | 'detecting' | 'success';
+type DetectResult = {
+  claude: { installed: boolean; hasOAuth: boolean; hasApiKey: boolean };
+  codex: { installed: boolean; hasAuth: boolean };
+};
+
+type Step = 'detecting' | 'ready' | 'choose' | 'auth' | 'success';
 
 export function OnboardingOverlay({ gateway, onComplete }: Props) {
-  const [step, setStep] = useState<Step>('auto-detect');
+  const [step, setStep] = useState<Step>('detecting');
   const [choice, setChoice] = useState<ProviderChoice | null>(null);
-  const [authInfo, setAuthInfo] = useState<{ method?: string; identity?: string; model?: string } | null>(null);
-  const [detectMessage, setDetectMessage] = useState('checking for existing login...');
-  const autoDetectRan = useRef(false);
+  const [authInfo, setAuthInfo] = useState<{ method?: string; identity?: string } | null>(null);
+  const [detectResult, setDetectResult] = useState<DetectResult | null>(null);
+  const detectRan = useRef(false);
 
-  // Auto-detect existing auth on mount
+  // Fast detect on mount — calls provider.detect RPC (< 500ms)
   useEffect(() => {
-    if (autoDetectRan.current) return;
-    autoDetectRan.current = true;
+    if (detectRan.current) return;
+    detectRan.current = true;
 
     (async () => {
       try {
-        const status = await gateway.getProviderStatus();
-        if (status?.auth?.authenticated) {
+        const result = await gateway.detectProviders();
+        setDetectResult(result);
+
+        // Auto-detect: if Claude has OAuth tokens or API key, auto-set and go to ready
+        if (result.claude.hasOAuth || result.claude.hasApiKey) {
+          try { await gateway.setProvider('claude'); } catch { /* continue */ }
           setAuthInfo({
-            method: status.auth.method,
-            identity: status.auth.identity,
-            model: status.auth.model,
+            method: result.claude.hasOAuth ? 'oauth' : 'api_key',
+            identity: result.claude.hasOAuth ? 'Claude subscription' : 'API key',
           });
-          setStep('success');
-          setTimeout(onComplete, 1200);
+          setStep('ready');
           return;
         }
-      } catch { /* no provider configured or probe failed */ }
-      // Not auto-detected, show choices
-      setStep('choose');
+
+        // If Codex has auth, auto-set codex
+        if (result.codex.hasAuth) {
+          try { await gateway.setProvider('codex'); } catch { /* continue */ }
+          setAuthInfo({ method: 'api_key', identity: 'OpenAI' });
+          setStep('ready');
+          return;
+        }
+
+        // No auth found — show choose screen
+        setStep('choose');
+      } catch {
+        // Gateway not connected yet or RPC failed — fall back to choose
+        setStep('choose');
+      }
     })();
-  }, [gateway, onComplete]);
+  }, [gateway]);
+
+  // Auto-complete from ready step after 1.2s
+  useEffect(() => {
+    if (step !== 'ready') return;
+    const timer = setTimeout(onComplete, 1200);
+    return () => clearTimeout(timer);
+  }, [step, onComplete]);
 
   const handleChoice = useCallback(async (c: ProviderChoice) => {
     setChoice(c);
     try {
       await gateway.setProvider(c.provider);
-    } catch {
-      // continue anyway
-    }
-
-    // For Claude Code OAuth, try detecting existing session first
-    if (c.provider === 'claude' && c.method === 'oauth') {
-      setStep('detecting');
-      setDetectMessage('detecting Claude session...');
-
-      // Set a 15s timeout for the detect step
-      const timeout = setTimeout(() => {
-        setDetectMessage('no existing session found');
-        setTimeout(() => {
-          setChoice({ provider: 'claude', method: 'oauth' });
-          setStep('auth');
-        }, 800);
-      }, 15000);
-
-      try {
-        const status = await gateway.getProviderStatus();
-        clearTimeout(timeout);
-        if (status?.auth?.authenticated) {
-          setAuthInfo({
-            method: status.auth.method,
-            identity: status.auth.identity,
-            model: status.auth.model,
-          });
-          setStep('success');
-          setTimeout(onComplete, 1200);
-          return;
-        }
-      } catch {
-        clearTimeout(timeout);
-      }
-
-      // Not authenticated - go to auth step with explanation
-      setChoice({ provider: 'claude', method: 'oauth' });
-      setStep('auth');
-      return;
-    }
-
+    } catch { /* continue */ }
     setStep('auth');
-  }, [gateway, onComplete]);
+  }, [gateway]);
 
   const handleAuthSuccess = useCallback(async () => {
-    // Fetch the final status to show rich info on success
     try {
       const status = await gateway.getProviderStatus();
       if (status?.auth) {
         setAuthInfo({
           method: status.auth.method,
           identity: status.auth.identity,
-          model: status.auth.model,
         });
       }
     } catch { /* show generic success */ }
@@ -118,23 +101,19 @@ export function OnboardingOverlay({ gateway, onComplete }: Props) {
   }, [onComplete]);
 
   return (
-    <div className="fixed inset-0 z-50">
+    <div className="fixed inset-0 z-50 bg-background">
       <AuroraBackground className="w-full h-full">
         <div className="flex items-center justify-center w-full h-full">
           <div className="w-full max-w-sm px-6">
-            {step === 'auto-detect' && <AutoDetectStep />}
+            {step === 'detecting' && <DetectingStep />}
+
+            {step === 'ready' && <ReadyStep authInfo={authInfo} />}
 
             {step === 'choose' && (
-              <ChooseStep onChoice={handleChoice} onSkip={handleSkip} />
-            )}
-
-            {step === 'detecting' && (
-              <DetectingStep
-                message={detectMessage}
-                onCancel={() => {
-                  setChoice({ provider: 'claude', method: 'oauth' });
-                  setStep('auth');
-                }}
+              <ChooseStep
+                onChoice={handleChoice}
+                onSkip={handleSkip}
+                detect={detectResult}
               />
             )}
 
@@ -156,7 +135,7 @@ export function OnboardingOverlay({ gateway, onComplete }: Props) {
   );
 }
 
-function AutoDetectStep() {
+function DetectingStep() {
   return (
     <div className="flex flex-col items-center gap-3 py-8">
       <div className="relative w-20 h-20 mx-auto">
@@ -169,7 +148,48 @@ function AutoDetectStep() {
   );
 }
 
-function ChooseStep({ onChoice, onSkip }: { onChoice: (c: ProviderChoice) => void; onSkip: () => void }) {
+function ReadyStep({ authInfo }: { authInfo: { method?: string; identity?: string } | null }) {
+  const label = authInfo?.identity || (authInfo?.method === 'oauth' ? 'Claude subscription' : 'API key');
+  return (
+    <div className="flex flex-col items-center gap-3 py-8">
+      <div className="w-12 h-12 rounded-full bg-success/20 flex items-center justify-center">
+        <Check className="w-6 h-6 text-success" />
+      </div>
+      <div className="text-sm font-semibold text-foreground">connected via {label}</div>
+    </div>
+  );
+}
+
+function DetectionBadge({ type }: { type: 'logged-in' | 'installed' }) {
+  if (type === 'logged-in') {
+    return (
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-medium bg-success/15 text-success">
+        <span className="w-1.5 h-1.5 rounded-full bg-success" />
+        logged in
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-medium bg-warning/15 text-warning">
+      <span className="w-1.5 h-1.5 rounded-full bg-warning" />
+      installed
+    </span>
+  );
+}
+
+function ChooseStep({
+  onChoice,
+  onSkip,
+  detect,
+}: {
+  onChoice: (c: ProviderChoice) => void;
+  onSkip: () => void;
+  detect: DetectResult | null;
+}) {
+  const claudeLoggedIn = detect?.claude.hasOAuth || detect?.claude.hasApiKey;
+  const claudeInstalled = detect?.claude.installed;
+  const codexLoggedIn = detect?.codex.hasAuth;
+
   return (
     <div className="space-y-5">
       {/* Logo + greeting */}
@@ -186,7 +206,7 @@ function ChooseStep({ onChoice, onSkip }: { onChoice: (c: ProviderChoice) => voi
 
       {/* Provider + method cards */}
       <div className="space-y-2">
-        {/* Claude Code - detects existing OAuth or falls back to setup-token */}
+        {/* Claude Code */}
         <button
           onClick={() => onChoice({ provider: 'claude', method: 'oauth' })}
           className="flex items-start gap-3 w-full px-4 py-3 rounded-xl border-2 border-border bg-card/80 backdrop-blur hover:border-primary/50 hover:bg-card transition-all text-left"
@@ -194,8 +214,12 @@ function ChooseStep({ onChoice, onSkip }: { onChoice: (c: ProviderChoice) => voi
           <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
             <Brain className="w-4 h-4 text-primary" />
           </div>
-          <div>
-            <div className="text-xs font-semibold text-foreground">Claude Code</div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-foreground">Claude Code</span>
+              {claudeLoggedIn && <DetectionBadge type="logged-in" />}
+              {!claudeLoggedIn && claudeInstalled && <DetectionBadge type="installed" />}
+            </div>
             <div className="text-[10px] text-muted-foreground mt-0.5">Use your Claude subscription or Anthropic API key</div>
           </div>
         </button>
@@ -208,8 +232,11 @@ function ChooseStep({ onChoice, onSkip }: { onChoice: (c: ProviderChoice) => voi
           <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
             <Sparkles className="w-4 h-4 text-primary" />
           </div>
-          <div>
-            <div className="text-xs font-semibold text-foreground">Sign in with ChatGPT</div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-foreground">Sign in with ChatGPT</span>
+              {codexLoggedIn && <DetectionBadge type="logged-in" />}
+            </div>
             <div className="text-[10px] text-muted-foreground mt-0.5">Use your OpenAI account (ChatGPT Plus required)</div>
           </div>
         </button>
@@ -239,25 +266,6 @@ function ChooseStep({ onChoice, onSkip }: { onChoice: (c: ProviderChoice) => voi
           skip for now
         </button>
       </div>
-    </div>
-  );
-}
-
-function DetectingStep({ message, onCancel }: { message: string; onCancel: () => void }) {
-  return (
-    <div className="flex flex-col items-center gap-3 py-8">
-      <Loader2 className="w-8 h-8 text-primary animate-spin" />
-      <div className="text-sm font-medium text-foreground">detecting Claude session...</div>
-      <div className="text-[10px] text-muted-foreground">{message}</div>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-6 text-[10px] mt-2"
-        onClick={onCancel}
-      >
-        <X className="w-3 h-3 mr-1" />
-        cancel
-      </Button>
     </div>
   );
 }
@@ -299,19 +307,11 @@ function AuthStep({
   );
 }
 
-function SuccessStep({ authInfo }: { authInfo: { method?: string; identity?: string; model?: string } | null }) {
+function SuccessStep({ authInfo }: { authInfo: { method?: string; identity?: string } | null }) {
   const methodLabel = authInfo?.method === 'oauth'
     ? 'Claude subscription'
     : authInfo?.method === 'api_key'
     ? 'API key'
-    : null;
-
-  // Extract short model name from full model string
-  const modelShort = authInfo?.model
-    ? authInfo.model.includes('opus') ? 'opus'
-    : authInfo.model.includes('sonnet') ? 'sonnet'
-    : authInfo.model.includes('haiku') ? 'haiku'
-    : authInfo.model.split('-').slice(0, 2).join('-')
     : null;
 
   return (
@@ -320,10 +320,9 @@ function SuccessStep({ authInfo }: { authInfo: { method?: string; identity?: str
         <Check className="w-6 h-6 text-success" />
       </div>
       <div className="text-sm font-semibold text-foreground">you're all set!</div>
-      {(methodLabel || modelShort) && (
-        <div className="text-[10px] text-muted-foreground text-center space-y-0.5">
-          {methodLabel && <div>connected via {methodLabel}</div>}
-          {modelShort && <div>model: {modelShort}</div>}
+      {methodLabel && (
+        <div className="text-[10px] text-muted-foreground text-center">
+          <div>connected via {methodLabel}</div>
         </div>
       )}
     </div>

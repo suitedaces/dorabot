@@ -397,6 +397,34 @@ export function useGateway(url = 'ws://localhost:18789') {
         break;
       }
 
+      case 'agent.message': {
+        // Non-streaming assistant messages (Codex provider sends full messages, not stream deltas)
+        const d = data as { source: string; sessionKey?: string; message: Record<string, unknown>; timestamp: number };
+        if (d.sessionKey && d.sessionKey !== activeSessionKeyRef.current) break;
+        const assistantMsg = d.message?.message as Record<string, unknown>;
+        const content = assistantMsg?.content as unknown[];
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            const b = block as Record<string, unknown>;
+            if (b.type === 'text' && typeof b.text === 'string') {
+              setChatItems(prev => [...prev, { type: 'text', content: b.text as string, streaming: false, timestamp: d.timestamp || Date.now() }]);
+            } else if (b.type === 'tool_use') {
+              setChatItems(prev => [...prev, {
+                type: 'tool_use',
+                id: (b.id as string) || '',
+                name: cleanToolName((b.name as string) || 'unknown'),
+                input: typeof b.input === 'string' ? b.input : JSON.stringify(b.input || {}),
+                streaming: false,
+                timestamp: d.timestamp || Date.now(),
+              }]);
+            } else if (b.type === 'thinking' && typeof b.thinking === 'string') {
+              setChatItems(prev => [...prev, { type: 'thinking', content: b.thinking as string, streaming: false, timestamp: d.timestamp || Date.now() }]);
+            }
+          }
+        }
+        break;
+      }
+
       case 'agent.tool_result': {
         const d = data as { sessionKey?: string; tool_use_id: string; content: string; imageData?: string; is_error?: boolean };
         if (d.sessionKey && d.sessionKey !== activeSessionKeyRef.current) break;
@@ -859,6 +887,13 @@ export function useGateway(url = 'ws://localhost:18789') {
     return await rpc('provider.check', { provider }) as { ready: boolean; reason?: string };
   }, [rpc]);
 
+  const detectProviders = useCallback(async () => {
+    return await rpc('provider.detect') as {
+      claude: { installed: boolean; hasOAuth: boolean; hasApiKey: boolean };
+      codex: { installed: boolean; hasAuth: boolean };
+    };
+  }, [rpc]);
+
   const progress = useMemo<ProgressItem[]>(() => {
     for (let i = chatItems.length - 1; i >= 0; i--) {
       const item = chatItems[i];
@@ -920,5 +955,6 @@ export function useGateway(url = 'ws://localhost:18789') {
     startOAuth,
     completeOAuth,
     checkProvider,
+    detectProviders,
   };
 }
