@@ -1,8 +1,8 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { Config, SandboxSettings } from './config.js';
+import { getProvider } from './providers/index.js';
 
 function resolveSandbox(sandbox: SandboxSettings, channel?: string): SandboxSettings {
   const mode = sandbox.mode || 'off';
@@ -145,29 +145,25 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     ? mergeHooks(defaultHooks, customHooks)
     : defaultHooks;
 
-  // run query
+  // run query via provider
   const effectiveSandbox = resolveSandbox(config.sandbox, channel);
-  console.log(`[agent] runAgent starting: model=${config.model} permissionMode=${config.permissionMode} sessionId=${sessionId} resumeId=${resumeId || 'none'} sandbox=${effectiveSandbox.enabled ? 'on' : 'off'}`);
-  const q = query({
+  const provider = await getProvider(config);
+  console.log(`[agent] runAgent starting: provider=${provider.name} model=${config.model} permissionMode=${config.permissionMode} sessionId=${sessionId} resumeId=${resumeId || 'none'} sandbox=${effectiveSandbox.enabled ? 'on' : 'off'}`);
+  const q = provider.query({
     prompt: enhancedPrompt,
-    options: {
-      model: config.model,
-      systemPrompt,
-      tools: { type: 'preset', preset: 'claude_code' } as any,
-      agents: agents as any,
-      hooks: hooks as any,
-      mcpServers: { 'dorabot-tools': mcpServer } as any,
-      resume: resumeId,
-      permissionMode: config.permissionMode as any,
-      allowDangerouslySkipPermissions: config.permissionMode === 'bypassPermissions',
-      sandbox: effectiveSandbox as any,
-      cwd: config.cwd,
-      env: cleanEnvForSdk(),
-      maxTurns: 50,
-      includePartialMessages: true,
-      canUseTool: opts.canUseTool as any,
-      stderr: (data: string) => console.error(`[agent:stderr] ${data.trimEnd()}`),
-    },
+    systemPrompt,
+    model: config.model,
+    config,
+    channel,
+    resumeId,
+    cwd: config.cwd,
+    env: cleanEnvForSdk(),
+    maxTurns: 50,
+    canUseTool: opts.canUseTool,
+    agents: agents as any,
+    hooks: hooks as any,
+    mcpServer: { 'dorabot-tools': mcpServer },
+    sandbox: effectiveSandbox,
   });
 
   // collect messages
@@ -323,28 +319,24 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
     : defaultHooks;
 
   const effectiveSandbox = resolveSandbox(config.sandbox, channel);
-  console.log(`[agent] streamAgent starting: model=${config.model} permissionMode=${config.permissionMode} sessionId=${sessionId} resumeId=${resumeId || 'none'} sandbox=${effectiveSandbox.enabled ? 'on' : 'off'} channel=${channel || 'desktop'}`);
-  const q = query({
+  const provider = await getProvider(config);
+  console.log(`[agent] streamAgent starting: provider=${provider.name} model=${config.model} permissionMode=${config.permissionMode} sessionId=${sessionId} resumeId=${resumeId || 'none'} sandbox=${effectiveSandbox.enabled ? 'on' : 'off'} channel=${channel || 'desktop'}`);
+  const q = provider.query({
     prompt: enhancedPrompt,
-    options: {
-      model: config.model,
-      systemPrompt,
-      tools: { type: 'preset', preset: 'claude_code' },
-      agents,
-      hooks: hooks as any,
-      mcpServers: { 'dorabot-tools': mcpServer },
-      resume: resumeId,
-      permissionMode: config.permissionMode,
-      allowDangerouslySkipPermissions: config.permissionMode === 'bypassPermissions',
-      sandbox: effectiveSandbox,
-      cwd: config.cwd,
-      env: cleanEnvForSdk(),
-      maxTurns: 50,
-      includePartialMessages: true,
-      canUseTool: opts.canUseTool as any,
-      abortController: opts.abortController,
-      stderr: (data: string) => console.error(`[agent:stderr] ${data.trimEnd()}`),
-    },
+    systemPrompt,
+    model: config.model,
+    config,
+    channel,
+    resumeId,
+    cwd: config.cwd,
+    env: cleanEnvForSdk(),
+    maxTurns: 50,
+    canUseTool: opts.canUseTool,
+    abortController: opts.abortController,
+    agents: agents as any,
+    hooks: hooks as any,
+    mcpServer: { 'dorabot-tools': mcpServer },
+    sandbox: effectiveSandbox,
   });
 
   const messages: SessionMessage[] = [];

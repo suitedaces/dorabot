@@ -109,7 +109,21 @@ export type SecurityConfig = {
   tools?: ToolPolicyConfig;
 };
 
+export type ProviderName = 'claude' | 'codex';
+
+export type CodexProviderConfig = {
+  authMethod?: 'oauth' | 'api_key';
+  model?: string;
+  approvalPolicy?: 'suggest' | 'auto-edit' | 'full-auto';
+};
+
+export type ProviderConfig = {
+  name: ProviderName;
+  codex?: CodexProviderConfig;
+};
+
 export type Config = {
+  provider: ProviderConfig;
   model: string;
   systemPromptMode: 'full' | 'minimal' | 'none';
   permissionMode: PermissionMode;
@@ -131,6 +145,7 @@ export type Config = {
 };
 
 const DEFAULT_CONFIG: Config = {
+  provider: { name: 'claude' },
   model: 'claude-sonnet-4-5-20250929',
   systemPromptMode: 'full',
   permissionMode: 'default',
@@ -178,6 +193,10 @@ function mergeConfig(base: Config, override: Partial<Config>): Config {
   return {
     ...base,
     ...override,
+    provider: {
+      ...base.provider,
+      ...override.provider,
+    },
     skills: {
       ...base.skills,
       ...override.skills,
@@ -214,6 +233,7 @@ export const ALWAYS_DENIED = [
   '~/.aws',
   '~/.dorabot/whatsapp/auth',
   '~/.dorabot/gateway-token',
+  '~/.dorabot/codex-auth.json',
   '~/.config/nanoclaw',
 ];
 

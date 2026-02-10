@@ -21,6 +21,8 @@ import { loginWhatsApp, logoutWhatsApp, isWhatsAppLinked } from '../channels/wha
 import { getDefaultAuthDir } from '../channels/whatsapp/session.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { setCronRunner } from '../tools/index.js';
+import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
+import type { ProviderName } from '../config.js';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { classifyToolCall, cleanToolName, isToolAllowed, type Tier } from './tool-policy.js';
 
@@ -1287,6 +1289,94 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
         }
 
+        // ── provider RPCs ─────────────────────────────────────────
+        case 'provider.get': {
+          try {
+            const provider = await getProvider(config);
+            const authStatus = await provider.getAuthStatus();
+            return { id, result: { name: config.provider.name, auth: authStatus } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'provider.set': {
+          const name = params?.name as ProviderName;
+          if (!name || !['claude', 'codex'].includes(name)) {
+            return { id, error: 'name must be "claude" or "codex"' };
+          }
+          config.provider.name = name;
+          saveConfig(config);
+          broadcast({ event: 'config.update', data: { key: 'provider', value: config.provider } });
+          return { id, result: { provider: name } };
+        }
+
+        case 'provider.auth.status': {
+          try {
+            const providerName = (params?.provider as string) || config.provider.name;
+            const p = await getProviderByName(providerName);
+            return { id, result: await p.getAuthStatus() };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'provider.auth.apiKey': {
+          try {
+            const providerName = (params?.provider as string) || config.provider.name;
+            const apiKey = params?.apiKey as string;
+            if (!apiKey) return { id, error: 'apiKey required' };
+            const p = await getProviderByName(providerName);
+            const status = await p.loginWithApiKey(apiKey);
+            broadcast({ event: 'provider.auth_complete', data: { provider: providerName, status } });
+            return { id, result: status };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'provider.auth.oauth': {
+          try {
+            const providerName = (params?.provider as string) || config.provider.name;
+            const p = await getProviderByName(providerName);
+            if (!p.loginWithOAuth) {
+              return { id, error: `${providerName} doesn't support OAuth` };
+            }
+            const { authUrl, loginId } = await p.loginWithOAuth();
+            broadcast({ event: 'provider.oauth_url', data: { provider: providerName, authUrl, loginId } });
+            return { id, result: { authUrl, loginId } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'provider.auth.oauth.complete': {
+          try {
+            const providerName = (params?.provider as string) || config.provider.name;
+            const loginId = params?.loginId as string;
+            const p = await getProviderByName(providerName);
+            if (!p.completeOAuthLogin) {
+              return { id, error: `${providerName} doesn't support OAuth` };
+            }
+            const status = await p.completeOAuthLogin(loginId);
+            broadcast({ event: 'provider.auth_complete', data: { provider: providerName, status } });
+            return { id, result: status };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'provider.check': {
+          try {
+            const providerName = (params?.provider as string) || config.provider.name;
+            const p = await getProviderByName(providerName);
+            return { id, result: await p.checkReady() };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        // ── config RPCs ──────────────────────────────────────────
         case 'config.get': {
           const safe = structuredClone(config);
           if (safe.channels?.telegram) {
@@ -1329,6 +1419,35 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             if (!valid.includes(value)) return { id, error: `approvalMode must be one of: ${valid.join(', ')}` };
             if (!config.security) config.security = {};
             config.security.approvalMode = value as any;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          // provider config keys
+          if (key === 'provider.name' && typeof value === 'string') {
+            if (!['claude', 'codex'].includes(value)) {
+              return { id, error: 'provider.name must be "claude" or "codex"' };
+            }
+            config.provider.name = value as ProviderName;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          if (key === 'provider.codex.model' && typeof value === 'string') {
+            if (!config.provider.codex) config.provider.codex = {};
+            config.provider.codex.model = value;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          if (key === 'provider.codex.approvalPolicy' && typeof value === 'string') {
+            const valid = ['suggest', 'auto-edit', 'full-auto'];
+            if (!valid.includes(value)) return { id, error: `approvalPolicy must be one of: ${valid.join(', ')}` };
+            if (!config.provider.codex) config.provider.codex = {};
+            config.provider.codex.approvalPolicy = value as any;
             saveConfig(config);
             broadcast({ event: 'config.update', data: { key, value } });
             return { id, result: { key, value } };
@@ -1817,6 +1936,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       heartbeatRunner?.stop();
       cronRunner?.stop();
       await channelManager.stopAll();
+      await disposeAllProviders();
 
       // close all file watchers
       for (const [path, { watcher }] of fileWatchers) {
