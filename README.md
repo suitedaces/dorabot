@@ -3,9 +3,9 @@
 
   # dorabot
 
-  **Turn Claude Code and Codex into your own OpenClaw.**
+  **Turn your Claude Code and Codex into OpenClaw.**
 
-  You already pay for these models. dorabot connects them to WhatsApp, Telegram, your browser, email, and your Mac — so they can work outside the IDE.
+  You already pay for these tools. dorabot wraps them in a multi-channel agent harness — WhatsApp, Telegram, browser automation, email, cron, persistent memory, and Mac control — so they can do real work outside the IDE.
 
 </div>
 
