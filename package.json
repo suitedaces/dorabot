@@ -9,8 +9,11 @@
   },
   "scripts": {
     "build": "tsc",
-    "dev": "tsx src/index.ts",
-    "start": "node dist/index.js",
+    "dev": "(trap 'kill 0' SIGINT; tsx watch src/index.ts -g & npm -C desktop run dev)",
+    "dev:gateway": "tsx watch src/index.ts -g",
+    "dev:cli": "tsx src/index.ts -i",
+    "dev:desktop": "npm -C desktop run dev",
+    "start": "node dist/index.js -g",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -18,6 +21,7 @@
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "@openai/codex-sdk": "^0.98.0",
     "@whiskeysockets/baileys": "^6.7.0",
     "dotenv": "^17.2.4",
     "grammy": "^1.21.0",
