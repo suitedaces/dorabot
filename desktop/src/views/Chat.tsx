@@ -65,35 +65,107 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   schedule_cron: Clock, list_reminders: Clock, cancel_reminder: Clock,
 };
 
-const CLAUDE_MODELS = [
+const ANTHROPIC_MODELS = [
   { value: 'claude-opus-4-6', label: 'opus' },
   { value: 'claude-sonnet-4-5-20250929', label: 'sonnet' },
   { value: 'claude-haiku-4-5-20251001', label: 'haiku' },
 ];
 
+const OPENAI_MODELS = [
+  { value: 'gpt-5.3-codex', label: 'gpt-5.3 codex' },
+  { value: 'gpt-5.2-codex', label: 'gpt-5.2 codex' },
+  { value: 'gpt-5.1-codex-mini', label: 'gpt-5.1 mini' },
+  { value: 'gpt-5.1-codex-max', label: 'gpt-5.1 max' },
+  { value: 'gpt-5.2', label: 'gpt-5.2' },
+  { value: 'gpt-5.1', label: 'gpt-5.1' },
+  { value: 'gpt-5', label: 'gpt-5' },
+];
+
+// Codex reasoning effort levels (SDK: minimal | low | medium | high | xhigh)
+// Our config uses 'max' → maps to 'xhigh' in the provider
+const EFFORT_LEVELS = [
+  { value: 'minimal', label: 'minimal' },
+  { value: 'low', label: 'low' },
+  { value: 'medium', label: 'medium' },
+  { value: 'high', label: 'high' },
+  { value: 'max', label: 'xhigh' },
+];
+
 function ModelSelector({ gateway, disabled }: { gateway: ReturnType<typeof useGateway>; disabled: boolean }) {
   const providerName = (gateway.configData as any)?.provider?.name || 'claude';
-  const codexModel = (gateway.configData as any)?.provider?.codex?.model || 'default';
+  const claudeModel = gateway.model || 'claude-sonnet-4-5-20250929';
+  const codexModel = (gateway.configData as any)?.provider?.codex?.model || 'gpt-5.3-codex';
+  const currentValue = providerName === 'codex' ? `codex:${codexModel}` : `claude:${claudeModel}`;
 
-  if (providerName === 'codex') {
-    return (
-      <div className="h-7 px-2 flex items-center rounded-lg text-[11px] text-muted-foreground bg-secondary/50">
-        codex: {codexModel}
-      </div>
-    );
-  }
+  const handleChange = async (encoded: string) => {
+    const [provider, model] = encoded.split(':') as [string, string];
+    if (provider === 'claude') {
+      if (providerName !== 'claude') await gateway.setProvider('claude');
+      gateway.changeModel(model);
+    } else {
+      if (providerName !== 'codex') await gateway.setProvider('codex');
+      await gateway.setConfig('provider.codex.model', model);
+    }
+  };
+
+  const currentLabel = providerName === 'codex'
+    ? OPENAI_MODELS.find(m => m.value === codexModel)?.label || codexModel
+    : ANTHROPIC_MODELS.find(m => m.value === claudeModel)?.label || claudeModel;
+
+  const reasoningEffort = (gateway.configData as any)?.reasoningEffort || null;
+
+  const handleEffortChange = async (value: string) => {
+    const v = value === 'off' ? null : value;
+    await gateway.setConfig('reasoningEffort', v);
+  };
 
   return (
-    <Select value={gateway.model} onValueChange={gateway.changeModel} disabled={disabled}>
-      <SelectTrigger size="sm" className="h-7 w-20 text-[11px] rounded-lg shadow-none">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent position="popper" align="start">
-        {CLAUDE_MODELS.map(m => (
-          <SelectItem key={m.value} value={m.value} className="text-xs">{m.label}</SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <div className="flex items-center gap-1">
+      <Select value={currentValue} onValueChange={handleChange} disabled={disabled}>
+        <SelectTrigger size="sm" className="h-7 gap-1.5 text-[11px] rounded-lg shadow-none w-auto">
+          <img
+            src={providerName === 'codex' ? '/openai-icon.svg' : '/claude-icon.svg'}
+            alt=""
+            className="w-3 h-3"
+          />
+          <span>{currentLabel}</span>
+        </SelectTrigger>
+        <SelectContent position="popper" align="start" className="min-w-[180px]">
+          <div className="px-2 py-1 text-[9px] font-semibold text-muted-foreground uppercase tracking-wider">Anthropic</div>
+          {ANTHROPIC_MODELS.map(m => (
+            <SelectItem key={m.value} value={`claude:${m.value}`} className="text-xs">
+              <span className="flex items-center gap-1.5">
+                <img src="/claude-icon.svg" alt="" className="w-3 h-3" />
+                {m.label}
+              </span>
+            </SelectItem>
+          ))}
+          <div className="px-2 py-1 mt-1 text-[9px] font-semibold text-muted-foreground uppercase tracking-wider border-t border-border">OpenAI</div>
+          {OPENAI_MODELS.map(m => (
+            <SelectItem key={m.value} value={`codex:${m.value}`} className="text-xs">
+              <span className="flex items-center gap-1.5">
+                <img src="/openai-icon.svg" alt="" className="w-3 h-3" />
+                {m.label}
+              </span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {providerName === 'codex' && (
+        <Select value={reasoningEffort || 'off'} onValueChange={handleEffortChange} disabled={disabled}>
+          <SelectTrigger size="sm" className="h-7 gap-1 text-[11px] rounded-lg shadow-none w-auto text-muted-foreground">
+            <Sparkles className="w-3 h-3" />
+            <span>{reasoningEffort || 'auto'}</span>
+          </SelectTrigger>
+          <SelectContent position="popper" align="start" className="min-w-[120px]">
+            <SelectItem value="off" className="text-xs">auto</SelectItem>
+            {EFFORT_LEVELS.map(e => (
+              <SelectItem key={e.value} value={e.value} className="text-xs">{e.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+    </div>
   );
 }
 

@@ -91,7 +91,7 @@ export function ProviderCard({ gateway, disabled }: Props) {
             alt={providerName}
             className="w-4 h-4"
           />
-          <span className="text-xs font-semibold">AI Provider</span>
+          <span className="text-xs font-semibold">Model</span>
           {authenticated ? (
             <Badge variant="outline" className="text-[9px] h-4 ml-auto text-success border-success/30">
               <Check className="w-2.5 h-2.5 mr-0.5" />
