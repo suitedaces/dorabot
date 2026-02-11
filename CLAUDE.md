@@ -17,17 +17,15 @@ Personal AI agent with multi-channel messaging, browser automation, and persiste
 
 ```bash
 # backend
-npx tsc                              # outputs to dist/
+npm run build                        # tsc → dist/
 
-# desktop frontend
-cd desktop && npx vite build         # outputs to desktop/dist/
+# desktop (all-in-one via electron-vite)
+cd desktop && npm run build          # → desktop/out/{main,preload,renderer}
 
-# desktop electron
-cd desktop && npx tsc -p tsconfig.electron.json  # outputs to desktop/dist-electron/
-
-# run
-dorabot -g                          # gateway mode
-cd desktop && npm run electron:dev   # desktop dev (vite 5173 + electron)
+# dev
+npm run dev                          # gateway with auto-reload (tsx --watch)
+npm run dev:desktop                  # desktop with HMR (electron-vite dev)
+npm run dev:cli                      # interactive CLI mode
 ```
 
 ## Key Files
@@ -152,8 +150,8 @@ Path access: `isPathAllowed()` checks ALWAYS_DENIED list first (`~/.ssh`, `~/.gn
 - WhatsApp `replyTo` is `string` but Baileys expects `{ key: any }` — don't pass directly
 - Baileys `stanzaId` can be `null`, needs `|| undefined` for `string | undefined` type
 - `import { WebSocket } from 'ws'` (not `import type`) when using `.OPEN` constant
-- Desktop tsconfig: `"module": "ESNext"` + `"moduleResolution": "bundler"` (Vite)
-- Electron tsconfig: `"module": "CommonJS"` + `"moduleResolution": "node"`
+- Desktop uses electron-vite — single `electron.vite.config.ts` handles main, preload, and renderer builds
+- Single `tsconfig.json` covers both `src/` (renderer) and `electron/` (main/preload)
 - Telegram parse mode always HTML, never Markdown — `markdownToTelegramHtml()` converts
 - `page.accessibility.snapshot()` deprecated in Playwright 1.58+ — use DOM evaluation
 - Browser refs invalidate after any navigation — always re-snapshot after clicking links
