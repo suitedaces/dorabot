@@ -45,14 +45,17 @@ npm link
 ### Run
 
 ```bash
-# gateway mode — powers desktop app and channels
-dorabot -g
+# development — gateway + desktop with HMR
+npm run dev
 
-# interactive terminal
-dorabot -i
+# or run individually
+npm run dev:gateway   # gateway with auto-reload
+npm run dev:desktop   # electron-vite with HMR
 
-# one-off question
-dorabot -m "what's the weather in SF?"
+# production
+dorabot -g            # gateway mode — powers desktop app and channels
+dorabot -i            # interactive terminal
+dorabot -m "what's the weather in SF?"   # one-off question
 ```
 
 ## Channels
@@ -74,7 +77,7 @@ dorabot --whatsapp-login    # scan the QR code
 ```bash
 cd desktop
 npm install
-npm run electron:dev
+npm run dev    # starts electron-vite with HMR
 ```
 
 ## Make It Yours

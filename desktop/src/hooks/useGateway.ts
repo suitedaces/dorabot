@@ -202,8 +202,18 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
 
 const SESSION_STORAGE_KEY = 'dorabot:sessionId';
 
-export function useGateway(url = 'ws://localhost:18789') {
-  const getToken = () => (window as any).electronAPI?.getGatewayToken?.() || (window as any).electronAPI?.gatewayToken || localStorage.getItem('dorabot:gateway-token') || '';
+// Token consumed once from preload, cached in module scope — not re-extractable
+let cachedToken: string | null = null;
+function getToken(): string {
+  if (!cachedToken) {
+    cachedToken = (window as any).electronAPI?.consumeGatewayToken?.()
+      || localStorage.getItem('dorabot:gateway-token')
+      || '';
+  }
+  return cachedToken ?? '';
+}
+
+export function useGateway(url = 'wss://localhost:18789') {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [chatItems, setChatItems] = useState<ChatItem[]>([]);
   const [channelMessages, setChannelMessages] = useState<ChannelMessage[]>([]);

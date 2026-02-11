@@ -1,16 +1,15 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage } from 'electron';
+import { app, BrowserWindow, Tray, Menu, nativeImage, session } from 'electron';
+import { is } from '@electron-toolkit/utils';
 import * as path from 'path';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 
-const isDev = !app.isPackaged;
-
 function getIconPath(): string {
-  return isDev
-    ? path.join(__dirname, '..', 'public', 'dorabot.png')
-    : path.join(__dirname, '..', 'dist', 'dorabot.png');
+  return is.dev
+    ? path.join(__dirname, '../../public/dorabot.png')
+    : path.join(__dirname, '../renderer/dorabot.png');
 }
 
 function createWindow(): void {
@@ -23,18 +22,18 @@ function createWindow(): void {
     backgroundColor: '#0d1117',
     icon: getIconPath(),
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
     },
   });
 
-  if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']);
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
 
   // minimize to tray on close
@@ -90,7 +89,27 @@ function updateTrayTitle(status: string): void {
   }
 }
 
+// Trust the self-signed gateway TLS cert for localhost connections
+app.on('certificate-error', (event, _webContents, url, _error, _cert, callback) => {
+  const parsed = new URL(url);
+  if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+    event.preventDefault();
+    callback(true);
+  } else {
+    callback(false);
+  }
+});
+
 app.on('ready', () => {
+  // Accept self-signed gateway cert for localhost WebSocket connections
+  session.defaultSession.setCertificateVerifyProc((request, callback) => {
+    if (request.hostname === 'localhost' || request.hostname === '127.0.0.1') {
+      callback(0); // trust
+    } else {
+      callback(-3); // use default verification
+    }
+  });
+
   if (app.dock) {
     app.dock.setIcon(getIconPath());
   }

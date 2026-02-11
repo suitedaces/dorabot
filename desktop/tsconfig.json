@@ -17,6 +17,6 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src"],
-  "exclude": ["node_modules"]
+  "include": ["src", "electron", "electron.vite.config.ts"],
+  "exclude": ["node_modules", "out", "dist", "dist-electron"]
 }

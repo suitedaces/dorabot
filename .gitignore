@@ -7,8 +7,10 @@ node_modules/
 # build outputs
 dist/
 dist-electron/
+out/
 desktop/dist/
 desktop/dist-electron/
+desktop/out/
 
 # environment variables
 .env
