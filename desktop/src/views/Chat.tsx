@@ -581,7 +581,7 @@ export function ChatView({ gateway }: Props) {
               </Card>
 
               {/* suggestions */}
-              {connected && (
+              {isReady && (
                 <div className="grid grid-cols-3 gap-2">
                   {SUGGESTIONS.map(s => (
                     <button
