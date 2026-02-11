@@ -1,13 +1,29 @@
 import { Codex } from '@openai/codex-sdk';
-import type { ThreadEvent, ModelReasoningEffort } from '@openai/codex-sdk';
+import type { ModelReasoningEffort } from '@openai/codex-sdk';
+import { createServer, type Server } from 'node:http';
 import { execFile } from 'node:child_process';
-import { spawn } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
-import { mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from 'node:fs';
+import { randomBytes, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import type { Provider, ProviderRunOptions, ProviderMessage, ProviderAuthStatus, ProviderQueryResult } from './types.js';
 import type { ReasoningEffort } from '../config.js';
+
+// ── OAuth constants (same client as Codex CLI) ──────────────────────
+const OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
+const OAUTH_AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize';
+const OAUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token';
+const OAUTH_REDIRECT_URI = 'http://localhost:1455/auth/callback';
+const OAUTH_SCOPE = 'openid profile email offline_access';
+const JWT_CLAIM_PATH = 'https://api.openai.com/auth';
+
+// ── File paths ──────────────────────────────────────────────────────
+const DORABOT_DIR = join(homedir(), '.dorabot');
+const CODEX_OAUTH_FILE = join(DORABOT_DIR, '.codex-oauth.json');
+const OPENAI_KEY_FILE = join(DORABOT_DIR, '.openai-key');
+
+const SUCCESS_HTML = `<!doctype html><html><body><p>Authentication successful. You can close this tab.</p></body></html>`;
 
 // ── Codex home / binary helpers ─────────────────────────────────────
 
@@ -17,6 +33,10 @@ function codexHome(): string {
 
 function ensureCodexHome(): void {
   mkdirSync(codexHome(), { recursive: true });
+}
+
+function ensureDorabotDir(): void {
+  mkdirSync(DORABOT_DIR, { recursive: true });
 }
 
 /**
@@ -77,10 +97,239 @@ function runCodexCmd(args: string[], input?: string): Promise<{ stdout: string; 
   });
 }
 
+// ── PKCE helpers ────────────────────────────────────────────────────
+
+function generateCodeVerifier(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+function generateCodeChallenge(verifier: string): string {
+  return createHash('sha256').update(verifier).digest('base64url');
+}
+
+// ── JWT decode ──────────────────────────────────────────────────────
+
+function decodeJwt(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    return JSON.parse(Buffer.from(parts[1]!, 'base64').toString());
+  } catch {
+    return null;
+  }
+}
+
+function getAccountId(accessToken: string): string | null {
+  const payload = decodeJwt(accessToken);
+  const auth = payload?.[JWT_CLAIM_PATH] as Record<string, unknown> | undefined;
+  const id = auth?.chatgpt_account_id;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+// ── Token persistence ───────────────────────────────────────────────
+
+type CodexOAuthTokens = {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number;
+  account_id: string;
+};
+
+function loadCodexOAuthTokens(): CodexOAuthTokens | null {
+  try {
+    if (existsSync(CODEX_OAUTH_FILE)) {
+      return JSON.parse(readFileSync(CODEX_OAUTH_FILE, 'utf-8'));
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+function persistCodexOAuthTokens(tokens: CodexOAuthTokens): void {
+  try {
+    ensureDorabotDir();
+    writeFileSync(CODEX_OAUTH_FILE, JSON.stringify(tokens), { mode: 0o600 });
+    chmodSync(CODEX_OAUTH_FILE, 0o600);
+  } catch (err) {
+    console.error('[codex] failed to persist OAuth tokens:', err);
+  }
+}
+
+function loadPersistedOpenAIKey(): string | undefined {
+  try {
+    if (existsSync(OPENAI_KEY_FILE)) {
+      const key = readFileSync(OPENAI_KEY_FILE, 'utf-8').trim();
+      if (key) return key;
+    }
+  } catch { /* ignore */ }
+  return undefined;
+}
+
+function persistOpenAIKey(apiKey: string): void {
+  try {
+    ensureDorabotDir();
+    writeFileSync(OPENAI_KEY_FILE, apiKey, { mode: 0o600 });
+    chmodSync(OPENAI_KEY_FILE, 0o600);
+  } catch (err) {
+    console.error('[codex] failed to persist API key:', err);
+  }
+}
+
+// ── Token exchange & refresh ────────────────────────────────────────
+
+async function exchangeCodexAuthCode(
+  code: string,
+  verifier: string,
+): Promise<CodexOAuthTokens | null> {
+  try {
+    const res = await fetch(OAUTH_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: OAUTH_CLIENT_ID,
+        code,
+        code_verifier: verifier,
+        redirect_uri: OAUTH_REDIRECT_URI,
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      console.error(`[codex] token exchange failed: ${res.status} ${text}`);
+      return null;
+    }
+    const data = await res.json() as { access_token: string; refresh_token: string; expires_in: number };
+    if (!data.access_token || !data.refresh_token) return null;
+    const accountId = getAccountId(data.access_token);
+    if (!accountId) {
+      console.error('[codex] failed to extract accountId from token');
+      return null;
+    }
+    return {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: Date.now() + data.expires_in * 1000,
+      account_id: accountId,
+    };
+  } catch (err) {
+    console.error('[codex] token exchange error:', err);
+    return null;
+  }
+}
+
+async function refreshCodexAccessToken(refreshToken: string): Promise<CodexOAuthTokens | null> {
+  try {
+    const res = await fetch(OAUTH_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: OAUTH_CLIENT_ID,
+      }),
+    });
+    if (!res.ok) {
+      console.error(`[codex] token refresh failed: ${res.status}`);
+      return null;
+    }
+    const data = await res.json() as { access_token: string; refresh_token: string; expires_in: number };
+    if (!data.access_token || !data.refresh_token) return null;
+    const accountId = getAccountId(data.access_token);
+    if (!accountId) return null;
+    return {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: Date.now() + data.expires_in * 1000,
+      account_id: accountId,
+    };
+  } catch (err) {
+    console.error('[codex] token refresh error:', err);
+    return null;
+  }
+}
+
+/** Ensure we have a valid access token, refreshing if needed */
+async function ensureCodexOAuthToken(): Promise<string | null> {
+  const tokens = loadCodexOAuthTokens();
+  if (!tokens) return null;
+
+  if (Date.now() > tokens.expires_at - 300_000) {
+    console.log('[codex] access token expiring, refreshing...');
+    const refreshed = await refreshCodexAccessToken(tokens.refresh_token);
+    if (!refreshed) return null;
+    persistCodexOAuthTokens(refreshed);
+    return refreshed.access_token;
+  }
+
+  return tokens.access_token;
+}
+
+// ── Local OAuth callback server ─────────────────────────────────────
+
+type OAuthServer = {
+  close: () => void;
+  waitForCode: () => Promise<string | null>;
+};
+
+function startLocalOAuthServer(expectedState: string): Promise<OAuthServer | null> {
+  return new Promise((resolve) => {
+    let capturedCode: string | null = null;
+    let codeResolve: ((code: string | null) => void) | null = null;
+
+    const server: Server = createServer((req, res) => {
+      try {
+        const url = new URL(req.url || '', 'http://localhost');
+        if (url.pathname !== '/auth/callback') {
+          res.statusCode = 404;
+          res.end('Not found');
+          return;
+        }
+        const state = url.searchParams.get('state');
+        const code = url.searchParams.get('code');
+        if (state !== expectedState) {
+          res.statusCode = 400;
+          res.end('State mismatch');
+          return;
+        }
+        capturedCode = code;
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(SUCCESS_HTML);
+        if (codeResolve) {
+          codeResolve(capturedCode);
+          codeResolve = null;
+        }
+      } catch {
+        res.statusCode = 500;
+        res.end('Error');
+      }
+    });
+
+    server.listen(1455, '127.0.0.1', () => {
+      resolve({
+        close: () => { try { server.close(); } catch { /* ignore */ } },
+        waitForCode: () => {
+          if (capturedCode !== null) return Promise.resolve(capturedCode);
+          return new Promise<string | null>((r) => {
+            codeResolve = r;
+            setTimeout(() => { r(null); codeResolve = null; }, 120_000);
+          });
+        },
+      });
+    });
+
+    server.on('error', () => resolve(null));
+  });
+}
+
 // ── Auth helpers ────────────────────────────────────────────────────
 
+function getOpenAIApiKey(): string | undefined {
+  return process.env.OPENAI_API_KEY || loadPersistedOpenAIKey();
+}
+
 function getCodexApiKey(): string | undefined {
-  if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY;
+  // Prefer managed key, then env, then codex CLI auth.json
+  const managed = getOpenAIApiKey();
+  if (managed) return managed;
   const authFile = join(codexHome(), 'auth.json');
   if (existsSync(authFile)) {
     try {
@@ -88,6 +337,17 @@ function getCodexApiKey(): string | undefined {
       return data.api_key || data.token || data.access_token || undefined;
     } catch { /* ignore */ }
   }
+  return undefined;
+}
+
+/** Resolve the best available API key — managed key, OAuth token, or codex auth.json */
+async function resolveCodexApiKey(): Promise<string | undefined> {
+  // 1. Managed API key or env
+  const apiKey = getCodexApiKey();
+  if (apiKey) return apiKey;
+  // 2. Managed OAuth token (with auto-refresh)
+  const oauthToken = await ensureCodexOAuthToken();
+  if (oauthToken) return oauthToken;
   return undefined;
 }
 
@@ -101,7 +361,7 @@ export async function isCodexInstalled(): Promise<boolean> {
 }
 
 export function hasCodexAuth(): boolean {
-  return !!getCodexApiKey();
+  return !!getCodexApiKey() || !!loadCodexOAuthTokens();
 }
 
 // ── Reasoning effort mapping ────────────────────────────────────────
@@ -119,7 +379,6 @@ const EFFORT_MAP: Record<ReasoningEffort, ModelReasoningEffort> = {
 export class CodexProvider implements Provider {
   readonly name = 'codex';
   private activeAbort: AbortController | null = null;
-  private loginProcess: ReturnType<typeof spawn> | null = null;
 
   async checkReady(): Promise<{ ready: boolean; reason?: string }> {
     try {
@@ -142,15 +401,19 @@ export class CodexProvider implements Provider {
   async getAuthStatus(): Promise<ProviderAuthStatus> {
     ensureCodexHome();
     try {
-      const { stdout, stderr } = await runCodexCmd(['login', 'status']);
-      const output = stdout + stderr;
-
-      if (output.includes('Logged in') || output.includes('authenticated') || output.includes('API key') || output.includes('ChatGPT')) {
-        const method = output.includes('ChatGPT') ? 'oauth' : 'api_key';
-        return { authenticated: true, method };
+      // 1. Managed OAuth tokens (dorabot-managed)
+      const oauthTokens = loadCodexOAuthTokens();
+      if (oauthTokens) {
+        return { authenticated: true, method: 'oauth', identity: `ChatGPT (${oauthTokens.account_id})` };
       }
 
-      // Check auth.json directly
+      // 2. Managed API key or env
+      const apiKey = getOpenAIApiKey();
+      if (apiKey) {
+        return { authenticated: true, method: 'api_key', identity: process.env.OPENAI_API_KEY ? 'env:OPENAI_API_KEY' : 'managed key' };
+      }
+
+      // 3. Codex CLI auth.json
       const authFile = join(codexHome(), 'auth.json');
       if (existsSync(authFile)) {
         try {
@@ -161,11 +424,6 @@ export class CodexProvider implements Provider {
         } catch { /* ignore */ }
       }
 
-      // OPENAI_API_KEY env fallback
-      if (process.env.OPENAI_API_KEY) {
-        return { authenticated: true, method: 'api_key', identity: 'env:OPENAI_API_KEY' };
-      }
-
       return { authenticated: false, error: 'Not authenticated with Codex' };
     } catch (e) {
       return { authenticated: false, error: `Auth check failed: ${e}` };
@@ -174,75 +432,68 @@ export class CodexProvider implements Provider {
 
   async loginWithApiKey(apiKey: string): Promise<ProviderAuthStatus> {
     ensureCodexHome();
-    const { stdout, stderr, code } = await runCodexCmd(['login', '--with-api-key'], apiKey + '\n');
-    if (code !== 0) {
-      const legacy = await runCodexCmd(['login', '--api-key', apiKey]);
-      if (legacy.code !== 0) {
-        return { authenticated: false, error: `Login failed: ${stderr || stdout || legacy.stderr || legacy.stdout}` };
-      }
-    }
+    // Persist to dorabot-managed file
+    persistOpenAIKey(apiKey);
+    // Also try to register with codex CLI
+    await runCodexCmd(['login', '--with-api-key'], apiKey + '\n').catch(() => {});
     return this.getAuthStatus();
   }
+
+  private pendingOAuth: { verifier: string; state: string; server: OAuthServer } | null = null;
 
   async loginWithOAuth(): Promise<{ authUrl: string; loginId: string }> {
     ensureCodexHome();
 
-    return new Promise((resolve, reject) => {
-      const loginId = `login-${Date.now()}`;
-      const proc = spawn(codexBinary, ['login'], {
-        env: codexEnv(),
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
+    const verifier = generateCodeVerifier();
+    const challenge = generateCodeChallenge(verifier);
+    const state = randomBytes(16).toString('hex');
 
-      this.loginProcess = proc;
+    const server = await startLocalOAuthServer(state);
+    if (!server) {
+      throw new Error('Failed to start local OAuth callback server on port 1455');
+    }
 
-      let output = '';
-      const collectOutput = (data: Buffer) => {
-        output += data.toString();
-        const urlMatch = output.match(/(https?:\/\/[^\s]+)/);
-        if (urlMatch) {
-          resolve({ authUrl: urlMatch[1], loginId });
-        }
-      };
-
-      proc.stdout?.on('data', collectOutput);
-      proc.stderr?.on('data', collectOutput);
-
-      proc.on('error', (err) => {
-        this.loginProcess = null;
-        reject(new Error(`OAuth login failed: ${err.message}`));
-      });
-
-      proc.on('exit', () => {
-        this.loginProcess = null;
-      });
-
-      setTimeout(() => {
-        if (this.loginProcess === proc) {
-          proc.kill();
-          this.loginProcess = null;
-          reject(new Error(`OAuth login timed out. Output: ${output}`));
-        }
-      }, 15_000);
+    const params = new URLSearchParams({
+      client_id: OAUTH_CLIENT_ID,
+      redirect_uri: OAUTH_REDIRECT_URI,
+      response_type: 'code',
+      scope: OAUTH_SCOPE,
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+      state,
     });
+
+    const authUrl = `${OAUTH_AUTHORIZE_URL}?${params}`;
+    const loginId = `oauth-${Date.now()}`;
+
+    this.pendingOAuth = { verifier, state, server };
+
+    return { authUrl, loginId };
   }
 
   async completeOAuthLogin(_loginId: string): Promise<ProviderAuthStatus> {
-    if (this.loginProcess) {
-      await new Promise<void>((resolve) => {
-        const proc = this.loginProcess!;
-        const timer = setTimeout(() => {
-          proc.kill();
-          resolve();
-        }, 60_000);
-        proc.on('exit', () => {
-          clearTimeout(timer);
-          resolve();
-        });
-      });
-      this.loginProcess = null;
+    if (!this.pendingOAuth) {
+      return { authenticated: false, error: 'No pending OAuth login' };
     }
-    return this.getAuthStatus();
+
+    const { verifier, server } = this.pendingOAuth;
+    try {
+      const code = await server.waitForCode();
+      if (!code) {
+        return { authenticated: false, error: 'OAuth callback timed out or was cancelled' };
+      }
+
+      const tokens = await exchangeCodexAuthCode(code, verifier);
+      if (!tokens) {
+        return { authenticated: false, error: 'Token exchange failed' };
+      }
+
+      persistCodexOAuthTokens(tokens);
+      return this.getAuthStatus();
+    } finally {
+      server.close();
+      this.pendingOAuth = null;
+    }
   }
 
   async *query(opts: ProviderRunOptions): AsyncGenerator<ProviderMessage, ProviderQueryResult, unknown> {
@@ -250,8 +501,8 @@ export class CodexProvider implements Provider {
     const model = codexConfig?.model || undefined;
     const reasoningEffort = opts.config.reasoningEffort;
 
-    // Resolve API key (env > auth.json)
-    const apiKey = getCodexApiKey();
+    // Resolve API key (managed key > OAuth token > codex auth.json)
+    const apiKey = await resolveCodexApiKey();
 
     // Create SDK instance
     const codex = new Codex({
@@ -545,11 +796,9 @@ export class CodexProvider implements Provider {
       this.activeAbort.abort();
       this.activeAbort = null;
     }
-    if (this.loginProcess) {
-      try {
-        this.loginProcess.kill();
-      } catch { /* ignore */ }
-      this.loginProcess = null;
+    if (this.pendingOAuth) {
+      this.pendingOAuth.server.close();
+      this.pendingOAuth = null;
     }
   }
 }
