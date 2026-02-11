@@ -3,7 +3,7 @@ import type { useGateway } from '../hooks/useGateway';
 import { ProviderSetup } from './ProviderSetup';
 import { AuroraBackground } from './aceternity/aurora-background';
 import { Card, CardContent } from '@/components/ui/card';
-import { Brain, Sparkles, Key, Check, Loader2 } from 'lucide-react';
+import { Check, Loader2 } from 'lucide-react';
 
 type Props = {
   gateway: ReturnType<typeof useGateway>;
@@ -212,7 +212,7 @@ function ChooseStep({
           className="flex items-start gap-3 w-full px-4 py-3 rounded-xl border-2 border-border bg-card/80 backdrop-blur hover:border-primary/50 hover:bg-card transition-all text-left"
         >
           <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
-            <Brain className="w-4 h-4 text-primary" />
+            <img src="/claude-icon.svg" alt="Claude" className="w-5 h-5" />
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
@@ -230,7 +230,7 @@ function ChooseStep({
           className="flex items-start gap-3 w-full px-4 py-3 rounded-xl border-2 border-border bg-card/80 backdrop-blur hover:border-primary/50 hover:bg-card transition-all text-left"
         >
           <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
-            <Sparkles className="w-4 h-4 text-primary" />
+            <img src="/openai-icon.svg" alt="OpenAI" className="w-5 h-5" />
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
@@ -247,7 +247,7 @@ function ChooseStep({
           className="flex items-start gap-3 w-full px-4 py-3 rounded-xl border-2 border-border bg-card/80 backdrop-blur hover:border-primary/50 hover:bg-card transition-all text-left"
         >
           <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
-            <Key className="w-4 h-4 text-primary" />
+            <img src="/openai-icon.svg" alt="OpenAI" className="w-5 h-5" />
           </div>
           <div>
             <div className="text-xs font-semibold text-foreground">OpenAI API Key</div>

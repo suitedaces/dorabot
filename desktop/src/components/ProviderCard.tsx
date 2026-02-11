@@ -5,7 +5,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Cpu, Check, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { Check, X, ChevronDown, ChevronUp } from 'lucide-react';
 
 type Props = {
   gateway: ReturnType<typeof useGateway>;
@@ -86,7 +86,11 @@ export function ProviderCard({ gateway, disabled }: Props) {
     <Card>
       <CardContent className="p-4">
         <div className="flex items-center gap-2 mb-4">
-          <Cpu className="w-4 h-4 text-primary" />
+          <img
+            src={providerName === 'codex' ? '/openai-icon.svg' : '/claude-icon.svg'}
+            alt={providerName}
+            className="w-4 h-4"
+          />
           <span className="text-xs font-semibold">AI Provider</span>
           {authenticated ? (
             <Badge variant="outline" className="text-[9px] h-4 ml-auto text-success border-success/30">
