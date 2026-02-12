@@ -21,6 +21,7 @@ import type { InboundMessage } from '../channels/types.js';
 import { getAllChannelStatuses } from '../channels/index.js';
 import { loginWhatsApp, logoutWhatsApp, isWhatsAppLinked } from '../channels/whatsapp/login.js';
 import { getDefaultAuthDir } from '../channels/whatsapp/session.js';
+import { validateTelegramToken } from '../channels/telegram/bot.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { setCronRunner } from '../tools/index.js';
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
@@ -213,8 +214,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     }
   };
 
-  const registryPath = join(config.sessionDir, '_registry.json');
-  const sessionRegistry = new SessionRegistry(registryPath);
+  const sessionRegistry = new SessionRegistry();
   sessionRegistry.loadFromDisk();
   const fileSessionManager = new SessionManager(config);
 
@@ -277,9 +277,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     // escape < and > in body to prevent XML tag breakout
     const safeBody = body.replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+    // build media attribute if present
+    const mediaAttr = msg.mediaType ? ` media_type="${msg.mediaType}" media_path="${msg.mediaPath || ''}"` : '';
+
     const channelPrompt = [
-      `<incoming_message channel="${msg.channel}" sender="${safeSender}" chat="${msg.chatId}">`,
-      safeBody,
+      `<incoming_message channel="${msg.channel}" sender="${safeSender}" chat="${msg.chatId}"${mediaAttr}>`,
+      safeBody || (msg.mediaPath ? `[Attached: ${msg.mediaType || 'file'} at ${msg.mediaPath}]` : ''),
       `</incoming_message>`,
       '',
     ].join('\n');
@@ -297,6 +300,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         body: body,
         replyToId: msg.replyToId,
         mediaType: msg.mediaType,
+        mediaPath: msg.mediaPath,
       },
     });
 
@@ -1192,6 +1196,78 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
 
           broadcast({ event: 'whatsapp.login_status', data: { status: 'disconnected' } });
+          return { id, result: { success: true } };
+        }
+
+        case 'channels.telegram.status': {
+          const tokenFile = config.channels?.telegram?.tokenFile
+            || join(homedir(), '.dorabot', 'telegram', 'token');
+          const linked = existsSync(tokenFile) && readFileSync(tokenFile, 'utf-8').trim().length > 0;
+          const botUsername = linked ? (config.channels?.telegram?.accountId || null) : null;
+          return { id, result: { linked, botUsername } };
+        }
+
+        case 'channels.telegram.link': {
+          const token = (params?.token as string || '').trim();
+          if (!token) return { id, error: 'token is required' };
+          if (!token.includes(':')) {
+            return { id, error: 'Invalid token format. Expected format: 123456:ABC-DEF1234...' };
+          }
+
+          let botInfo: { id: number; username: string; firstName: string };
+          try {
+            botInfo = await validateTelegramToken(token);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return { id, error: `Invalid token: ${msg}` };
+          }
+
+          const tokenDir = join(homedir(), '.dorabot', 'telegram');
+          mkdirSync(tokenDir, { recursive: true });
+          writeFileSync(join(tokenDir, 'token'), token, { mode: 0o600 });
+
+          if (!config.channels) config.channels = {};
+          if (!config.channels.telegram) config.channels.telegram = {};
+          config.channels.telegram.enabled = true;
+          config.channels.telegram.accountId = `@${botInfo.username}`;
+          saveConfig(config);
+
+          broadcast({
+            event: 'telegram.link_status',
+            data: { status: 'linked', botUsername: `@${botInfo.username}` },
+          });
+
+          try {
+            await channelManager.startChannel('telegram');
+          } catch (err) {
+            console.error('[gateway] telegram auto-start failed:', err);
+          }
+
+          return {
+            id,
+            result: {
+              success: true,
+              botId: botInfo.id,
+              botUsername: `@${botInfo.username}`,
+              botName: botInfo.firstName,
+            },
+          };
+        }
+
+        case 'channels.telegram.unlink': {
+          await channelManager.stopChannel('telegram');
+
+          const tokenFile = config.channels?.telegram?.tokenFile
+            || join(homedir(), '.dorabot', 'telegram', 'token');
+          if (existsSync(tokenFile)) rmSync(tokenFile);
+
+          if (config.channels?.telegram) {
+            config.channels.telegram.enabled = false;
+            delete config.channels.telegram.accountId;
+            saveConfig(config);
+          }
+
+          broadcast({ event: 'telegram.link_status', data: { status: 'unlinked' } });
           return { id, result: { success: true } };
         }
 

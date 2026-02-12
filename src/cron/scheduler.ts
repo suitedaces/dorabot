@@ -1,9 +1,7 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import type { Config } from '../config.js';
 import { runAgent } from '../agent.js';
 import { parseDurationMs } from '../heartbeat/runner.js';
+import { getDb } from '../db.js';
 
 export type CronJob = {
   id: string;
@@ -31,28 +29,37 @@ type CronState = {
   timers: Map<string, NodeJS.Timeout>;
 };
 
-const CRON_FILE = join(homedir(), '.dorabot', 'cron-jobs.json');
-
-function ensureCronDir(): void {
-  const dir = join(homedir(), '.dorabot');
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-}
-
 export function loadCronJobs(): CronJob[] {
-  ensureCronDir();
-  if (!existsSync(CRON_FILE)) return [];
-  try {
-    return JSON.parse(readFileSync(CRON_FILE, 'utf-8'));
-  } catch {
-    return [];
-  }
+  const db = getDb();
+  const rows = db.prepare('SELECT data FROM cron_jobs').all() as { data: string }[];
+  return rows.map(r => JSON.parse(r.data));
 }
 
 export function saveCronJobs(jobs: CronJob[]): void {
-  ensureCronDir();
-  writeFileSync(CRON_FILE, JSON.stringify(jobs, null, 2));
+  const db = getDb();
+  const run = db.transaction(() => {
+    db.prepare('DELETE FROM cron_jobs').run();
+    const insert = db.prepare('INSERT INTO cron_jobs (id, data) VALUES (?, ?)');
+    for (const job of jobs) {
+      insert.run(job.id, JSON.stringify(job));
+    }
+  });
+  run();
+}
+
+function insertCronJob(job: CronJob): void {
+  const db = getDb();
+  db.prepare('INSERT OR REPLACE INTO cron_jobs (id, data) VALUES (?, ?)').run(job.id, JSON.stringify(job));
+}
+
+function deleteCronJob(id: string): void {
+  const db = getDb();
+  db.prepare('DELETE FROM cron_jobs WHERE id = ?').run(id);
+}
+
+function updateCronJob(job: CronJob): void {
+  const db = getDb();
+  db.prepare('UPDATE cron_jobs SET data = ? WHERE id = ?').run(JSON.stringify(job), job.id);
 }
 
 export function generateJobId(): string {
@@ -123,7 +130,6 @@ function getNextCronRun(cron: string, timezone?: string): Date | null {
   if (!parsed) return null;
 
   const now = new Date();
-  const tz = timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   // simple implementation: check next 366 days
   for (let dayOffset = 0; dayOffset < 366; dayOffset++) {
@@ -240,11 +246,11 @@ export function startCronRunner(opts: {
         if (job.deleteAfterRun) {
           state.jobs = state.jobs.filter(j => j.id !== job.id);
           state.timers.delete(job.id);
+          deleteCronJob(job.id);
         } else {
+          updateCronJob(job);
           scheduleJob(job);
         }
-
-        saveCronJobs(state.jobs);
       } catch (err) {
         onJobRun?.(job, { status: 'failed', result: String(err) });
       }
@@ -281,7 +287,7 @@ export function startCronRunner(opts: {
       };
 
       state.jobs.push(job);
-      saveCronJobs(state.jobs);
+      insertCronJob(job);
       scheduleJob(job);
 
       return job;
@@ -296,7 +302,7 @@ export function startCronRunner(opts: {
 
       const before = state.jobs.length;
       state.jobs = state.jobs.filter(j => j.id !== id);
-      saveCronJobs(state.jobs);
+      deleteCronJob(id);
 
       return state.jobs.length < before;
     },
@@ -319,7 +325,7 @@ export function startCronRunner(opts: {
         });
 
         job.lastRunAt = new Date().toISOString();
-        saveCronJobs(state.jobs);
+        updateCronJob(job);
         scheduleJob(job);
 
         return { status: 'ran', result: result.result };

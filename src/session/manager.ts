@@ -1,6 +1,5 @@
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
-import { join, basename } from 'node:path';
 import type { Config } from '../config.js';
+import { getDb } from '../db.js';
 
 export type SessionMetadata = {
   channel?: string;
@@ -44,57 +43,63 @@ export type SessionMessage = {
   metadata?: MessageMetadata;
 };
 
-function sanitizeSessionId(id: string): string {
-  return id.replace(/[\/\\\.]+/g, '_').replace(/^_+|_+$/g, '');
-}
-
 export class SessionManager {
-  private sessionDir: string;
-  private indexPath: string;
-  private indexCache: Record<string, SessionMetadata> | null = null;
-
-  constructor(config: Config) {
-    this.sessionDir = config.sessionDir;
-    this.indexPath = join(this.sessionDir, '_index.json');
-    this.ensureDir();
-  }
-
-  private ensureDir(): void {
-    if (!existsSync(this.sessionDir)) {
-      mkdirSync(this.sessionDir, { recursive: true });
-    }
-  }
-
-  private getSessionPath(sessionId: string): string {
-    const safe = sanitizeSessionId(sessionId);
-    return join(this.sessionDir, `${safe}.jsonl`);
-  }
-
-  loadIndex(): Record<string, SessionMetadata> {
-    if (this.indexCache) return this.indexCache;
-    try {
-      if (existsSync(this.indexPath)) {
-        this.indexCache = JSON.parse(readFileSync(this.indexPath, 'utf-8'));
-        return this.indexCache!;
-      }
-    } catch {}
-    this.indexCache = {};
-    return this.indexCache;
-  }
-
-  saveIndex(index: Record<string, SessionMetadata>): void {
-    this.indexCache = index;
-    writeFileSync(this.indexPath, JSON.stringify(index, null, 2));
+  constructor(_config: Config) {
+    // ensure db is initialized
+    getDb();
   }
 
   setMetadata(sessionId: string, meta: Partial<SessionMetadata>): void {
-    const index = this.loadIndex();
-    index[sessionId] = { ...index[sessionId], ...meta };
-    this.saveIndex(index);
+    const db = getDb();
+    const existing = db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId) as { id: string } | undefined;
+    if (existing) {
+      const sets: string[] = [];
+      const vals: unknown[] = [];
+      if (meta.channel !== undefined) { sets.push('channel = ?'); vals.push(meta.channel); }
+      if (meta.chatId !== undefined) { sets.push('chat_id = ?'); vals.push(meta.chatId); }
+      if (meta.chatType !== undefined) { sets.push('chat_type = ?'); vals.push(meta.chatType); }
+      if (meta.senderName !== undefined) { sets.push('sender_name = ?'); vals.push(meta.senderName); }
+      if (meta.sdkSessionId !== undefined) { sets.push('sdk_session_id = ?'); vals.push(meta.sdkSessionId); }
+      if (sets.length > 0) {
+        sets.push('updated_at = ?');
+        vals.push(new Date().toISOString());
+        vals.push(sessionId);
+        db.prepare(`UPDATE sessions SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+      }
+    } else {
+      db.prepare(`
+        INSERT INTO sessions (id, channel, chat_id, chat_type, sender_name, sdk_session_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        sessionId,
+        meta.channel || null,
+        meta.chatId || null,
+        meta.chatType || null,
+        meta.senderName || null,
+        meta.sdkSessionId || null,
+        new Date().toISOString(),
+        new Date().toISOString(),
+      );
+    }
   }
 
   getMetadata(sessionId: string): SessionMetadata | undefined {
-    return this.loadIndex()[sessionId];
+    const db = getDb();
+    const row = db.prepare('SELECT channel, chat_id, chat_type, sender_name, sdk_session_id FROM sessions WHERE id = ?').get(sessionId) as {
+      channel: string | null;
+      chat_id: string | null;
+      chat_type: string | null;
+      sender_name: string | null;
+      sdk_session_id: string | null;
+    } | undefined;
+    if (!row) return undefined;
+    return {
+      channel: row.channel || undefined,
+      chatId: row.chat_id || undefined,
+      chatType: row.chat_type || undefined,
+      senderName: row.sender_name || undefined,
+      sdkSessionId: row.sdk_session_id || undefined,
+    };
   }
 
   generateSessionId(): string {
@@ -104,66 +109,118 @@ export class SessionManager {
   }
 
   exists(sessionId: string): boolean {
-    return existsSync(this.getSessionPath(sessionId));
+    const db = getDb();
+    return !!db.prepare('SELECT 1 FROM sessions WHERE id = ?').get(sessionId);
   }
 
   load(sessionId: string): SessionMessage[] {
-    const path = this.getSessionPath(sessionId);
-    if (!existsSync(path)) {
-      return [];
-    }
+    const db = getDb();
+    const rows = db.prepare('SELECT type, uuid, timestamp, content, metadata FROM messages WHERE session_id = ? ORDER BY id').all(sessionId) as {
+      type: string;
+      uuid: string | null;
+      timestamp: string;
+      content: string;
+      metadata: string | null;
+    }[];
 
-    const content = readFileSync(path, 'utf-8');
-    const lines = content.split('\n').filter(line => line.trim());
-
-    return lines.map(line => {
-      try {
-        return JSON.parse(line) as SessionMessage;
-      } catch {
-        return null;
-      }
-    }).filter((m): m is SessionMessage => m !== null);
+    return rows.map(row => ({
+      type: row.type as SessionMessage['type'],
+      uuid: row.uuid || undefined,
+      timestamp: row.timestamp,
+      content: JSON.parse(row.content),
+      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
+    }));
   }
 
   append(sessionId: string, message: SessionMessage): void {
-    const path = this.getSessionPath(sessionId);
-    const line = JSON.stringify(message) + '\n';
-    appendFileSync(path, line);
+    const db = getDb();
+    const now = new Date().toISOString();
+
+    // ensure session exists
+    db.prepare(`
+      INSERT INTO sessions (id, created_at, updated_at, message_count)
+      VALUES (?, ?, ?, 0)
+      ON CONFLICT(id) DO NOTHING
+    `).run(sessionId, now, now);
+
+    // insert message
+    db.prepare(`
+      INSERT INTO messages (session_id, uuid, type, content, metadata, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      sessionId,
+      message.uuid || null,
+      message.type,
+      JSON.stringify(message.content),
+      message.metadata ? JSON.stringify(message.metadata) : null,
+      message.timestamp,
+    );
+
+    // update session counts
+    db.prepare(`
+      UPDATE sessions SET message_count = message_count + 1, updated_at = ?, last_message_at = ?
+      WHERE id = ?
+    `).run(now, Date.now(), sessionId);
   }
 
   save(sessionId: string, messages: SessionMessage[]): void {
-    const path = this.getSessionPath(sessionId);
-    const content = messages.map(m => JSON.stringify(m)).join('\n') + '\n';
-    writeFileSync(path, content);
+    const db = getDb();
+    const now = new Date().toISOString();
+
+    const run = db.transaction(() => {
+      db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
+
+      const insert = db.prepare(`
+        INSERT INTO messages (session_id, uuid, type, content, metadata, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      for (const msg of messages) {
+        insert.run(
+          sessionId,
+          msg.uuid || null,
+          msg.type,
+          JSON.stringify(msg.content),
+          msg.metadata ? JSON.stringify(msg.metadata) : null,
+          msg.timestamp,
+        );
+      }
+
+      db.prepare(`
+        INSERT INTO sessions (id, created_at, updated_at, message_count)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET message_count = ?, updated_at = ?
+      `).run(sessionId, now, now, messages.length, messages.length, now);
+    });
+    run();
   }
 
   list(): SessionInfo[] {
-    const files = readdirSync(this.sessionDir)
-      .filter(f => f.endsWith('.jsonl'));
+    const db = getDb();
+    const rows = db.prepare(`
+      SELECT id, channel, chat_id, chat_type, sender_name, message_count, created_at, updated_at
+      FROM sessions ORDER BY updated_at DESC
+    `).all() as {
+      id: string;
+      channel: string | null;
+      chat_id: string | null;
+      chat_type: string | null;
+      sender_name: string | null;
+      message_count: number;
+      created_at: string | null;
+      updated_at: string | null;
+    }[];
 
-    const index = this.loadIndex();
-
-    return files.map(file => {
-      const path = join(this.sessionDir, file);
-      const stat = statSync(path);
-      const id = basename(file, '.jsonl');
-      const meta = index[id];
-
-      const content = readFileSync(path, 'utf-8');
-      const lines = content.split('\n').filter(l => l.trim());
-
-      return {
-        id,
-        createdAt: stat.birthtime.toISOString(),
-        updatedAt: stat.mtime.toISOString(),
-        messageCount: lines.length,
-        path,
-        channel: meta?.channel,
-        chatId: meta?.chatId,
-        chatType: meta?.chatType,
-        senderName: meta?.senderName,
-      };
-    }).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    return rows.map(row => ({
+      id: row.id,
+      createdAt: row.created_at || new Date().toISOString(),
+      updatedAt: row.updated_at || new Date().toISOString(),
+      messageCount: row.message_count,
+      path: '', // no longer file-backed
+      channel: row.channel || undefined,
+      chatId: row.chat_id || undefined,
+      chatType: row.chat_type || undefined,
+      senderName: row.sender_name || undefined,
+    }));
   }
 
   getLatest(): SessionInfo | null {
@@ -172,22 +229,15 @@ export class SessionManager {
   }
 
   delete(sessionId: string): boolean {
-    const path = this.getSessionPath(sessionId);
-    if (existsSync(path)) {
-      const { unlinkSync } = require('node:fs');
-      unlinkSync(path);
-      // remove from index
-      const index = this.loadIndex();
-      if (index[sessionId]) {
-        delete index[sessionId];
-        this.saveIndex(index);
-      }
-      return true;
-    }
-    return false;
+    const db = getDb();
+    const result = db.transaction(() => {
+      db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
+      const r = db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
+      return r.changes > 0;
+    })();
+    return result;
   }
 
-  // get the session ID for resuming with the SDK
   getResumeId(sessionId: string): string | undefined {
     if (this.exists(sessionId)) {
       return sessionId;
