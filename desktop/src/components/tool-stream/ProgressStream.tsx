@@ -1,12 +1,12 @@
 import { motion } from "motion/react"
 import { Check, Circle, Loader2, ListChecks } from "lucide-react"
 import type { ToolUIProps } from "../tool-ui"
+import { safeParse } from "../../lib/safe-parse"
 
 type Todo = { content: string; status: "pending" | "in_progress" | "completed"; activeForm: string }
 
 export function ProgressStream({ input, output, isError, streaming }: ToolUIProps) {
-  let todos: Todo[] = []
-  try { todos = JSON.parse(input).todos || [] } catch {}
+  const todos: Todo[] = safeParse(input).todos || []
 
   const done = todos.filter(t => t.status === "completed").length
   const total = todos.length

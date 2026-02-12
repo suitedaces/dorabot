@@ -1,6 +1,7 @@
 import { motion, AnimatePresence } from "motion/react"
 import { Monitor, Lock, RotateCw, ArrowLeft, ArrowRight, X, Minus, Maximize2 } from "lucide-react"
 import type { ToolUIProps } from "../tool-ui"
+import { safeParse } from "../../lib/safe-parse"
 
 const ACTION_LABELS: Record<string, string> = {
   open: "navigating", click: "clicking", type: "typing", fill: "filling",
@@ -11,8 +12,7 @@ const ACTION_LABELS: Record<string, string> = {
 }
 
 export function BrowserStream({ input, output, imageData, isError, streaming }: ToolUIProps) {
-  let parsed: any = {}
-  try { parsed = JSON.parse(input) } catch {}
+  const parsed = safeParse(input)
 
   const action = parsed.action || ""
   const url = parsed.url || ""

@@ -1,6 +1,7 @@
 import { motion, AnimatePresence } from "motion/react"
 import { Check, CheckCheck, Clock } from "lucide-react"
 import type { ToolUIProps } from "../tool-ui"
+import { safeParse } from "../../lib/safe-parse"
 
 function TypingDots() {
   return (
@@ -18,8 +19,7 @@ function TypingDots() {
 }
 
 export function MessageStream({ input, output, isError, streaming }: ToolUIProps) {
-  let parsed: any = {}
-  try { parsed = JSON.parse(input) } catch {}
+  const parsed = safeParse(input)
 
   const channel = parsed.channel || ""
   const target = parsed.target || ""

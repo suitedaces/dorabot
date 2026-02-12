@@ -1,6 +1,7 @@
 import { motion, AnimatePresence } from "motion/react"
 import { FileText, FilePlus, Pencil, FolderSearch, FileSearch } from "lucide-react"
 import type { ToolUIProps } from "../tool-ui"
+import { safeParse } from "../../lib/safe-parse"
 
 const TOOL_META: Record<string, { icon: typeof FileText; verb: string; color: string }> = {
   Read:  { icon: FileText,    verb: "reading",    color: "text-primary" },
@@ -19,16 +20,17 @@ function fakeLineNumbers(count: number, start: number = 1): string[] {
 }
 
 export function FileStream({ name, input, output, isError, streaming }: ToolUIProps) {
-  let parsed: any = {}
-  try { parsed = JSON.parse(input) } catch {}
+  const parsed = safeParse(input)
 
   const meta = TOOL_META[name] || TOOL_META.Read
   const Icon = meta.icon
   const filePath = parsed.file_path || parsed.pattern || parsed.path || ""
   const done = !streaming && output != null
   const isEdit = name === "Edit"
+  const isWrite = name === "Write"
   const oldStr = parsed.old_string || ""
   const newStr = parsed.new_string || ""
+  const writeContent = parsed.content || ""
   const command = parsed.command || parsed.query || ""
   const isGlob = name === "Glob"
   const isGrep = name === "Grep"
@@ -130,8 +132,33 @@ export function FileStream({ name, input, output, isError, streaming }: ToolUIPr
         </div>
       )}
 
+      {/* write content preview */}
+      {isWrite && writeContent && (
+        <motion.div
+          className="px-2 py-2 max-h-[140px] overflow-auto"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+        >
+          {writeContent.split("\n").map((line: string, i: number) => (
+            <div key={i} className="flex gap-2 text-[10px] leading-5">
+              <span className="text-success/30 w-4 text-right select-none shrink-0">{i + 1}</span>
+              <span className="text-foreground/70 whitespace-pre-wrap break-all">
+                {line}
+                {streaming && i === writeContent.split("\n").length - 1 && (
+                  <motion.span
+                    className="inline-block w-[2px] h-3 bg-success/60 ml-0.5 align-middle"
+                    animate={{ opacity: [1, 0] }}
+                    transition={{ duration: 0.5, repeat: Infinity }}
+                  />
+                )}
+              </span>
+            </div>
+          ))}
+        </motion.div>
+      )}
+
       {/* streaming skeleton lines (shown while waiting for output) */}
-      {streaming && !output && !isEdit && (
+      {streaming && !output && !isEdit && !writeContent && (
         <div className="px-2 py-2 space-y-0.5">
           {fakeLineNumbers(5).map((n, i) => (
             <motion.div

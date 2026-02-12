@@ -1,6 +1,7 @@
 import { motion, AnimatePresence } from "motion/react"
 import { Globe, ArrowDown, Link } from "lucide-react"
 import type { ToolUIProps } from "../tool-ui"
+import { safeParse } from "../../lib/safe-parse"
 
 function DownloadWave() {
   return (
@@ -18,8 +19,7 @@ function DownloadWave() {
 }
 
 export function WebFetchStream({ input, output, isError, streaming }: ToolUIProps) {
-  let parsed: any = {}
-  try { parsed = JSON.parse(input) } catch {}
+  const parsed = safeParse(input)
 
   const url = parsed.url || ""
   const prompt = parsed.prompt || ""

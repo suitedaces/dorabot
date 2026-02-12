@@ -1,6 +1,7 @@
 import { motion } from "motion/react"
 import { Clock, Bell, CalendarClock, Timer } from "lucide-react"
 import type { ToolUIProps } from "../tool-ui"
+import { safeParse } from "../../lib/safe-parse"
 
 function AnimatedClock({ streaming }: { streaming?: boolean }) {
   return (
@@ -44,8 +45,7 @@ const TOOL_ICONS: Record<string, typeof Clock> = {
 }
 
 export function CronStream({ name, input, output, isError, streaming }: ToolUIProps) {
-  let parsed: any = {}
-  try { parsed = JSON.parse(input) } catch {}
+  const parsed = safeParse(input)
 
   const message = parsed.message || parsed.description || ""
   const delay = parsed.delay || ""

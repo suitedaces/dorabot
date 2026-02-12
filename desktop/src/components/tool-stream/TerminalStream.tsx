@@ -1,9 +1,9 @@
 import { motion, AnimatePresence } from "motion/react"
 import type { ToolUIProps } from "../tool-ui"
+import { safeParse } from "../../lib/safe-parse"
 
 export function TerminalStream({ input, output, isError, streaming }: ToolUIProps) {
-  let parsed: any = {}
-  try { parsed = JSON.parse(input) } catch {}
+  const parsed = safeParse(input)
 
   const command = parsed.command || input.slice(0, 300)
   const bg = parsed.run_in_background

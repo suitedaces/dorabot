@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
+import { safeParse } from '@/lib/safe-parse';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   Square, Plus, ChevronDown, ChevronRight, Sparkles,
@@ -180,10 +181,8 @@ function ToolUseItem({ item }: { item: Extract<ChatItem, { type: 'tool_use' }> }
   const isOpen = manualOpen !== null ? manualOpen : isPending;
 
   const inputDetail = (() => {
-    try {
-      const p = JSON.parse(item.input);
-      return p.command?.split('\n')[0] || p.file_path || p.pattern || p.url || p.query || p.description || '';
-    } catch { return item.input.slice(0, 80); }
+    const p = safeParse(item.input);
+    return p.command?.split('\n')[0] || p.file_path || p.pattern || p.url || p.query || p.description || '';
   })();
 
   // screenshot: show image inline after collapse

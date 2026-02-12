@@ -1,6 +1,7 @@
 import { motion, AnimatePresence } from "motion/react"
 import { Search, Globe } from "lucide-react"
 import type { ToolUIProps } from "../tool-ui"
+import { safeParse } from "../../lib/safe-parse"
 
 function RadarPulse() {
   return (
@@ -20,8 +21,7 @@ function RadarPulse() {
 }
 
 export function SearchStream({ input, output, isError, streaming }: ToolUIProps) {
-  let parsed: any = {}
-  try { parsed = JSON.parse(input) } catch {}
+  const parsed = safeParse(input)
 
   const query = parsed.query || ""
   const done = !streaming && output != null

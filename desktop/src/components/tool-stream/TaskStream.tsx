@@ -1,6 +1,7 @@
 import { motion, AnimatePresence } from "motion/react"
 import { Bot, Cpu, Zap } from "lucide-react"
 import type { ToolUIProps } from "../tool-ui"
+import { safeParse } from "../../lib/safe-parse"
 
 function BrainPulse() {
   return (
@@ -19,8 +20,7 @@ function BrainPulse() {
 }
 
 export function TaskStream({ input, output, isError, streaming }: ToolUIProps) {
-  let parsed: any = {}
-  try { parsed = JSON.parse(input) } catch {}
+  const parsed = safeParse(input)
 
   const agentType = parsed.subagent_type || "agent"
   const description = parsed.description || ""

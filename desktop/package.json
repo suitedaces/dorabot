@@ -13,6 +13,7 @@
   "dependencies": {
     "@fortune-sheet/react": "^1.0.4",
     "@types/react-syntax-highlighter": "^15.5.13",
+    "jsonrepair": "^3.13.2",
     "lucide-react": "^0.563.0",
     "motion": "^12.33.0",
     "pdfjs-dist": "^5.4.296",
