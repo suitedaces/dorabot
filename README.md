@@ -3,9 +3,9 @@
 
   # dorabot
 
-  **Turn your Claude Code and Codex into OpenClaw.**
+  **A superhuman AI assistant that knows you - running on the subscriptions you already pay for.**
 
-  You already pay for these tools. dorabot wraps them in a multi-channel agent harness — WhatsApp, Telegram, browser automation, email, cron, persistent memory, and Mac control — so they can do real work outside the IDE.
+  dorabot wraps Claude and ChatGPT in a multi-channel agent harness - WhatsApp, Telegram, browser automation, email, cron, persistent memory, and Mac control - so they can do real work outside the IDE.
 
 </div>
 
