@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from "motion/react"
-import { Globe, ArrowDown, Link } from "lucide-react"
+import { Globe, ArrowDown, FileText } from "lucide-react"
 import type { ToolUIProps } from "../tool-ui"
 import { safeParse } from "../../lib/safe-parse"
 
@@ -18,6 +18,50 @@ function DownloadWave() {
   )
 }
 
+function ContentPreview({ text }: { text: string }) {
+  const lines = text.split("\n").filter(l => l.trim())
+  const headings: string[] = []
+  let firstParagraph = ""
+
+  for (const line of lines) {
+    const hMatch = line.match(/^#{1,3}\s+(.+)/)
+    if (hMatch) {
+      headings.push(hMatch[1])
+    } else if (!firstParagraph && line.length > 30 && !line.startsWith("```") && !line.startsWith("|") && !line.startsWith("-")) {
+      firstParagraph = line.slice(0, 200)
+    }
+    if (headings.length >= 4 && firstParagraph) break
+  }
+
+  if (headings.length === 0 && !firstParagraph) return null
+
+  return (
+    <div className="space-y-1.5">
+      {headings.length > 0 && (
+        <div className="space-y-1">
+          {headings.map((h, i) => (
+            <motion.div
+              key={i}
+              className="flex items-center gap-1.5"
+              initial={{ opacity: 0, x: -4 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: i * 0.05 }}
+            >
+              <FileText className="w-2.5 h-2.5 text-primary/40 shrink-0" />
+              <span className="text-[10px] text-foreground/70 truncate">{h}</span>
+            </motion.div>
+          ))}
+        </div>
+      )}
+      {firstParagraph && (
+        <div className="text-[10px] text-muted-foreground/50 leading-relaxed line-clamp-3">
+          {firstParagraph}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function WebFetchStream({ input, output, isError, streaming }: ToolUIProps) {
   const parsed = safeParse(input)
 
@@ -27,6 +71,8 @@ export function WebFetchStream({ input, output, isError, streaming }: ToolUIProp
 
   let host = ""
   try { host = new URL(url).hostname } catch {}
+
+  const hasStructuredPreview = output && !isError && (output.includes("#") || output.length > 100)
 
   return (
     <div className="rounded-lg overflow-hidden border border-border/60 bg-[var(--stream-base)]">
@@ -95,11 +141,25 @@ export function WebFetchStream({ input, output, isError, streaming }: ToolUIProp
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
           >
-            <pre className={`px-3 py-2 text-[10px] font-mono whitespace-pre-wrap leading-relaxed ${
-              isError ? 'text-destructive' : 'text-muted-foreground'
-            }`}>
-              {output.slice(0, 3000)}
-            </pre>
+            {hasStructuredPreview ? (
+              <div className="px-3 py-2">
+                <ContentPreview text={output} />
+                <details className="mt-2">
+                  <summary className="text-[9px] text-muted-foreground/40 cursor-pointer hover:text-muted-foreground/60">
+                    raw output
+                  </summary>
+                  <pre className="mt-1 text-[10px] font-mono whitespace-pre-wrap leading-relaxed text-muted-foreground max-h-[120px] overflow-auto">
+                    {output.slice(0, 3000)}
+                  </pre>
+                </details>
+              </div>
+            ) : (
+              <pre className={`px-3 py-2 text-[10px] font-mono whitespace-pre-wrap leading-relaxed ${
+                isError ? 'text-destructive' : 'text-muted-foreground'
+              }`}>
+                {output.slice(0, 3000)}
+              </pre>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

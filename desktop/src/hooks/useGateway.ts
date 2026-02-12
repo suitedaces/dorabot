@@ -29,10 +29,62 @@ const TOOL_PENDING_TEXT: Record<string, string> = {
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected';
 
+// apply a raw stream event to a ChatItem array (works for top-level or subItems)
+function applyStreamEvent(items: ChatItem[], evt: Record<string, unknown>): ChatItem[] {
+  if (evt.type === 'content_block_start') {
+    const cb = evt.content_block as Record<string, unknown>;
+    if (!cb) return items;
+    if (cb.type === 'text') return [...items, { type: 'text', content: '', streaming: true, timestamp: Date.now() }];
+    if (cb.type === 'tool_use') return [...items, { type: 'tool_use', id: (cb.id as string) || '', name: cleanToolName((cb.name as string) || 'unknown'), input: '', streaming: true, timestamp: Date.now() }];
+    if (cb.type === 'thinking') return [...items, { type: 'thinking', content: '', streaming: true, timestamp: Date.now() }];
+  } else if (evt.type === 'content_block_delta') {
+    const delta = evt.delta as Record<string, unknown>;
+    if (!delta) return items;
+    if (delta.type === 'text_delta' && typeof delta.text === 'string') {
+      for (let i = items.length - 1; i >= 0; i--) {
+        const it = items[i];
+        if (it.type === 'text' && it.streaming) {
+          const u = [...items];
+          u[i] = { ...it, content: it.content + (delta.text as string) };
+          return u;
+        }
+      }
+    } else if (delta.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
+      for (let i = items.length - 1; i >= 0; i--) {
+        const it = items[i];
+        if (it.type === 'tool_use' && it.streaming) {
+          const u = [...items];
+          u[i] = { ...it, input: it.input + (delta.partial_json as string) };
+          return u;
+        }
+      }
+    } else if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {
+      for (let i = items.length - 1; i >= 0; i--) {
+        const it = items[i];
+        if (it.type === 'thinking' && it.streaming) {
+          const u = [...items];
+          u[i] = { ...it, content: it.content + (delta.thinking as string) };
+          return u;
+        }
+      }
+    }
+  } else if (evt.type === 'content_block_stop') {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if ('streaming' in it && it.streaming) {
+        const u = [...items];
+        u[i] = { ...it, streaming: false };
+        return u;
+      }
+    }
+  }
+  return items;
+}
+
 export type ChatItem =
   | { type: 'user'; content: string; timestamp: number }
   | { type: 'text'; content: string; streaming?: boolean; timestamp: number }
-  | { type: 'tool_use'; id: string; name: string; input: string; output?: string; imageData?: string; is_error?: boolean; streaming?: boolean; timestamp: number }
+  | { type: 'tool_use'; id: string; name: string; input: string; output?: string; imageData?: string; is_error?: boolean; streaming?: boolean; subItems?: ChatItem[]; timestamp: number }
   | { type: 'thinking'; content: string; streaming?: boolean; timestamp: number }
   | { type: 'result'; cost?: number; timestamp: number }
   | { type: 'error'; content: string; timestamp: number };
@@ -296,79 +348,30 @@ export function useGateway(url = 'wss://localhost:18789') {
       }
 
       case 'agent.stream': {
-        const d = data as { source: string; sessionKey?: string; event: Record<string, unknown>; timestamp: number };
+        const d = data as { source: string; sessionKey?: string; event: Record<string, unknown>; parentToolUseId?: string | null; timestamp: number };
         if (d.sessionKey && d.sessionKey !== activeSessionKeyRef.current) break;
         const evt = d.event;
         if (!evt) break;
+        const parentId = d.parentToolUseId;
 
-        if (evt.type === 'content_block_start') {
-          const cb = evt.content_block as Record<string, unknown>;
-          if (!cb) break;
-          if (cb.type === 'text') {
-            setChatItems(prev => [...prev, { type: 'text', content: '', streaming: true, timestamp: Date.now() }]);
-          } else if (cb.type === 'tool_use') {
-            setChatItems(prev => [...prev, { type: 'tool_use', id: (cb.id as string) || '', name: cleanToolName((cb.name as string) || 'unknown'), input: '', streaming: true, timestamp: Date.now() }]);
-          } else if (cb.type === 'thinking') {
-            setChatItems(prev => [...prev, { type: 'thinking', content: '', streaming: true, timestamp: Date.now() }]);
-          }
-        } else if (evt.type === 'content_block_delta') {
-          const delta = evt.delta as Record<string, unknown>;
-          if (!delta) break;
-          if (delta.type === 'text_delta' && typeof delta.text === 'string') {
-            const text = delta.text;
-            setChatItems(prev => {
-              // find last streaming text item
-              for (let i = prev.length - 1; i >= 0; i--) {
-                const it = prev[i];
-                if (it.type === 'text' && it.streaming) {
-                  const updated = [...prev];
-                  updated[i] = { ...it, content: it.content + text };
-                  return updated;
-                }
-              }
-              return prev;
-            });
-          } else if (delta.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
-            const json = delta.partial_json;
-            setChatItems(prev => {
-              for (let i = prev.length - 1; i >= 0; i--) {
-                const it = prev[i];
-                if (it.type === 'tool_use' && it.streaming) {
-                  const updated = [...prev];
-                  updated[i] = { ...it, input: it.input + json };
-                  return updated;
-                }
-              }
-              return prev;
-            });
-          } else if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {
-            const thinking = delta.thinking;
-            setChatItems(prev => {
-              for (let i = prev.length - 1; i >= 0; i--) {
-                const it = prev[i];
-                if (it.type === 'thinking' && it.streaming) {
-                  const updated = [...prev];
-                  updated[i] = { ...it, content: it.content + thinking };
-                  return updated;
-                }
-              }
-              return prev;
-            });
-          }
-        } else if (evt.type === 'content_block_stop') {
+        if (parentId) {
+          // subagent event — route into parent tool_use's subItems
           setChatItems(prev => {
-            // find last streaming item and mark done
             for (let i = prev.length - 1; i >= 0; i--) {
               const it = prev[i];
-              if ('streaming' in it && it.streaming) {
+              if (it.type === 'tool_use' && it.id === parentId) {
                 const updated = [...prev];
-                updated[i] = { ...it, streaming: false };
+                updated[i] = { ...it, subItems: applyStreamEvent(it.subItems || [], evt) };
                 return updated;
               }
             }
             return prev;
           });
+          break;
         }
+
+        // top-level event
+        setChatItems(prev => applyStreamEvent(prev, evt));
         break;
       }
 
@@ -447,9 +450,28 @@ export function useGateway(url = 'wss://localhost:18789') {
       }
 
       case 'agent.tool_result': {
-        const d = data as { sessionKey?: string; tool_use_id: string; content: string; imageData?: string; is_error?: boolean };
+        const d = data as { sessionKey?: string; tool_use_id: string; content: string; imageData?: string; is_error?: boolean; parentToolUseId?: string | null };
         if (d.sessionKey && d.sessionKey !== activeSessionKeyRef.current) break;
         setChatItems(prev => {
+          // check subItems first if this result belongs to a subagent
+          if (d.parentToolUseId) {
+            for (let i = prev.length - 1; i >= 0; i--) {
+              const it = prev[i];
+              if (it.type === 'tool_use' && it.id === d.parentToolUseId && it.subItems) {
+                for (let j = it.subItems.length - 1; j >= 0; j--) {
+                  const sub = it.subItems[j];
+                  if (sub.type === 'tool_use' && sub.id === d.tool_use_id) {
+                    const updated = [...prev];
+                    const newSubs = [...it.subItems];
+                    newSubs[j] = { ...sub, output: d.content, imageData: d.imageData, is_error: d.is_error, streaming: false };
+                    updated[i] = { ...it, subItems: newSubs };
+                    return updated;
+                  }
+                }
+              }
+            }
+          }
+          // top-level tool result
           let idx = -1;
           for (let i = prev.length - 1; i >= 0; i--) {
             const it = prev[i];

@@ -20,6 +20,7 @@ export type ToolUIProps = {
   imageData?: string // base64 data URI for images
   isError?: boolean
   streaming?: boolean
+  subItems?: unknown[] // subagent streaming items (ChatItem[]), typed as unknown to avoid circular dep
 }
 
 const TOOL_MAP: Record<string, React.ComponentType<ToolUIProps>> = {

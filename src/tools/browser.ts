@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { tool } from '@anthropic-ai/claude-agent-sdk';
-import type { BrowserConfig } from '../browser/manager.js';
+import { getPage, type BrowserConfig } from '../browser/manager.js';
 import {
   browserStatus,
   browserStart,
@@ -456,6 +456,14 @@ export const browserTool = tool(
 
         default:
           return fail(`Unknown action: ${args.action}`);
+      }
+
+      // append current page url so frontend can show it in the address bar
+      if (!result.isError) {
+        try {
+          const page = getPage();
+          if (page) result.text += `\n[page: ${page.url()}]`;
+        } catch {}
       }
 
       const content: any[] = [{ type: 'text' as const, text: result.text }];

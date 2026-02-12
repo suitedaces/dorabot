@@ -740,7 +740,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             const event = m.event as Record<string, unknown>;
             broadcast({
               event: 'agent.stream',
-              data: { source, sessionKey, event, timestamp: Date.now() },
+              data: { source, sessionKey, event, parentToolUseId: m.parent_tool_use_id || null, timestamp: Date.now() },
             });
 
             if (event.type === 'content_block_start') {
@@ -810,7 +810,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             if (!hadStreamEvents) {
               broadcast({
                 event: 'agent.message',
-                data: { source, sessionKey, message: m, timestamp: Date.now() },
+                data: { source, sessionKey, message: m, parentToolUseId: m.parent_tool_use_id || null, timestamp: Date.now() },
               });
             }
             const assistantMsg = m.message as Record<string, unknown>;
@@ -879,6 +879,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                       content: resultText.slice(0, 2000),
                       imageData,
                       is_error: block.is_error || false,
+                      parentToolUseId: (m as any).parent_tool_use_id || null,
                       timestamp: Date.now(),
                     },
                   });

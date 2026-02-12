@@ -227,6 +227,7 @@ function ToolUseItem({ item }: { item: Extract<ChatItem, { type: 'tool_use' }> }
                   imageData={item.imageData}
                   isError={item.is_error}
                   streaming={item.streaming}
+                  subItems={item.subItems}
                 />
               </div>
             )}

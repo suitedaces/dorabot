@@ -9,6 +9,7 @@ import { CronStream } from "./CronStream"
 import { WebFetchStream } from "./WebFetchStream"
 import { TaskStream } from "./TaskStream"
 import { ProgressStream } from "./ProgressStream"
+import { QuestionStream } from "./QuestionStream"
 
 const STREAM_MAP: Record<string, React.ComponentType<ToolUIProps>> = {
   browser: BrowserStream,
@@ -29,6 +30,7 @@ const STREAM_MAP: Record<string, React.ComponentType<ToolUIProps>> = {
   list_reminders: CronStream,
   cancel_reminder: CronStream,
   TodoWrite: ProgressStream,
+  AskUserQuestion: QuestionStream,
 }
 
 export function ToolStreamCard(props: ToolUIProps) {

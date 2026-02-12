@@ -1,7 +1,23 @@
 import { motion, AnimatePresence } from "motion/react"
-import { Bot, Cpu, Zap } from "lucide-react"
+import { Bot, Cpu, Zap, Terminal, FileText, Search, Globe, Brain, Wrench } from "lucide-react"
 import type { ToolUIProps } from "../tool-ui"
 import { safeParse } from "../../lib/safe-parse"
+
+type SubItem = {
+  type: string
+  content?: string
+  id?: string
+  name?: string
+  input?: string
+  output?: string
+  is_error?: boolean
+  streaming?: boolean
+}
+
+const SUB_TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  Bash: Terminal, Read: FileText, Write: FileText, Edit: FileText,
+  Glob: Search, Grep: Search, WebFetch: Globe, WebSearch: Globe,
+}
 
 function BrainPulse() {
   return (
@@ -19,14 +35,77 @@ function BrainPulse() {
   )
 }
 
-export function TaskStream({ input, output, isError, streaming }: ToolUIProps) {
+function SubItemView({ item }: { item: SubItem }) {
+  if (item.type === 'text') {
+    if (!item.content && item.streaming) return null
+    return (
+      <div className="text-[10px] text-foreground/80 whitespace-pre-wrap break-words">
+        {item.content}
+        {item.streaming && (
+          <motion.span
+            className="inline-block w-[5px] h-[11px] bg-primary/60 ml-0.5 align-middle"
+            animate={{ opacity: [1, 0] }}
+            transition={{ duration: 0.5, repeat: Infinity }}
+          />
+        )}
+      </div>
+    )
+  }
+
+  if (item.type === 'thinking') {
+    if (!item.content) return null
+    return (
+      <div className="flex items-start gap-1.5">
+        <Brain className="w-3 h-3 text-muted-foreground/40 mt-0.5 shrink-0" />
+        <div className="text-[9px] text-muted-foreground/50 italic whitespace-pre-wrap break-words line-clamp-3">
+          {item.content?.slice(0, 500)}
+          {item.streaming && "..."}
+        </div>
+      </div>
+    )
+  }
+
+  if (item.type === 'tool_use') {
+    const Icon = SUB_TOOL_ICONS[item.name || ''] || Wrench
+    const detail = (() => {
+      const p = safeParse(item.input || '')
+      return p.command?.split('\n')[0] || p.file_path || p.pattern || p.query || p.description || ''
+    })()
+    const done = !item.streaming && item.output != null
+    return (
+      <div className="flex items-center gap-1.5 text-[9px]">
+        <Icon className={`w-3 h-3 shrink-0 ${item.is_error ? 'text-destructive/70' : done ? 'text-muted-foreground/50' : 'text-primary/50'}`} />
+        <span className="text-muted-foreground/70 font-medium">{item.name}</span>
+        <span className="text-muted-foreground/40 truncate flex-1">{detail}</span>
+        {item.streaming && (
+          <motion.span
+            className="w-1.5 h-1.5 rounded-full bg-primary/50 shrink-0"
+            animate={{ opacity: [0.3, 1, 0.3] }}
+            transition={{ duration: 1, repeat: Infinity }}
+          />
+        )}
+        {done && (
+          <span className={`shrink-0 ${item.is_error ? 'text-destructive/50' : 'text-success/50'}`}>
+            {item.is_error ? '✗' : '✓'}
+          </span>
+        )}
+      </div>
+    )
+  }
+
+  return null
+}
+
+export function TaskStream({ input, output, isError, streaming, subItems }: ToolUIProps) {
   const parsed = safeParse(input)
+  const items = (subItems || []) as SubItem[]
 
   const agentType = parsed.subagent_type || "agent"
   const description = parsed.description || ""
   const agentName = parsed.name || ""
   const bg = parsed.run_in_background
   const done = !streaming && output != null
+  const hasSubContent = items.length > 0
 
   return (
     <div className="rounded-lg overflow-hidden border border-border/60 bg-[var(--stream-base)]">
@@ -56,7 +135,7 @@ export function TaskStream({ input, output, isError, streaming }: ToolUIProps) {
               {description}
             </motion.div>
           )}
-          {streaming && (
+          {streaming && !hasSubContent && (
             <motion.div
               className="flex items-center gap-1 text-[9px] text-primary/60"
               animate={{ opacity: [0.5, 1, 0.5] }}
@@ -81,8 +160,18 @@ export function TaskStream({ input, output, isError, streaming }: ToolUIProps) {
         )}
       </div>
 
+      {/* subagent live stream */}
+      {hasSubContent && (
+        <div className="border-t border-border/20 px-3 py-2 space-y-1.5 max-h-[300px] overflow-auto">
+          {items.map((item, i) => (
+            <SubItemView key={i} item={item} />
+          ))}
+        </div>
+      )}
+
+      {/* final output (shown when done and no subItems rendered it) */}
       <AnimatePresence>
-        {output && (
+        {output && !hasSubContent && (
           <motion.div
             className="border-t border-border/20 max-h-[200px] overflow-auto"
             initial={{ height: 0, opacity: 0 }}

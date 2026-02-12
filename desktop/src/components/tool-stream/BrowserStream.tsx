@@ -15,11 +15,14 @@ export function BrowserStream({ input, output, imageData, isError, streaming }: 
   const parsed = safeParse(input)
 
   const action = parsed.action || ""
-  const url = parsed.url || ""
   const text = parsed.text || parsed.value || ""
   const ref = parsed.ref || ""
   const label = ACTION_LABELS[action] || action
   const done = !streaming && output != null
+
+  // extract page url from output [page: ...] tag, fall back to input url
+  const pageUrlMatch = output?.match(/\[page: (.+)\]/)
+  const url = pageUrlMatch?.[1] || parsed.url || ""
 
   return (
     <div className="rounded-lg overflow-hidden border border-border/60 bg-[var(--stream-mid)]">
@@ -143,7 +146,7 @@ export function BrowserStream({ input, output, imageData, isError, streaming }: 
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
               >
-                {output.slice(0, 2000)}
+                {output.replace(/\n?\[page: .+\]/, '').slice(0, 2000)}
               </motion.pre>
             )}
           </div>
