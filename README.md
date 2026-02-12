@@ -3,7 +3,7 @@
 
   # dorabot
 
-  **A superhuman AI assistant that knows you - running on the subscriptions you already pay for.**
+  **A superhuman AI agent that knows you - running on the subscriptions you already pay for.**
 
   dorabot wraps Claude and ChatGPT in a multi-channel agent harness - WhatsApp, Telegram, browser automation, email, cron, persistent memory, and Mac control - so they can do real work outside the IDE.
 
