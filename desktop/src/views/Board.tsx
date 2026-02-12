@@ -1,0 +1,380 @@
+import { useState, useEffect, useCallback } from 'react';
+import type { useGateway } from '../hooks/useGateway';
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  useDroppable,
+  useDraggable,
+  type DragEndEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Skeleton } from '@/components/ui/skeleton';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
+import { cn } from '@/lib/utils';
+import { Plus, X, Trash2, LayoutGrid, GripVertical } from 'lucide-react';
+
+type BoardTask = {
+  id: string;
+  title: string;
+  description?: string;
+  status: 'proposed' | 'approved' | 'in_progress' | 'done' | 'rejected';
+  priority: 'high' | 'medium' | 'low';
+  source: 'agent' | 'user';
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  result?: string;
+  tags?: string[];
+};
+
+type Props = {
+  gateway: ReturnType<typeof useGateway>;
+};
+
+const COLUMNS: { id: BoardTask['status']; label: string }[] = [
+  { id: 'proposed', label: 'Proposed' },
+  { id: 'approved', label: 'Approved' },
+  { id: 'in_progress', label: 'In Progress' },
+  { id: 'done', label: 'Done' },
+];
+
+const PRIORITY_COLORS: Record<string, string> = {
+  high: 'bg-destructive/15 text-destructive border-destructive/30',
+  medium: 'bg-muted text-muted-foreground',
+  low: 'bg-muted text-muted-foreground',
+};
+
+// ── Droppable Column ──
+
+function KanbanColumn({ id, label, tasks, onDelete }: {
+  id: string;
+  label: string;
+  tasks: BoardTask[];
+  onDelete: (id: string) => void;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn(
+        'flex flex-col min-w-[220px] w-[220px] shrink-0 rounded-lg border border-border bg-secondary/30 transition-colors',
+        isOver && 'border-primary/50 bg-primary/5',
+      )}
+    >
+      <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border shrink-0">
+        <span className="text-[11px] font-semibold truncate">{label}</span>
+        <Badge variant="outline" className="text-[9px] h-4 ml-auto">{tasks.length}</Badge>
+      </div>
+      <ScrollArea className="flex-1 min-h-0">
+        <div className="p-2 space-y-1.5">
+          {tasks.length === 0 && (
+            <div className="text-[10px] text-muted-foreground text-center py-6 opacity-50">
+              drop here
+            </div>
+          )}
+          {tasks.map(task => (
+            <KanbanCard key={task.id} task={task} onDelete={onDelete} />
+          ))}
+        </div>
+      </ScrollArea>
+    </div>
+  );
+}
+
+// ── Draggable Card ──
+
+function KanbanCard({ task, onDelete, overlay }: {
+  task: BoardTask;
+  onDelete: (id: string) => void;
+  overlay?: boolean;
+}) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: task.id,
+    data: task,
+  });
+
+  return (
+    <div
+      ref={overlay ? undefined : setNodeRef}
+      className={cn(
+        'group rounded-md border border-border bg-card p-2 text-xs transition-shadow',
+        isDragging && 'opacity-30',
+        overlay && 'shadow-lg border-primary/50 rotate-2',
+      )}
+    >
+      <div className="flex items-start gap-1">
+        <button
+          {...listeners}
+          {...attributes}
+          className="shrink-0 mt-0.5 cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground"
+        >
+          <GripVertical className="w-3 h-3" />
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="font-medium text-[11px] leading-tight">{task.title}</div>
+          {task.description && (
+            <div className="text-[10px] text-muted-foreground mt-1 line-clamp-2">{task.description}</div>
+          )}
+          {task.result && (
+            <div className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2">Result: {task.result}</div>
+          )}
+          <div className="flex items-center gap-1 mt-1.5 flex-wrap">
+            {task.priority !== 'medium' && (
+              <Badge className={cn('text-[8px] h-3.5 px-1', PRIORITY_COLORS[task.priority])}>
+                {task.priority}
+              </Badge>
+            )}
+            <Badge variant="outline" className="text-[8px] h-3.5 px-1">
+              {task.source}
+            </Badge>
+            {task.tags?.map(tag => (
+              <Badge key={tag} variant="outline" className="text-[8px] h-3.5 px-1">
+                {tag}
+              </Badge>
+            ))}
+          </div>
+        </div>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <button className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
+              <Trash2 className="w-3 h-3" />
+            </button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle className="text-sm">delete "#{task.id} {task.title}"?</AlertDialogTitle>
+              <AlertDialogDescription className="text-xs">this cannot be undone.</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel className="h-7 text-xs">cancel</AlertDialogCancel>
+              <AlertDialogAction className="h-7 text-xs" onClick={() => onDelete(task.id)}>delete</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
+    </div>
+  );
+}
+
+// ── Main Board View ──
+
+export function BoardView({ gateway }: Props) {
+  const [tasks, setTasks] = useState<BoardTask[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [activeTask, setActiveTask] = useState<BoardTask | null>(null);
+  const [newTask, setNewTask] = useState({
+    title: '',
+    description: '',
+    priority: 'medium' as 'high' | 'medium' | 'low',
+    tags: '',
+  });
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+  );
+
+  const loadTasks = useCallback(async () => {
+    if (gateway.connectionState !== 'connected') return;
+    try {
+      const result = await gateway.rpc('board.list');
+      if (Array.isArray(result)) setTasks(result);
+      setLoading(false);
+    } catch (err) {
+      console.error('failed to load board:', err);
+      setLoading(false);
+    }
+  }, [gateway.connectionState, gateway.rpc]);
+
+  useEffect(() => {
+    loadTasks();
+  }, [loadTasks]);
+
+  // re-fetch when agent updates the board
+  useEffect(() => {
+    if (gateway.boardVersion > 0) loadTasks();
+  }, [gateway.boardVersion, loadTasks]);
+
+  const addTask = async () => {
+    try {
+      await gateway.rpc('board.add', {
+        title: newTask.title,
+        description: newTask.description || undefined,
+        priority: newTask.priority,
+        source: 'user',
+        tags: newTask.tags ? newTask.tags.split(',').map(t => t.trim()).filter(Boolean) : undefined,
+      });
+      setNewTask({ title: '', description: '', priority: 'medium', tags: '' });
+      setShowAddForm(false);
+      setTimeout(loadTasks, 100);
+    } catch (err) {
+      console.error('failed to add task:', err);
+    }
+  };
+
+  const deleteTask = async (id: string) => {
+    try {
+      await gateway.rpc('board.delete', { id });
+      setTimeout(loadTasks, 100);
+    } catch (err) {
+      console.error('failed to delete task:', err);
+    }
+  };
+
+  const handleDragStart = (event: DragStartEvent) => {
+    const task = tasks.find(t => t.id === event.active.id);
+    setActiveTask(task || null);
+  };
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    setActiveTask(null);
+    const { active, over } = event;
+    if (!over) return;
+
+    const taskId = active.id as string;
+    const newStatus = over.id as string;
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || task.status === newStatus) return;
+
+    // optimistic update
+    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: newStatus as BoardTask['status'] } : t));
+
+    try {
+      await gateway.rpc('board.move', { id: taskId, status: newStatus });
+      setTimeout(loadTasks, 100);
+    } catch (err) {
+      console.error('failed to move task:', err);
+      loadTasks(); // revert
+    }
+  };
+
+  if (gateway.connectionState !== 'connected') {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
+        <LayoutGrid className="w-6 h-6 opacity-40" />
+        <span className="text-sm">connecting...</span>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="p-4 space-y-3">
+        <Skeleton className="h-8 w-48" />
+        <div className="flex gap-3">
+          {COLUMNS.map(col => <Skeleton key={col.id} className="h-64 w-[220px]" />)}
+        </div>
+      </div>
+    );
+  }
+
+  const tasksByStatus = (status: string) => tasks.filter(t => t.status === status);
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      {/* header */}
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0">
+        <span className="font-semibold text-sm">Board</span>
+        <Badge variant="outline" className="text-[10px]">{tasks.length}</Badge>
+        <Button
+          variant={showAddForm ? 'outline' : 'default'}
+          size="sm"
+          className="ml-auto h-6 text-[11px] px-2"
+          onClick={() => setShowAddForm(!showAddForm)}
+        >
+          {showAddForm ? <><X className="w-3 h-3 mr-1" />cancel</> : <><Plus className="w-3 h-3 mr-1" />new task</>}
+        </Button>
+      </div>
+
+      {/* add form */}
+      {showAddForm && (
+        <div className="px-4 pt-3 shrink-0">
+          <Card className="border-primary/50">
+            <CardContent className="p-3 space-y-2">
+              <div className="space-y-1">
+                <Label className="text-[11px]">title</Label>
+                <Input
+                  value={newTask.title}
+                  onChange={e => setNewTask({ ...newTask, title: e.target.value })}
+                  placeholder="what needs to be done?"
+                  className="h-8 text-xs"
+                  autoFocus
+                  onKeyDown={e => { if (e.key === 'Enter' && newTask.title) addTask(); }}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[11px]">description</Label>
+                <Textarea
+                  value={newTask.description}
+                  onChange={e => setNewTask({ ...newTask, description: e.target.value })}
+                  placeholder="optional details"
+                  rows={2}
+                  className="text-xs"
+                />
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="space-y-1">
+                  <Label className="text-[11px]">priority</Label>
+                  <div className="flex gap-1">
+                    {(['high', 'medium', 'low'] as const).map(p => (
+                      <Button
+                        key={p}
+                        variant={newTask.priority === p ? 'default' : 'outline'}
+                        size="sm"
+                        className="h-6 text-[11px] px-2"
+                        onClick={() => setNewTask({ ...newTask, priority: p })}
+                      >
+                        {p}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-1 flex-1">
+                  <Label className="text-[11px]">tags</Label>
+                  <Input
+                    value={newTask.tags}
+                    onChange={e => setNewTask({ ...newTask, tags: e.target.value })}
+                    placeholder="comma separated"
+                    className="h-8 text-xs"
+                  />
+                </div>
+              </div>
+              <Button size="sm" className="w-full h-7 text-xs" onClick={addTask} disabled={!newTask.title}>
+                add task
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* kanban columns */}
+      <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <div className="flex gap-3 p-4 overflow-x-auto flex-1 min-h-0">
+          {COLUMNS.map(col => (
+            <KanbanColumn
+              key={col.id}
+              id={col.id}
+              label={col.label}
+              tasks={tasksByStatus(col.id)}
+              onDelete={deleteTask}
+            />
+          ))}
+        </div>
+        <DragOverlay>
+          {activeTask && <KanbanCard task={activeTask} onDelete={() => {}} overlay />}
+        </DragOverlay>
+      </DndContext>
+    </div>
+  );
+}

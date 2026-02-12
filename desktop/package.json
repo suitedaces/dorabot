@@ -11,6 +11,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@fortune-sheet/react": "^1.0.4",
     "@types/react-syntax-highlighter": "^15.5.13",
     "jsonrepair": "^3.13.2",
