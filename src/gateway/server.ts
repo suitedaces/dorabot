@@ -36,37 +36,57 @@ import { classifyToolCall, cleanToolName, isToolAllowed, type Tier } from './too
 const DEFAULT_PORT = 18789;
 const DEFAULT_HOST = '127.0.0.1';
 
+// ── Tool status display maps ──────────────────────────────────────────
+// Used to build the live status message shown on Telegram/WhatsApp while the agent works.
+// Output is markdown that gets converted to HTML by markdownToTelegramHtml().
+
 const TOOL_EMOJI: Record<string, string> = {
-  Read: '\ud83d\udcc4', Write: '\ud83d\udcdd', Edit: '\u270f\ufe0f',
-  Glob: '\ud83d\udcc2', Grep: '\ud83d\udd0d', Bash: '\u26a1',
-  WebFetch: '\ud83c\udf10', WebSearch: '\ud83d\udd0e', Task: '\ud83e\udd16',
-  AskUserQuestion: '\ud83d\udcac', TodoWrite: '\ud83d\udcdd',
-  NotebookEdit: '\ud83d\udcd3', message: '\ud83d\udcac',
-  screenshot: '\ud83d\udcf8', browser: '\ud83c\udf10',
-  schedule: '\u23f0', list_schedule: '\u23f0',
-  update_schedule: '\u23f0', cancel_schedule: '\u23f0',
+  Read: '📄', Write: '📝', Edit: '✏️',
+  Glob: '📂', Grep: '🔍', Bash: '⚡',
+  WebFetch: '🌐', WebSearch: '🔎', Task: '🤖',
+  AskUserQuestion: '💬', TodoWrite: '📋',
+  NotebookEdit: '📓', message: '💬',
+  screenshot: '📸', browser: '🌐',
+  schedule: '⏰', list_schedule: '⏰',
+  update_schedule: '⏰', cancel_schedule: '⏰',
+  goals_view: '🎯', goals_add: '🎯', goals_update: '🎯', goals_propose: '🎯',
 };
 
 const TOOL_LABEL: Record<string, string> = {
-  Read: 'read', Write: 'wrote', Edit: 'edited',
-  Glob: 'searched files', Grep: 'searched', Bash: 'ran',
-  WebFetch: 'fetched', WebSearch: 'searched web', Task: 'ran task',
-  AskUserQuestion: 'asked', TodoWrite: 'updated tasks',
-  NotebookEdit: 'edited notebook', message: 'replied',
-  screenshot: 'took screenshot', browser: 'browsed',
-  schedule: 'scheduled', list_schedule: 'listed schedule',
-  update_schedule: 'updated schedule', cancel_schedule: 'cancelled',
+  Read: 'Read', Write: 'Wrote', Edit: 'Edited',
+  Glob: 'Searched files', Grep: 'Searched', Bash: 'Ran',
+  WebFetch: 'Fetched', WebSearch: 'Searched web', Task: 'Ran task',
+  AskUserQuestion: 'Asked a question', TodoWrite: 'Updated tasks',
+  NotebookEdit: 'Edited notebook', message: 'Replied',
+  screenshot: 'Took screenshot', browser: 'Browsed',
+  schedule: 'Scheduled', list_schedule: 'Listed schedule',
+  update_schedule: 'Updated schedule', cancel_schedule: 'Cancelled schedule',
+  goals_view: 'Checked goals', goals_add: 'Added goal', goals_update: 'Updated goal', goals_propose: 'Proposed goal',
 };
 
 const TOOL_ACTIVE_LABEL: Record<string, string> = {
-  Read: 'reading', Write: 'writing', Edit: 'editing',
-  Glob: 'searching files', Grep: 'searching', Bash: 'running',
-  WebFetch: 'fetching', WebSearch: 'searching web', Task: 'running task',
-  AskUserQuestion: 'asking', TodoWrite: 'updating tasks',
-  NotebookEdit: 'editing notebook', message: 'replying',
-  screenshot: 'taking screenshot', browser: 'browsing',
-  schedule: 'scheduling', list_schedule: 'listing schedule',
-  update_schedule: 'updating schedule', cancel_schedule: 'cancelling',
+  Read: 'Reading', Write: 'Writing', Edit: 'Editing',
+  Glob: 'Searching files', Grep: 'Searching', Bash: 'Running',
+  WebFetch: 'Fetching', WebSearch: 'Searching web', Task: 'Running task',
+  AskUserQuestion: 'Asking', TodoWrite: 'Updating tasks',
+  NotebookEdit: 'Editing notebook', message: 'Replying',
+  screenshot: 'Taking screenshot', browser: 'Browsing',
+  schedule: 'Scheduling', list_schedule: 'Listing schedule',
+  update_schedule: 'Updating schedule', cancel_schedule: 'Cancelling schedule',
+  goals_view: 'Checking goals', goals_add: 'Adding goal', goals_update: 'Updating goal', goals_propose: 'Proposing goal',
+};
+
+// Plural labels when multiple consecutive same-tool calls are grouped
+const TOOL_PLURAL: Record<string, (n: number) => string> = {
+  Read: (n) => `Read ${n} files`,
+  Write: (n) => `Wrote ${n} files`,
+  Edit: (n) => `Edited ${n} files`,
+  Grep: (n) => `Ran ${n} searches`,
+  Bash: (n) => `Ran ${n} commands`,
+  Task: (n) => `Ran ${n} sub-tasks`,
+  WebFetch: (n) => `Fetched ${n} pages`,
+  WebSearch: (n) => `Ran ${n} web searches`,
+  browser: (n) => `Performed ${n} browser actions`,
 };
 
 function shortPath(p: string): string {
@@ -86,42 +106,107 @@ function extractToolDetail(name: string, input: Record<string, unknown>): string
       const p = input.path ? shortPath(String(input.path)) : '';
       return p ? `"${pat}" in ${p}` : `"${pat}"`;
     }
-    case 'Bash': return String(input.command || '').split('\n')[0].slice(0, 40);
+    case 'Bash': return String(input.command || '').split('\n')[0].slice(0, 50);
     case 'WebFetch': {
       try { return new URL(String(input.url || '')).hostname; } catch { return ''; }
     }
-    case 'WebSearch': return `"${String(input.query || '').slice(0, 35)}"`;
-    case 'Task': return String(input.description || '').slice(0, 30);
-    case 'message': return 'replying';
+    case 'WebSearch': return String(input.query || '').slice(0, 40);
+    case 'Task': return String(input.description || '').slice(0, 40);
+    case 'message': return '';
     case 'browser': return String(input.action || '');
+    case 'screenshot': return '';
     default: return '';
   }
 }
 
 type ToolEntry = { name: string; detail: string };
+type ToolGroup = { name: string; entries: ToolEntry[] };
 
+/** Group consecutive tools with the same name */
+function groupConsecutiveTools(entries: ToolEntry[]): ToolGroup[] {
+  const groups: ToolGroup[] = [];
+  for (const entry of entries) {
+    const last = groups[groups.length - 1];
+    if (last && last.name === entry.name) {
+      last.entries.push(entry);
+    } else {
+      groups.push({ name: entry.name, entries: [entry] });
+    }
+  }
+  return groups;
+}
+
+/** Wrap detail text in backticks for inline code rendering, stripping any existing backticks */
+function fmtDetail(detail: string): string {
+  if (!detail) return '';
+  const clean = detail.replace(/`/g, "'");
+  return ` \`${clean}\``;
+}
+
+/** Format a group of completed tool calls into a single status line */
+function formatCompletedGroup(g: ToolGroup): string {
+  const emoji = TOOL_EMOJI[g.name] || '✓';
+
+  if (g.name === 'message') return `✓ 💬 Replied`;
+
+  if (g.entries.length === 1) {
+    const label = TOOL_LABEL[g.name] || g.name;
+    return `✓ ${emoji} ${label}${fmtDetail(g.entries[0].detail)}`;
+  }
+
+  // Multiple consecutive calls — use plural summary
+  const count = g.entries.length;
+  const pluralFn = TOOL_PLURAL[g.name];
+  const text = pluralFn ? pluralFn(count) : `${TOOL_LABEL[g.name] || g.name} ×${count}`;
+  return `✓ ${emoji} ${text}`;
+}
+
+/**
+ * Build a user-friendly status message shown on channels while the agent works.
+ *
+ * Features:
+ * - Groups consecutive same-tool calls (e.g. "Read 3 files" instead of 3 lines)
+ * - Collapses older steps when there are many ("...5 earlier steps")
+ * - Uses markdown formatting: `code` for file paths/commands, _italic_ for collapsed hint
+ * - Separates completed steps from the active step visually
+ */
 function buildToolStatusText(completed: ToolEntry[], current: ToolEntry | null): string {
   const lines: string[] = [];
-  for (const t of completed) {
-    if (t.name === 'message') {
-      lines.push(`\u2705 \ud83d\udcac replied`);
-    } else {
-      const emoji = TOOL_EMOJI[t.name] || '\u2705';
-      const label = TOOL_LABEL[t.name] || t.name;
-      const text = t.detail ? `${label} ${t.detail}` : label;
-      lines.push(`\u2705 ${emoji} ${text}`);
-    }
+
+  const groups = groupConsecutiveTools(completed);
+
+  // Collapse older groups if there are many — keep last 4 visible
+  const MAX_VISIBLE = 4;
+  let visibleGroups = groups;
+  let hiddenSteps = 0;
+
+  if (groups.length > MAX_VISIBLE) {
+    const hidden = groups.slice(0, groups.length - MAX_VISIBLE);
+    hiddenSteps = hidden.reduce((sum, g) => sum + g.entries.length, 0);
+    visibleGroups = groups.slice(groups.length - MAX_VISIBLE);
   }
+
+  if (hiddenSteps > 0) {
+    lines.push(`_...${hiddenSteps} earlier step${hiddenSteps === 1 ? '' : 's'}_`);
+  }
+
+  for (const g of visibleGroups) {
+    lines.push(formatCompletedGroup(g));
+  }
+
   if (current) {
+    // Visual separator between completed and active
+    if (lines.length > 0) lines.push('');
+
     if (current.name === 'message') {
-      lines.push(`\ud83d\udcac replying...`);
+      lines.push(`⏳ 💬 Replying...`);
     } else {
-      const emoji = TOOL_EMOJI[current.name] || '\u23f3';
+      const emoji = TOOL_EMOJI[current.name] || '⏳';
       const label = TOOL_ACTIVE_LABEL[current.name] || current.name;
-      const text = current.detail ? `${label} ${current.detail}` : `${label}...`;
-      lines.push(`\u23f3 ${emoji} ${text}`);
+      lines.push(`⏳ ${emoji} ${label}${fmtDetail(current.detail)}...`);
     }
   }
+
   return lines.join('\n');
 }
 
