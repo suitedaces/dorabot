@@ -1,20 +1,17 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useGateway } from './hooks/useGateway';
 import { useTabs, isChatTab } from './hooks/useTabs';
-import type { TabType } from './hooks/useTabs';
+import type { Tab, TabType } from './hooks/useTabs';
+import { useLayout } from './hooks/useLayout';
+import type { GroupId } from './hooks/useLayout';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
-import { TabBar } from './components/TabBar';
-import { ChatView } from './views/Chat';
-import { ChannelView } from './views/Channel';
-import { Automations } from './components/Automations';
+import { EditorGroupPanel } from './components/EditorGroupPanel';
+import { TabDragOverlay } from './components/TabBar';
 import { FileExplorer } from './components/FileExplorer';
 import { Progress } from './components/Progress';
-import { FileViewer } from './components/FileViewer';
-import { SettingsView } from './views/Settings';
-import { SoulView } from './views/Soul';
-import { SkillsView } from './views/Skills';
-import { GoalsView } from './views/Goals';
 import { OnboardingOverlay } from './components/Onboarding';
+import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core';
+import { cn } from '@/lib/utils';
 import { Toaster, toast } from 'sonner';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
@@ -45,8 +42,14 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const onboardingCheckedRef = useRef(false);
   const gw = useGateway();
-  const tabState = useTabs(gw);
+  const layout = useLayout();
+  const tabState = useTabs(gw, layout);
   const [starCount, setStarCount] = useState<number | null>(null);
+  const [draggingTab, setDraggingTab] = useState<Tab | null>(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+  );
 
   useEffect(() => {
     const fetchStars = () => {
@@ -90,7 +93,7 @@ export default function App() {
     return gw.sessions.filter(s => (s.channel || 'desktop') === sessionFilter);
   }, [gw.sessions, sessionFilter]);
 
-  const handleViewSession = (sessionId: string, channel?: string, chatId?: string, chatType?: string) => {
+  const handleViewSession = useCallback((sessionId: string, channel?: string, chatId?: string, chatType?: string) => {
     const ch = channel || 'desktop';
     const ct = chatType || 'dm';
     const cid = chatId || 'default';
@@ -105,15 +108,13 @@ export default function App() {
       channel: ch,
       label,
     });
-  };
+  }, [gw.sessions, tabState]);
 
-  const handleNavClick = (navId: TabType) => {
+  const handleNavClick = useCallback((navId: TabType) => {
     if (navId === 'chat') {
-      // If active tab is already a chat tab, create a new one
       if (tabState.activeTab && isChatTab(tabState.activeTab)) {
         tabState.newChatTab();
       } else {
-        // Focus existing chat tab or create new one
         const existingChat = tabState.tabs.find(t => isChatTab(t));
         if (existingChat) {
           tabState.focusTab(existingChat.id);
@@ -125,11 +126,9 @@ export default function App() {
       tabState.openViewTab(navId, NAV_ITEMS.find(n => n.id === navId)?.label || navId);
     }
     setSelectedFile(null);
-  };
+  }, [tabState]);
 
   // --- Keyboard shortcuts ---
-  const handleNavClickStable = useCallback((navId: TabType) => handleNavClick(navId), [tabState, gw.sessions]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const shortcutActions = useMemo(() => ({
     newTab: () => tabState.newChatTab(),
     closeTab: () => tabState.closeTab(tabState.activeTabId),
@@ -137,52 +136,123 @@ export default function App() {
     prevTab: () => tabState.prevTab(),
     focusTabByIndex: (i: number) => tabState.focusTabByIndex(i),
     toggleFiles: () => setShowFiles(f => !f),
-    openSettings: () => handleNavClickStable('settings'),
+    openSettings: () => handleNavClick('settings'),
     focusInput: () => {
       const ta = document.querySelector<HTMLTextAreaElement>('.chat-input-area textarea');
       ta?.focus();
     },
     abortAgent: () => gw.abortAgent(),
-  }), [tabState, gw, handleNavClickStable]);
+    splitHorizontal: () => {
+      const prevMode = layout.mode;
+      layout.splitHorizontal();
+      // Create a new tab in the newly created group
+      if (prevMode === 'single') {
+        setTimeout(() => tabState.newChatTab('g1'), 0);
+      } else if (prevMode === '2-row') {
+        // 2-row → 2x2: g1 and g3 are new
+        setTimeout(() => {
+          tabState.newChatTab('g1');
+          tabState.newChatTab('g3');
+        }, 0);
+      }
+    },
+    splitVertical: () => {
+      const prevMode = layout.mode;
+      layout.splitVertical();
+      if (prevMode === 'single') {
+        setTimeout(() => tabState.newChatTab('g1'), 0);
+      } else if (prevMode === '2-col') {
+        // 2-col → 2x2: g2 and g3 are new
+        setTimeout(() => {
+          tabState.newChatTab('g2');
+          tabState.newChatTab('g3');
+        }, 0);
+      }
+    },
+    splitGrid: () => layout.splitGrid(),
+    resetLayout: () => layout.resetToSingle(),
+    focusGroupLeft: () => layout.focusGroupDirection('left'),
+    focusGroupRight: () => layout.focusGroupDirection('right'),
+    focusGroupUp: () => layout.focusGroupDirection('up'),
+    focusGroupDown: () => layout.focusGroupDirection('down'),
+  }), [tabState, gw, handleNavClick, layout]);
 
   useKeyboardShortcuts(shortcutActions);
 
-  const renderActiveTab = () => {
-    if (selectedFile) {
-      return <FileViewer filePath={selectedFile} rpc={gw.rpc} onClose={() => setSelectedFile(null)} />;
+  // --- Drag and drop ---
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    const tabId = event.active.data.current?.tabId as string | undefined;
+    if (tabId) {
+      const tab = tabState.tabs.find(t => t.id === tabId);
+      if (tab) setDraggingTab(tab);
     }
+  }, [tabState.tabs]);
 
-    const tab = tabState.activeTab;
-    if (!tab) return null;
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    setDraggingTab(null);
+    const { active, over } = event;
+    if (!over) return;
 
-    switch (tab.type) {
-      case 'chat': {
-        const ss = gw.sessionStates[tab.sessionKey] || { chatItems: [], agentStatus: 'idle', pendingQuestion: null };
-        return (
-          <ChatView
-            gateway={gw}
-            chatItems={ss.chatItems}
-            agentStatus={ss.agentStatus}
-            pendingQuestion={ss.pendingQuestion}
-            streamingQuestion={gw.streamingQuestion}
-            onNavigateSettings={() => handleNavClick('settings')}
-          />
-        );
+    const tabId = active.data.current?.tabId as string;
+    const sourceGroupId = active.data.current?.sourceGroupId as GroupId | undefined;
+    if (!tabId) return;
+
+    const overId = over.id as string;
+
+    // Dropped on a group's tab bar — move tab to that group
+    if (overId.startsWith('group-drop:')) {
+      const targetGroupId = over.data.current?.groupId as GroupId;
+      if (sourceGroupId && targetGroupId && sourceGroupId !== targetGroupId) {
+        layout.moveTabToGroup(tabId, sourceGroupId, targetGroupId);
       }
-      case 'channels':
-        return <ChannelView channel={selectedChannel} gateway={gw} onViewSession={handleViewSession} onSwitchChannel={setSelectedChannel} />;
-      case 'goals':
-        return <GoalsView gateway={gw} />;
-      case 'automation':
-        return <Automations gateway={gw} />;
-      case 'skills':
-        return <SkillsView gateway={gw} />;
-      case 'memory':
-        return <SoulView gateway={gw} onSetupChat={(prompt) => { gw.sendMessage(prompt); handleNavClick('chat'); }} />;
-      case 'settings':
-        return <SettingsView gateway={gw} />;
+      return;
     }
-  };
+
+    // Dropped on a panel drop zone — split or move
+    if (overId.startsWith('panel-split:')) {
+      const targetGroupId = over.data.current?.panelGroupId as GroupId;
+      const zone = over.data.current?.splitZone as string;
+      if (!sourceGroupId || !targetGroupId || !zone) return;
+
+      // Center zone = move tab to this group (no split)
+      if (zone === 'center') {
+        if (sourceGroupId !== targetGroupId) {
+          layout.moveTabToGroup(tabId, sourceGroupId, targetGroupId);
+        }
+        return;
+      }
+
+      // Edge zones = split in that direction, move tab to new group
+      if (zone === 'left' || zone === 'right') {
+        layout.splitHorizontal();
+        // After split, determine which group the tab should end up in
+        // splitHorizontal: single→2-col (g0,g1), 2-row→2x2 (g0,g1,g2,g3)
+        const newGroupId = layout.mode === 'single'
+          ? (zone === 'right' ? 'g1' : 'g0') as GroupId
+          : layout.mode === '2-row'
+            ? (targetGroupId === 'g0'
+              ? (zone === 'right' ? 'g1' : 'g0')
+              : (zone === 'right' ? 'g3' : 'g2')) as GroupId
+            : targetGroupId; // already 2-col or 2x2, can't split further
+        if (newGroupId !== sourceGroupId) {
+          setTimeout(() => layout.moveTabToGroup(tabId, sourceGroupId, newGroupId), 0);
+        }
+      } else {
+        layout.splitVertical();
+        const newGroupId = layout.mode === 'single'
+          ? (zone === 'bottom' ? 'g1' : 'g0') as GroupId
+          : layout.mode === '2-col'
+            ? (targetGroupId === 'g0'
+              ? (zone === 'bottom' ? 'g2' : 'g0')
+              : (zone === 'bottom' ? 'g3' : 'g1')) as GroupId
+            : targetGroupId;
+        if (newGroupId !== sourceGroupId) {
+          setTimeout(() => layout.moveTabToGroup(tabId, sourceGroupId, newGroupId), 0);
+        }
+      }
+      return;
+    }
+  }, [layout, tabState]);
 
   const channelIcon = (ch?: string) => {
     if (ch === 'whatsapp') return <img src="/whatsapp.png" className="w-3 h-3" alt="W" />;
@@ -190,7 +260,6 @@ export default function App() {
     return <MessageSquare className="w-3 h-3 opacity-50" />;
   };
 
-  // Determine which nav item is "active" based on the current tab type
   const activeNavId = tabState.activeTab?.type || 'chat';
 
   const statusDotColor = gw.connectionState === 'connected'
@@ -199,10 +268,129 @@ export default function App() {
     ? 'bg-warning'
     : 'bg-destructive';
 
-  // Get active tab's session state for status bar
   const activeSessionState = tabState.activeTab && isChatTab(tabState.activeTab)
     ? gw.sessionStates[tabState.activeTab.sessionKey]
     : null;
+
+  // Shared props for EditorGroupPanel
+  const groupPanelProps = useCallback((groupId: GroupId) => ({
+    tabs: tabState.tabs,
+    isDragging: !!draggingTab,
+    gateway: gw,
+    tabState,
+    selectedFile,
+    selectedChannel,
+    onFocusGroup: () => layout.focusGroup(groupId),
+    onNavigateSettings: () => handleNavClick('settings'),
+    onViewSession: handleViewSession,
+    onSwitchChannel: setSelectedChannel,
+    onClearSelectedFile: () => setSelectedFile(null),
+    onSetupChat: (prompt: string) => gw.sendMessage(prompt),
+    onNavClick: (navId: string) => handleNavClick(navId as TabType),
+  }), [tabState, gw, selectedFile, selectedChannel, layout, handleNavClick, handleViewSession, draggingTab]);
+
+  const renderLayout = () => {
+    const { visibleGroups, mode, activeGroupId } = layout;
+
+    if (mode === 'single') {
+      return (
+        <EditorGroupPanel
+          group={visibleGroups[0]}
+          isActive={true}
+          {...groupPanelProps(visibleGroups[0].id)}
+        />
+      );
+    }
+
+    if (mode === '2-col') {
+      return (
+        <ResizablePanelGroup orientation="horizontal" className="h-full">
+          <ResizablePanel defaultSize="50%" minSize="20%">
+            <EditorGroupPanel
+              group={visibleGroups[0]}
+              isActive={activeGroupId === visibleGroups[0].id}
+              {...groupPanelProps(visibleGroups[0].id)}
+            />
+          </ResizablePanel>
+          <ResizableHandle withHandle />
+          <ResizablePanel defaultSize="50%" minSize="20%">
+            <EditorGroupPanel
+              group={visibleGroups[1]}
+              isActive={activeGroupId === visibleGroups[1].id}
+              {...groupPanelProps(visibleGroups[1].id)}
+            />
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      );
+    }
+
+    if (mode === '2-row') {
+      return (
+        <ResizablePanelGroup orientation="vertical" className="h-full">
+          <ResizablePanel defaultSize="50%" minSize="20%">
+            <EditorGroupPanel
+              group={visibleGroups[0]}
+              isActive={activeGroupId === visibleGroups[0].id}
+              {...groupPanelProps(visibleGroups[0].id)}
+            />
+          </ResizablePanel>
+          <ResizableHandle withHandle />
+          <ResizablePanel defaultSize="50%" minSize="20%">
+            <EditorGroupPanel
+              group={visibleGroups[1]}
+              isActive={activeGroupId === visibleGroups[1].id}
+              {...groupPanelProps(visibleGroups[1].id)}
+            />
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      );
+    }
+
+    // 2x2
+    return (
+      <ResizablePanelGroup orientation="horizontal" className="h-full">
+        <ResizablePanel defaultSize="50%" minSize="20%">
+          <ResizablePanelGroup orientation="vertical">
+            <ResizablePanel defaultSize="50%" minSize="20%">
+              <EditorGroupPanel
+                group={visibleGroups[0]}
+                isActive={activeGroupId === visibleGroups[0].id}
+                {...groupPanelProps(visibleGroups[0].id)}
+              />
+            </ResizablePanel>
+            <ResizableHandle withHandle />
+            <ResizablePanel defaultSize="50%" minSize="20%">
+              <EditorGroupPanel
+                group={visibleGroups[2]}
+                isActive={activeGroupId === visibleGroups[2].id}
+                {...groupPanelProps(visibleGroups[2].id)}
+              />
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        </ResizablePanel>
+        <ResizableHandle withHandle />
+        <ResizablePanel defaultSize="50%" minSize="20%">
+          <ResizablePanelGroup orientation="vertical">
+            <ResizablePanel defaultSize="50%" minSize="20%">
+              <EditorGroupPanel
+                group={visibleGroups[1]}
+                isActive={activeGroupId === visibleGroups[1].id}
+                {...groupPanelProps(visibleGroups[1].id)}
+              />
+            </ResizablePanel>
+            <ResizableHandle withHandle />
+            <ResizablePanel defaultSize="50%" minSize="20%">
+              <EditorGroupPanel
+                group={visibleGroups[3]}
+                isActive={activeGroupId === visibleGroups[3].id}
+                {...groupPanelProps(visibleGroups[3].id)}
+              />
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        </ResizablePanel>
+      </ResizablePanelGroup>
+    );
+  };
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -304,7 +492,6 @@ export default function App() {
                 </div>
                 <ScrollArea className="flex-1 min-h-0 px-2 pb-2">
                   {filteredSessions.slice(0, 30).map(s => {
-                    // Highlight if this session is the active chat tab's session
                     const isActive = tabState.activeTab && isChatTab(tabState.activeTab) && tabState.activeTab.sessionId === s.id;
                     return (
                       <button
@@ -354,27 +541,20 @@ export default function App() {
 
         <ResizableHandle withHandle />
 
-        {/* main content */}
-        <ResizablePanel defaultSize={showFiles ? "55%" : "85%"} minSize="30%" className="overflow-hidden min-w-0">
-          <div className="flex flex-col h-full min-h-0 min-w-0">
-            {/* tab bar */}
-            <TabBar
-              tabs={tabState.tabs}
-              activeTabId={tabState.activeTabId}
-              sessionStates={gw.sessionStates}
-              onFocusTab={tabState.focusTab}
-              onCloseTab={tabState.closeTab}
-              onNewChat={tabState.newChatTab}
-            />
-            {/* active tab content */}
-            <div className="flex-1 min-h-0 min-w-0">
-              {renderActiveTab()}
+        {/* main content — layout-aware, wrapped in DndContext */}
+        <ResizablePanel defaultSize={layout.isMultiPane ? "85%" : (showFiles ? "55%" : "85%")} minSize="30%" className="overflow-hidden min-w-0">
+          <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+            <div className="relative h-full">
+              {renderLayout()}
             </div>
-          </div>
+            <DragOverlay dropAnimation={null}>
+              {draggingTab && <TabDragOverlay tab={draggingTab} />}
+            </DragOverlay>
+          </DndContext>
         </ResizablePanel>
 
-        {/* file explorer */}
-        {showFiles && (
+        {/* file explorer — only in single-pane mode */}
+        {showFiles && !layout.isMultiPane && (
           <>
             <ResizableHandle withHandle />
             <ResizablePanel defaultSize="30%" minSize="15%" maxSize="45%" className="overflow-hidden flex flex-col">

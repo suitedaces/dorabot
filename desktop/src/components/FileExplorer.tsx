@@ -23,6 +23,11 @@ type Props = {
   connected: boolean;
   onFileClick?: (filePath: string) => void;
   onFileChange?: (listener: (path: string) => void) => () => void;
+  // Controlled mode: sync viewRoot/expanded/selectedPath to external state
+  initialViewRoot?: string;
+  initialExpanded?: string[];
+  initialSelectedPath?: string | null;
+  onStateChange?: (state: { viewRoot: string; expanded: string[]; selectedPath: string | null }) => void;
 };
 
 function shortenPath(p: string): string {
@@ -54,12 +59,19 @@ function buildCrumbs(root: string, current: string): { label: string; path: stri
   return crumbs;
 }
 
-export function FileExplorer({ rpc, connected, onFileClick, onFileChange }: Props) {
+export function FileExplorer({ rpc, connected, onFileClick, onFileChange, initialViewRoot, initialExpanded, initialSelectedPath, onStateChange }: Props) {
   const [homeCwd, setHomeCwd] = useState('');
-  const [viewRoot, setViewRoot] = useState('');
+  const [viewRoot, setViewRoot] = useState(initialViewRoot || '');
   const [dirs, setDirs] = useState<Map<string, DirState>>(new Map());
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set(initialExpanded || []));
+  const [selectedPath, setSelectedPath] = useState<string | null>(initialSelectedPath ?? null);
+
+  // Report state changes to parent for per-tab persistence
+  useEffect(() => {
+    if (onStateChange && viewRoot) {
+      onStateChange({ viewRoot, expanded: Array.from(expanded), selectedPath });
+    }
+  }, [viewRoot, expanded, selectedPath]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadDir = useCallback(async (path: string) => {
     setDirs(prev => {
@@ -92,6 +104,9 @@ export function FileExplorer({ rpc, connected, onFileClick, onFileChange }: Prop
         if (!viewRoot) {
           setViewRoot(c);
           loadDir(c);
+        } else if (!dirs.has(viewRoot)) {
+          // initialViewRoot was set but dirs not loaded yet
+          loadDir(viewRoot);
         }
       }
     }).catch(() => {});

@@ -10,6 +10,14 @@ type ShortcutActions = {
   openSettings: () => void;
   focusInput: () => void;
   abortAgent: () => void;
+  splitHorizontal: () => void;
+  splitVertical: () => void;
+  splitGrid: () => void;
+  resetLayout: () => void;
+  focusGroupLeft: () => void;
+  focusGroupRight: () => void;
+  focusGroupUp: () => void;
+  focusGroupDown: () => void;
 };
 
 export function useKeyboardShortcuts(actions: ShortcutActions) {
@@ -57,7 +65,7 @@ export function useKeyboardShortcuts(actions: ShortcutActions) {
       }
 
       // Cmd+1-9 — jump to tab by position
-      if (!e.shiftKey && e.key >= '1' && e.key <= '9') {
+      if (!e.shiftKey && !e.altKey && e.key >= '1' && e.key <= '9') {
         e.preventDefault();
         actions.focusTabByIndex(parseInt(e.key) - 1);
         return;
@@ -82,6 +90,51 @@ export function useKeyboardShortcuts(actions: ShortcutActions) {
         e.preventDefault();
         actions.focusInput();
         return;
+      }
+
+      // Cmd+D — split right (side by side)
+      if (e.key === 'd' && !e.shiftKey) {
+        e.preventDefault();
+        actions.splitHorizontal();
+        return;
+      }
+
+      // Cmd+Shift+D — split down (stacked)
+      if (e.key === 'D' && e.shiftKey) {
+        e.preventDefault();
+        actions.splitVertical();
+        return;
+      }
+
+      // Cmd+Shift+E — reset to single pane (merge all groups)
+      if (e.key === 'E' && e.shiftKey) {
+        e.preventDefault();
+        actions.resetLayout();
+        return;
+      }
+
+      // Cmd+Shift+Arrow — navigate between groups
+      if (e.shiftKey && !e.altKey) {
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          actions.focusGroupLeft();
+          return;
+        }
+        if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          actions.focusGroupRight();
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          actions.focusGroupUp();
+          return;
+        }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          actions.focusGroupDown();
+          return;
+        }
       }
     };
 
