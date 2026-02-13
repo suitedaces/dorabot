@@ -1,4 +1,5 @@
-import { RRule } from 'rrule';
+import rrule from 'rrule';
+const { RRule } = rrule;
 import type { Config } from '../config.js';
 import { runAgent } from '../agent.js';
 import { parseDurationMs } from '../heartbeat/runner.js';
