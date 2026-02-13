@@ -16,7 +16,7 @@ import { SessionManager } from '../session/manager.js';
 import { streamAgent, type AgentResult } from '../agent.js';
 import type { RunHandle } from '../providers/types.js';
 import { startHeartbeatRunner, type HeartbeatRunner } from '../heartbeat/runner.js';
-import { startCronRunner, loadCronJobs, saveCronJobs, type CronRunner } from '../cron/scheduler.js';
+import { startScheduler, loadCalendarItems, migrateCronToCalendar, type SchedulerRunner } from '../calendar/scheduler.js';
 import { checkSkillEligibility, loadAllSkills, findSkillByName } from '../skills/loader.js';
 import type { InboundMessage } from '../channels/types.js';
 import { getAllChannelStatuses } from '../channels/index.js';
@@ -24,7 +24,7 @@ import { loginWhatsApp, logoutWhatsApp, isWhatsAppLinked } from '../channels/wha
 import { getDefaultAuthDir } from '../channels/whatsapp/session.js';
 import { validateTelegramToken } from '../channels/telegram/bot.js';
 import { getChannelHandler } from '../tools/messaging.js';
-import { setCronRunner } from '../tools/index.js';
+import { setScheduler } from '../tools/index.js';
 import { loadGoals, saveGoals, type GoalTask } from '../tools/goals.js';
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
 import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey } from '../providers/claude.js';
@@ -43,8 +43,8 @@ const TOOL_EMOJI: Record<string, string> = {
   AskUserQuestion: '\ud83d\udcac', TodoWrite: '\ud83d\udcdd',
   NotebookEdit: '\ud83d\udcd3', message: '\ud83d\udcac',
   screenshot: '\ud83d\udcf8', browser: '\ud83c\udf10',
-  schedule_reminder: '\u23f0', schedule_recurring: '\u23f0',
-  schedule_cron: '\u23f0', list_reminders: '\u23f0', cancel_reminder: '\u23f0',
+  schedule: '\u23f0', list_schedule: '\u23f0',
+  update_schedule: '\u23f0', cancel_schedule: '\u23f0',
 };
 
 const TOOL_LABEL: Record<string, string> = {
@@ -54,9 +54,8 @@ const TOOL_LABEL: Record<string, string> = {
   AskUserQuestion: 'asked', TodoWrite: 'updated tasks',
   NotebookEdit: 'edited notebook', message: 'replied',
   screenshot: 'took screenshot', browser: 'browsed',
-  schedule_reminder: 'scheduled', schedule_recurring: 'scheduled',
-  schedule_cron: 'scheduled', list_reminders: 'listed reminders',
-  cancel_reminder: 'cancelled reminder',
+  schedule: 'scheduled', list_schedule: 'listed schedule',
+  update_schedule: 'updated schedule', cancel_schedule: 'cancelled',
 };
 
 const TOOL_ACTIVE_LABEL: Record<string, string> = {
@@ -66,9 +65,8 @@ const TOOL_ACTIVE_LABEL: Record<string, string> = {
   AskUserQuestion: 'asking', TodoWrite: 'updating tasks',
   NotebookEdit: 'editing notebook', message: 'replying',
   screenshot: 'taking screenshot', browser: 'browsing',
-  schedule_reminder: 'scheduling', schedule_recurring: 'scheduling',
-  schedule_cron: 'scheduling', list_reminders: 'listing reminders',
-  cancel_reminder: 'cancelling reminder',
+  schedule: 'scheduling', list_schedule: 'listing schedule',
+  update_schedule: 'updating schedule', cancel_schedule: 'cancelling',
 };
 
 function shortPath(p: string): string {
@@ -139,7 +137,7 @@ export type Gateway = {
   sessionRegistry: SessionRegistry;
   channelManager: ChannelManager;
   heartbeatRunner: HeartbeatRunner | null;
-  cronRunner: CronRunner | null;
+  scheduler: SchedulerRunner | null;
   context: GatewayContext;
 };
 
@@ -564,17 +562,17 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     });
   }
 
-  // cron
-  let cronRunner: CronRunner | null = null;
-  if (config.cron?.enabled !== false) {
-    cronRunner = startCronRunner({
+  // calendar scheduler
+  let scheduler: SchedulerRunner | null = null;
+  if (config.calendar?.enabled !== false && config.cron?.enabled !== false) {
+    migrateCronToCalendar();
+    scheduler = startScheduler({
       config,
-      onJobRun: (job, result) => {
-        broadcast({ event: 'cron.result', data: { job: job.id, name: job.name, ...result, timestamp: Date.now() } });
+      onItemRun: (item, result) => {
+        broadcast({ event: 'calendar.result', data: { item: item.id, summary: item.summary, ...result, timestamp: Date.now() } });
       },
     });
-    // make cron runner available to MCP tools
-    setCronRunner(cronRunner);
+    setScheduler(scheduler);
   }
 
   const context: GatewayContext = {
@@ -582,7 +580,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     sessionRegistry,
     channelManager,
     heartbeatRunner,
-    cronRunner,
+    scheduler,
     broadcast,
   };
 
@@ -1251,9 +1249,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 nextDueAt: null,
                 lastStatus: lastHeartbeatStatus,
               } : null,
-              cron: cronRunner ? {
+              calendar: scheduler ? {
                 enabled: true,
-                jobCount: cronRunner.listJobs().length,
+                itemCount: scheduler.listItems().length,
               } : null,
             },
           };
@@ -1552,42 +1550,69 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           return { id, result: { success: true } };
         }
 
+        case 'calendar.list':
         case 'cron.list': {
-          const jobs = cronRunner?.listJobs() || loadCronJobs();
-          return { id, result: jobs };
+          const items = scheduler?.listItems() || loadCalendarItems();
+          return { id, result: items };
         }
 
+        case 'calendar.add':
         case 'cron.add': {
-          if (!cronRunner) return { id, error: 'cron not enabled' };
-          const job = cronRunner.addJob(params as any);
-          return { id, result: job };
+          if (!scheduler) return { id, error: 'scheduler not enabled' };
+          const data = params as any;
+          // backward compat: map old CronJob fields to CalendarItem
+          if (data.name && !data.summary) data.summary = data.name;
+          if (!data.dtstart) data.dtstart = new Date().toISOString();
+          if (!data.type) data.type = data.deleteAfterRun ? 'reminder' : 'event';
+          if (!data.message) return { id, error: 'message required' };
+          const item = scheduler.addItem(data);
+          return { id, result: item };
         }
 
+        case 'calendar.remove':
         case 'cron.remove': {
-          if (!cronRunner) return { id, error: 'cron not enabled' };
-          const jobId = params?.id as string;
-          if (!jobId) return { id, error: 'id required' };
-          const removed = cronRunner.removeJob(jobId);
+          if (!scheduler) return { id, error: 'scheduler not enabled' };
+          const itemId = params?.id as string;
+          if (!itemId) return { id, error: 'id required' };
+          const removed = scheduler.removeItem(itemId);
           return { id, result: { removed } };
         }
 
+        case 'calendar.toggle':
         case 'cron.toggle': {
-          const jobId = params?.id as string;
-          if (!jobId) return { id, error: 'id required' };
-          const jobs = loadCronJobs();
-          const job = jobs.find(j => j.id === jobId);
-          if (!job) return { id, error: 'job not found' };
-          job.enabled = !job.enabled;
-          saveCronJobs(jobs);
-          return { id, result: { id: jobId, enabled: job.enabled } };
+          if (!scheduler) return { id, error: 'scheduler not enabled' };
+          const itemId = params?.id as string;
+          if (!itemId) return { id, error: 'id required' };
+          const items = scheduler.listItems();
+          const item = items.find(i => i.id === itemId);
+          if (!item) return { id, error: 'item not found' };
+          const updated = scheduler.updateItem(itemId, { enabled: !item.enabled });
+          return { id, result: { id: itemId, enabled: updated?.enabled } };
         }
 
+        case 'calendar.run':
         case 'cron.run': {
-          if (!cronRunner) return { id, error: 'cron not enabled' };
-          const jobId = params?.id as string;
-          if (!jobId) return { id, error: 'id required' };
-          const runResult = await cronRunner.runJobNow(jobId);
+          if (!scheduler) return { id, error: 'scheduler not enabled' };
+          const itemId = params?.id as string;
+          if (!itemId) return { id, error: 'id required' };
+          const runResult = await scheduler.runItemNow(itemId);
           return { id, result: runResult };
+        }
+
+        case 'calendar.update': {
+          if (!scheduler) return { id, error: 'scheduler not enabled' };
+          const itemId = params?.id as string;
+          if (!itemId) return { id, error: 'id required' };
+          const { id: _removeId, ...updates } = params as any;
+          const updated = scheduler.updateItem(itemId, updates);
+          if (!updated) return { id, error: 'item not found' };
+          return { id, result: updated };
+        }
+
+        case 'calendar.export': {
+          if (!scheduler) return { id, error: 'scheduler not enabled' };
+          const icsString = scheduler.exportIcs();
+          return { id, result: { ics: icsString } };
         }
 
         case 'goals.list': {
@@ -2583,7 +2608,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   return {
     close: async () => {
       heartbeatRunner?.stop();
-      cronRunner?.stop();
+      scheduler?.stop();
       await channelManager.stopAll();
       await disposeAllProviders();
 
@@ -2609,7 +2634,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     sessionRegistry,
     channelManager,
     heartbeatRunner,
-    cronRunner,
+    scheduler,
     context,
   };
 }

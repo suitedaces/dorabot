@@ -4,7 +4,7 @@ export type GatewayStatus = {
   channels: ChannelStatusInfo[];
   sessions: SessionInfo[];
   heartbeat: HeartbeatStatusInfo | null;
-  cron: CronStatusInfo | null;
+  calendar: CalendarStatusInfo | null;
 };
 
 export type SessionInfo = {
@@ -38,9 +38,9 @@ export type HeartbeatStatusInfo = {
   lastStatus: string | null;
 };
 
-export type CronStatusInfo = {
+export type CalendarStatusInfo = {
   enabled: boolean;
-  jobCount: number;
+  itemCount: number;
 };
 
 export type WsMessage = {
@@ -73,6 +73,13 @@ export type RpcMethod =
   | 'channels.status'
   | 'channels.start'
   | 'channels.stop'
+  | 'calendar.list'
+  | 'calendar.add'
+  | 'calendar.remove'
+  | 'calendar.toggle'
+  | 'calendar.run'
+  | 'calendar.update'
+  | 'calendar.export'
   | 'cron.list'
   | 'cron.add'
   | 'cron.remove'
@@ -113,8 +120,8 @@ export type GatewayEventName =
   | 'channel.reply'
   | 'heartbeat.run'
   | 'heartbeat.result'
-  | 'cron.run'
-  | 'cron.result'
+  | 'calendar.run'
+  | 'calendar.result'
   | 'session.update'
   | 'status.update'
   | 'goals.update'
@@ -126,6 +133,6 @@ export type GatewayContext = {
   sessionRegistry: import('./session-registry.js').SessionRegistry;
   channelManager: import('./channel-manager.js').ChannelManager;
   heartbeatRunner: import('../heartbeat/runner.js').HeartbeatRunner | null;
-  cronRunner: import('../cron/scheduler.js').CronRunner | null;
+  scheduler: import('../calendar/scheduler.js').SchedulerRunner | null;
   broadcast: (event: WsEvent) => void;
 };

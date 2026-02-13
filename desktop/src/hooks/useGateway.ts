@@ -23,9 +23,9 @@ const TOOL_PENDING_TEXT: Record<string, string> = {
   WebFetch: 'fetching url', WebSearch: 'searching web', Task: 'running task',
   AskUserQuestion: 'asking question', TodoWrite: 'updating tasks',
   NotebookEdit: 'editing notebook', message: 'sending message',
-  screenshot: 'taking screenshot', browser: 'using browser', schedule_reminder: 'scheduling reminder',
-  schedule_recurring: 'scheduling task', schedule_cron: 'scheduling cron job',
-  list_reminders: 'listing reminders', cancel_reminder: 'cancelling reminder',
+  screenshot: 'taking screenshot', browser: 'using browser',
+  schedule: 'scheduling', list_schedule: 'listing schedule',
+  update_schedule: 'updating schedule', cancel_schedule: 'cancelling schedule',
 };
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected';

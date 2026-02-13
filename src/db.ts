@@ -46,6 +46,11 @@ export function getDb(): Database.Database {
       data TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS calendar_items (
+      id TEXT PRIMARY KEY,
+      data TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS goals_tasks (
       id TEXT PRIMARY KEY,
       data TEXT NOT NULL

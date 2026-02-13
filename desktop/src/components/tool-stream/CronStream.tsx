@@ -1,5 +1,5 @@
 import { motion } from "motion/react"
-import { Clock, Bell, CalendarClock, Timer } from "lucide-react"
+import { Clock, CalendarClock, Timer } from "lucide-react"
 import type { ToolUIProps } from "../tool-ui"
 import { safeParse } from "../../lib/safe-parse"
 
@@ -37,22 +37,20 @@ function AnimatedClock({ streaming }: { streaming?: boolean }) {
 }
 
 const TOOL_ICONS: Record<string, typeof Clock> = {
-  schedule_reminder: Bell,
-  schedule_recurring: CalendarClock,
-  schedule_cron: Timer,
-  list_reminders: Clock,
-  cancel_reminder: Clock,
+  schedule: CalendarClock,
+  list_schedule: Clock,
+  update_schedule: Timer,
+  cancel_schedule: Clock,
 }
 
 export function CronStream({ name, input, output, isError, streaming }: ToolUIProps) {
   const parsed = safeParse(input)
 
-  const message = parsed.message || parsed.description || ""
-  const delay = parsed.delay || ""
-  const every = parsed.every || ""
-  const cron = parsed.cron || ""
-  const schedule = delay || every || cron || ""
-  const toolLabel = name.replace("schedule_", "").replace("_", " ")
+  const message = parsed.message || parsed.summary || parsed.description || ""
+  const rrule = parsed.rrule || ""
+  const dtstart = parsed.dtstart || ""
+  const schedule = rrule || dtstart || ""
+  const toolLabel = name.replace("_", " ")
   const done = !streaming && output != null
   const Icon = TOOL_ICONS[name] || Clock
 

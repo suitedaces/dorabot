@@ -1,12 +1,12 @@
 import { createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { messageTool } from './messaging.js';
-import { cronTools } from './cron.js';
+import { calendarTools } from './calendar.js';
 import { screenshotTool } from './screenshot.js';
 import { browserTool } from './browser.js';
 import { goalsTools } from './goals.js';
 
 export { messageTool, registerChannelHandler, getChannelHandler, type ChannelHandler } from './messaging.js';
-export { setCronRunner, getCronRunner } from './cron.js';
+export { setScheduler, getScheduler } from './calendar.js';
 export { screenshotTool } from './screenshot.js';
 export { browserTool, setBrowserConfig } from './browser.js';
 export { loadGoals, saveGoals, type Goals, type GoalTask } from './goals.js';
@@ -16,7 +16,7 @@ const customTools = [
   messageTool,
   screenshotTool,
   browserTool,
-  ...cronTools,
+  ...calendarTools,
   ...goalsTools,
 ];
 

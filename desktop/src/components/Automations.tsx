@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { useGateway } from '../hooks/useGateway';
-import type { CronJob } from '../../../src/cron/scheduler';
+import type { CalendarItem } from '../../../src/calendar/scheduler';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -19,107 +19,104 @@ type AutomationsProps = {
 };
 
 export function Automations({ gateway }: AutomationsProps) {
-  const [jobs, setJobs] = useState<CronJob[]>([]);
+  const [items, setItems] = useState<CalendarItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
-  const [expandedJob, setExpandedJob] = useState<string | null>(null);
-  const [newJob, setNewJob] = useState({
-    name: '',
+  const [expandedItem, setExpandedItem] = useState<string | null>(null);
+  const [newItem, setNewItem] = useState({
+    summary: '',
     message: '',
-    type: 'one-time' as 'one-time' | 'recurring' | 'cron',
-    at: '',
-    every: '',
-    cron: '',
+    type: 'reminder' as 'event' | 'todo' | 'reminder',
+    dtstart: '',
+    rrule: '',
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   });
 
-  const loadJobs = useCallback(async () => {
+  const loadItems = useCallback(async () => {
     if (gateway.connectionState !== 'connected') return;
     try {
       const result = await gateway.rpc('cron.list');
-      if (Array.isArray(result)) setJobs(result);
+      if (Array.isArray(result)) setItems(result);
       setLoading(false);
     } catch (err) {
-      console.error('failed to load cron jobs:', err);
+      console.error('failed to load schedule:', err);
       setLoading(false);
     }
   }, [gateway.connectionState, gateway.rpc]);
 
   useEffect(() => {
-    loadJobs();
-  }, [loadJobs]);
+    loadItems();
+  }, [loadItems]);
 
   const resetForm = () => {
-    setNewJob({
-      name: '',
+    setNewItem({
+      summary: '',
       message: '',
-      type: 'one-time',
-      at: '',
-      every: '',
-      cron: '',
+      type: 'reminder',
+      dtstart: '',
+      rrule: '',
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     });
     setShowAddForm(false);
   };
 
-  const addJob = async () => {
-    const jobData: Record<string, unknown> = {
-      name: newJob.name || 'Unnamed Task',
-      message: newJob.message,
-      timezone: newJob.timezone,
+  const addItem = async () => {
+    const data: Record<string, unknown> = {
+      summary: newItem.summary || 'Unnamed',
+      message: newItem.message,
+      type: newItem.type,
+      dtstart: newItem.dtstart ? new Date(newItem.dtstart).toISOString() : new Date().toISOString(),
+      timezone: newItem.timezone,
       enabled: true,
     };
 
-    if (newJob.type === 'one-time') {
-      jobData.at = newJob.at;
-      jobData.deleteAfterRun = true;
-    } else if (newJob.type === 'recurring') {
-      jobData.every = newJob.every;
-    } else if (newJob.type === 'cron') {
-      jobData.cron = newJob.cron;
+    if (newItem.rrule) {
+      data.rrule = newItem.rrule;
+    }
+
+    if (newItem.type === 'reminder' && !newItem.rrule) {
+      data.deleteAfterRun = true;
     }
 
     try {
-      await gateway.rpc('cron.add', jobData);
+      await gateway.rpc('cron.add', data);
       resetForm();
-      setTimeout(loadJobs, 100);
+      setTimeout(loadItems, 100);
     } catch (err) {
-      console.error('failed to add job:', err);
+      console.error('failed to add item:', err);
     }
   };
 
-  const toggleJob = async (id: string) => {
+  const toggleItem = async (id: string) => {
     try {
       await gateway.rpc('cron.toggle', { id });
-      setTimeout(loadJobs, 100);
+      setTimeout(loadItems, 100);
     } catch (err) {
-      console.error('failed to toggle job:', err);
+      console.error('failed to toggle item:', err);
     }
   };
 
-  const runJobNow = async (id: string) => {
+  const runItemNow = async (id: string) => {
     try {
       await gateway.rpc('cron.run', { id });
-      setTimeout(loadJobs, 500);
+      setTimeout(loadItems, 500);
     } catch (err) {
-      console.error('failed to run job:', err);
+      console.error('failed to run item:', err);
     }
   };
 
-  const deleteJob = async (id: string) => {
+  const deleteItem = async (id: string) => {
     try {
       await gateway.rpc('cron.remove', { id });
-      setTimeout(loadJobs, 100);
+      setTimeout(loadItems, 100);
     } catch (err) {
-      console.error('failed to delete job:', err);
+      console.error('failed to delete item:', err);
     }
   };
 
-  const formatSchedule = (job: CronJob) => {
-    if (job.cron) return `cron: ${job.cron}`;
-    if (job.every) return `every ${job.every}`;
-    if (job.at) return `at ${job.at}`;
-    return 'unknown';
+  const formatSchedule = (item: CalendarItem) => {
+    if (item.rrule) return item.rrule;
+    return `at ${item.dtstart}`;
   };
 
   const formatTime = (iso?: string) => {
@@ -131,11 +128,7 @@ export function Automations({ gateway }: AutomationsProps) {
     });
   };
 
-  const canSubmit = newJob.message && (
-    (newJob.type === 'one-time' && newJob.at) ||
-    (newJob.type === 'recurring' && newJob.every) ||
-    (newJob.type === 'cron' && newJob.cron)
-  );
+  const canSubmit = newItem.message && newItem.dtstart;
 
   if (gateway.connectionState !== 'connected') {
     return (
@@ -160,7 +153,7 @@ export function Automations({ gateway }: AutomationsProps) {
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0">
         <span className="font-semibold text-sm">Automations</span>
-        <Badge variant="outline" className="text-[10px]">{jobs.length}</Badge>
+        <Badge variant="outline" className="text-[10px]">{items.length}</Badge>
         <Button
           variant={showAddForm ? 'outline' : 'default'}
           size="sm"
@@ -177,10 +170,10 @@ export function Automations({ gateway }: AutomationsProps) {
             <Card className="border-primary/50">
               <CardContent className="p-4 space-y-3">
                 <div className="space-y-1">
-                  <Label className="text-[11px]">name</Label>
+                  <Label className="text-[11px]">summary</Label>
                   <Input
-                    value={newJob.name}
-                    onChange={e => setNewJob({ ...newJob, name: e.target.value })}
+                    value={newItem.summary}
+                    onChange={e => setNewItem({ ...newItem, summary: e.target.value })}
                     placeholder="daily standup reminder"
                     className="h-8 text-xs"
                   />
@@ -189,8 +182,8 @@ export function Automations({ gateway }: AutomationsProps) {
                 <div className="space-y-1">
                   <Label className="text-[11px]">message / task</Label>
                   <Textarea
-                    value={newJob.message}
-                    onChange={e => setNewJob({ ...newJob, message: e.target.value })}
+                    value={newItem.message}
+                    onChange={e => setNewItem({ ...newItem, message: e.target.value })}
                     placeholder="check project status and send update"
                     rows={3}
                     className="text-xs"
@@ -200,13 +193,13 @@ export function Automations({ gateway }: AutomationsProps) {
                 <div className="space-y-1">
                   <Label className="text-[11px]">type</Label>
                   <div className="flex gap-1.5">
-                    {(['one-time', 'recurring', 'cron'] as const).map(type => (
+                    {(['reminder', 'event', 'todo'] as const).map(type => (
                       <Button
                         key={type}
-                        variant={newJob.type === type ? 'default' : 'outline'}
+                        variant={newItem.type === type ? 'default' : 'outline'}
                         size="sm"
                         className="h-6 text-[11px] px-2"
-                        onClick={() => setNewJob({ ...newJob, type })}
+                        onClick={() => setNewItem({ ...newItem, type })}
                       >
                         {type}
                       </Button>
@@ -214,49 +207,33 @@ export function Automations({ gateway }: AutomationsProps) {
                   </div>
                 </div>
 
-                {newJob.type === 'one-time' && (
-                  <div className="space-y-1">
-                    <Label className="text-[11px]">run at</Label>
-                    <Input
-                      value={newJob.at}
-                      onChange={e => setNewJob({ ...newJob, at: e.target.value })}
-                      placeholder="20m, 2h, 1d, or ISO timestamp"
-                      className="h-8 text-xs"
-                    />
-                    <span className="text-[10px] text-muted-foreground">relative (20m, 2h) or absolute (2025-01-15T09:00:00)</span>
-                  </div>
-                )}
+                <div className="space-y-1">
+                  <Label className="text-[11px]">start date/time</Label>
+                  <Input
+                    type="datetime-local"
+                    value={newItem.dtstart}
+                    onChange={e => setNewItem({ ...newItem, dtstart: e.target.value })}
+                    className="h-8 text-xs"
+                  />
+                </div>
 
-                {newJob.type === 'recurring' && (
+                {newItem.type !== 'reminder' && (
                   <div className="space-y-1">
-                    <Label className="text-[11px]">repeat every</Label>
+                    <Label className="text-[11px]">recurrence (RRULE)</Label>
                     <Input
-                      value={newJob.every}
-                      onChange={e => setNewJob({ ...newJob, every: e.target.value })}
-                      placeholder="30m, 4h, 1d"
-                      className="h-8 text-xs"
-                    />
-                    <span className="text-[10px] text-muted-foreground">30m = every 30 minutes, 4h = every 4 hours</span>
-                  </div>
-                )}
-
-                {newJob.type === 'cron' && (
-                  <div className="space-y-1">
-                    <Label className="text-[11px]">cron expression</Label>
-                    <Input
-                      value={newJob.cron}
-                      onChange={e => setNewJob({ ...newJob, cron: e.target.value })}
-                      placeholder="0 9 * * *"
+                      value={newItem.rrule}
+                      onChange={e => setNewItem({ ...newItem, rrule: e.target.value })}
+                      placeholder="FREQ=DAILY;BYHOUR=9;BYMINUTE=0"
                       className="h-8 text-xs font-mono"
                     />
-                    <span className="text-[10px] text-muted-foreground">minute hour day month weekday — "0 9 * * *" = 9am daily</span>
+                    <span className="text-[10px] text-muted-foreground">RFC 5545 RRULE — e.g. FREQ=WEEKLY;BYDAY=MO,FR</span>
                   </div>
                 )}
 
                 <Button
                   size="sm"
                   className="w-full h-7 text-xs"
-                  onClick={addJob}
+                  onClick={addItem}
                   disabled={!canSubmit}
                 >
                   create automation
@@ -265,29 +242,29 @@ export function Automations({ gateway }: AutomationsProps) {
             </Card>
           )}
 
-          {jobs.length === 0 ? (
+          {items.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
               <Clock className="w-6 h-6 opacity-40" />
               <span className="text-sm">no automations yet</span>
             </div>
           ) : (
             <div className="space-y-2">
-              {jobs.map(job => {
-                const isExpanded = expandedJob === job.id;
+              {items.map(item => {
+                const isExpanded = expandedItem === item.id;
                 return (
-                  <Collapsible key={job.id} open={isExpanded} onOpenChange={open => setExpandedJob(open ? job.id : null)}>
+                  <Collapsible key={item.id} open={isExpanded} onOpenChange={open => setExpandedItem(open ? item.id : null)}>
                     <Card className={cn('transition-colors', isExpanded && 'border-primary/50')}>
                       <CollapsibleTrigger className="w-full">
                         <CardContent className="p-3">
                           <div className="flex items-center gap-2">
                             <Badge
-                              variant={job.enabled === false ? 'outline' : 'default'}
-                              className={cn('text-[9px] h-4', job.enabled !== false && 'bg-success/15 text-success border-success/30')}
+                              variant={item.enabled === false ? 'outline' : 'default'}
+                              className={cn('text-[9px] h-4', item.enabled !== false && 'bg-success/15 text-success border-success/30')}
                             >
-                              {job.enabled === false ? 'off' : 'on'}
+                              {item.enabled === false ? 'off' : item.type}
                             </Badge>
-                            <span className="text-xs font-semibold flex-1 text-left">{job.name}</span>
-                            <span className="text-[10px] text-muted-foreground">{formatSchedule(job)}</span>
+                            <span className="text-xs font-semibold flex-1 text-left">{item.summary}</span>
+                            <span className="text-[10px] text-muted-foreground font-mono">{formatSchedule(item)}</span>
                             {isExpanded ? <ChevronDown className="w-3 h-3 text-muted-foreground" /> : <ChevronRight className="w-3 h-3 text-muted-foreground" />}
                           </div>
                         </CardContent>
@@ -295,19 +272,19 @@ export function Automations({ gateway }: AutomationsProps) {
                       <CollapsibleContent>
                         <div className="px-3 pb-3 pt-0 border-t border-border mt-1">
                           <div className="text-xs text-muted-foreground mt-2 mb-2 bg-secondary rounded p-2">
-                            {job.message}
+                            {item.message}
                           </div>
                           <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground mb-2">
-                            {job.nextRunAt && <span>next: {formatTime(job.nextRunAt)}</span>}
-                            {job.lastRunAt && <span>last: {formatTime(job.lastRunAt)}</span>}
-                            <span>created: {formatTime(job.createdAt)}</span>
-                            {job.deleteAfterRun && <Badge variant="outline" className="text-[8px] h-3 px-1">one-shot</Badge>}
+                            {item.nextRunAt && <span>next: {formatTime(item.nextRunAt)}</span>}
+                            {item.lastRunAt && <span>last: {formatTime(item.lastRunAt)}</span>}
+                            <span>created: {formatTime(item.createdAt)}</span>
+                            {item.deleteAfterRun && <Badge variant="outline" className="text-[8px] h-3 px-1">one-shot</Badge>}
                           </div>
                           <div className="flex gap-1.5">
-                            <Button variant="outline" size="sm" className="h-6 text-[11px] px-2" onClick={() => toggleJob(job.id)}>
-                              {job.enabled === false ? <><Play className="w-3 h-3 mr-1" />enable</> : <><Pause className="w-3 h-3 mr-1" />disable</>}
+                            <Button variant="outline" size="sm" className="h-6 text-[11px] px-2" onClick={() => toggleItem(item.id)}>
+                              {item.enabled === false ? <><Play className="w-3 h-3 mr-1" />enable</> : <><Pause className="w-3 h-3 mr-1" />disable</>}
                             </Button>
-                            <Button variant="outline" size="sm" className="h-6 text-[11px] px-2" onClick={() => runJobNow(job.id)}>
+                            <Button variant="outline" size="sm" className="h-6 text-[11px] px-2" onClick={() => runItemNow(item.id)}>
                               <Play className="w-3 h-3 mr-1" />run now
                             </Button>
                             <AlertDialog>
@@ -318,12 +295,12 @@ export function Automations({ gateway }: AutomationsProps) {
                               </AlertDialogTrigger>
                               <AlertDialogContent>
                                 <AlertDialogHeader>
-                                  <AlertDialogTitle className="text-sm">delete "{job.name}"?</AlertDialogTitle>
+                                  <AlertDialogTitle className="text-sm">delete "{item.summary}"?</AlertDialogTitle>
                                   <AlertDialogDescription className="text-xs">this cannot be undone.</AlertDialogDescription>
                                 </AlertDialogHeader>
                                 <AlertDialogFooter>
                                   <AlertDialogCancel className="h-7 text-xs">cancel</AlertDialogCancel>
-                                  <AlertDialogAction className="h-7 text-xs" onClick={() => deleteJob(job.id)}>delete</AlertDialogAction>
+                                  <AlertDialogAction className="h-7 text-xs" onClick={() => deleteItem(item.id)}>delete</AlertDialogAction>
                                 </AlertDialogFooter>
                               </AlertDialogContent>
                             </AlertDialog>

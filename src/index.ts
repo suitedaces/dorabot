@@ -10,7 +10,7 @@ import { SessionManager } from './session/manager.js';
 import { getEligibleSkills } from './skills/loader.js';
 import { listAgentNames, describeAgents } from './agents/definitions.js';
 import { startHeartbeatRunner, runHeartbeatOnce } from './heartbeat/runner.js';
-import { startCronRunner, loadCronJobs } from './cron/scheduler.js';
+import { startScheduler, loadCalendarItems, migrateCronToCalendar } from './calendar/scheduler.js';
 import { startGateway } from './gateway/index.js';
 import { getAllChannelStatuses } from './channels/index.js';
 import { loginWhatsApp, logoutWhatsApp, isWhatsAppLinked } from './channels/whatsapp/index.js';
@@ -49,7 +49,7 @@ async function interactiveMode(config: Awaited<ReturnType<typeof loadConfig>>): 
   let currentSessionId: string | undefined;
 
   console.log('dorabot interactive mode');
-  console.log('Commands: /new, /resume <id>, /sessions, /skills, /agents, /heartbeat, /cron, /channels, /exit\n');
+  console.log('Commands: /new, /resume <id>, /sessions, /skills, /agents, /heartbeat, /schedule, /channels, /exit\n');
 
   const promptUser = (): void => {
     rl.question('> ', async (input) => {
@@ -118,21 +118,21 @@ async function interactiveMode(config: Awaited<ReturnType<typeof loadConfig>>): 
             }
             break;
 
+          case 'schedule':
           case 'cron':
             if (args[0] === 'list') {
-              const jobs = loadCronJobs();
-              if (jobs.length === 0) {
-                console.log('No cron jobs.');
+              const items = loadCalendarItems();
+              if (items.length === 0) {
+                console.log('No scheduled items.');
               } else {
-                console.log('Cron jobs:');
-                for (const job of jobs) {
-                  console.log(`  ${job.id}: ${job.name} (${job.cron || job.every || job.at})`);
+                console.log('Scheduled items:');
+                for (const item of items) {
+                  const sched = item.rrule ? `RRULE: ${item.rrule}` : `at ${item.dtstart}`;
+                  console.log(`  ${item.id}: ${item.summary} (${sched})`);
                 }
               }
-            } else if (args[0] === 'add') {
-              console.log('Use CLI: dorabot cron add --name "..." --every "1h" --message "..."');
             } else {
-              console.log('Usage: /cron list | /cron add');
+              console.log('Usage: /schedule list');
             }
             break;
 
@@ -239,8 +239,8 @@ dorabot - Claude Agent SDK powered assistant
 Usage:
   dorabot [options] [message]
   dorabot -i                    # interactive mode
-  dorabot -d                    # daemon mode (heartbeat + cron)
-  dorabot -g                    # gateway mode (channels + heartbeat + cron)
+  dorabot -d                    # daemon mode (heartbeat + scheduler)
+  dorabot -g                    # gateway mode (channels + heartbeat + scheduler)
   dorabot -m "Hello"            # single message
   echo "Hello" | dorabot        # pipe input
 
@@ -250,8 +250,8 @@ Options:
   -c, --config <path>     Config file path
   -s, --stream            Stream output (default: true)
   -i, --interactive       Interactive mode
-  -d, --daemon            Daemon mode (run heartbeat + cron)
-  -g, --gateway           Gateway mode (channels + heartbeat + cron)
+  -d, --daemon            Daemon mode (run heartbeat + scheduler)
+  -g, --gateway           Gateway mode (channels + heartbeat + scheduler)
   --model <name>          Override model
   -h, --help              Show help
   -v, --version           Show version
@@ -268,7 +268,7 @@ Commands (interactive mode):
   /skills                 List available skills
   /agents                 List available agents
   /heartbeat run          Run heartbeat now
-  /cron list              List cron jobs
+  /schedule list          List scheduled items
   /channels               List channel statuses
   /exit                   Exit
 `);
@@ -323,7 +323,7 @@ Commands (interactive mode):
     return;
   }
 
-  // daemon mode - run heartbeat + cron in background
+  // daemon mode - run heartbeat + scheduler in background
   if (values.daemon) {
     console.log('Starting daemon mode...');
 
@@ -333,9 +333,10 @@ Commands (interactive mode):
       onEvent: (event) => console.log(`[heartbeat] ${event.status}: ${event.reason || ''}`),
     });
 
-    const cronRunner = startCronRunner({
+    migrateCronToCalendar();
+    const scheduler = startScheduler({
       config,
-      onJobRun: (job, result) => console.log(`[cron] ${job.name}: ${result.status}`),
+      onItemRun: (item, result) => console.log(`[calendar] ${item.summary}: ${result.status}`),
     });
 
     console.log('Daemon running. Press Ctrl+C to stop.');
@@ -344,7 +345,7 @@ Commands (interactive mode):
     process.on('SIGINT', () => {
       console.log('\nStopping daemon...');
       heartbeatRunner.stop();
-      cronRunner.stop();
+      scheduler.stop();
       process.exit(0);
     });
 
