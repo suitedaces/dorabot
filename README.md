@@ -18,10 +18,10 @@
 - **Read and send email** - via Himalaya CLI (IMAP/SMTP, no OAuth needed).
 - **Control your Mac** - Windows, apps, Spotify, Calendar, Finder, system settings via AppleScript.
 - **Schedule anything** - One-shot reminders, recurring tasks, full cron expressions with timezone support.
-- **Manage goals** - Kanban board with drag-and-drop. Agent proposes tasks, you approve them.
+- **Proactive goal management** - The agent proposes goals on its own, you approve via drag-and-drop Kanban board. It tracks progress, reports results, and picks up new work autonomously.
 - **Work with GitHub** - PRs, issues, CI checks, code review via `gh` CLI.
 - **Generate images** - Text-to-image and image editing via Gemini API.
-- **Extend with skills** - Drop a `SKILL.md` in a folder. Built-in skills for GitHub, email, macOS, memes, image gen, Polymarket, video creation, and multi-agent orchestration.
+- **Extend with skills** - Drop a `SKILL.md` in a folder, or browse and install from the [skills.sh](https://skills.sh) gallery (56k+ community skills). The agent can also create new skills on the fly.
 
 https://github.com/user-attachments/assets/d675347a-46c0-4767-b35a-e7a1db6386f9
 
@@ -77,6 +77,25 @@ npm install
 npm run dev
 ```
 
+## Proactive Agent
+
+dorabot doesn't just respond - it acts on its own. A configurable heartbeat loop wakes the agent on a schedule to check `HEARTBEAT.md` for pending work, propose new goals, and execute approved tasks without being prompted.
+
+- **Heartbeat** - Runs every N minutes (default 30m). Reads `HEARTBEAT.md`, decides if there's work to do. If nothing needs attention, it stays quiet.
+- **Goal proposals** - The agent proposes goals (batch or individual). They show up as "Proposed" on the Kanban board. Drag to "Approved" and the agent picks them up.
+- **Active hours** - Configurable quiet hours so it doesn't burn tokens while you sleep.
+- **Skill creation** - The agent can create new skills on the fly. Ask it to "make a skill for X" and it writes the `SKILL.md`, sets up the folder, and the skill is immediately available.
+
+```json
+{
+  "heartbeat": {
+    "enabled": true,
+    "every": "30m",
+    "activeHours": { "start": "09:00", "end": "23:00", "timezone": "America/Los_Angeles" }
+  }
+}
+```
+
 ## Multi-Provider Support
 
 dorabot supports multiple AI providers. Pick the one you're already paying for.
@@ -124,7 +143,10 @@ Built-in skills:
 | **remotion** | Video creation in React |
 | **agent-swarm-orchestration** | Multi-agent task orchestration |
 
-Add your own: drop a folder with a `SKILL.md` in `~/.dorabot/skills/your-skill/`.
+**Add skills:**
+- **Create your own** - Drop a folder with a `SKILL.md` in `~/.dorabot/skills/your-skill/`, or ask the agent to create one for you.
+- **Install from gallery** - Browse 56k+ community skills from [skills.sh](https://skills.sh) directly in the desktop app. Search, preview, and install with one click.
+- **Agent-created** - Ask "make me a skill for deploying to Vercel" and the agent writes it, tests eligibility, and makes it available immediately.
 
 ## Make It Yours
 
@@ -184,6 +206,10 @@ Ask dorabot to onboard you, or edit the files directly:
   "channels": {
     "whatsapp": { "enabled": false },
     "telegram": { "enabled": false, "token": "" }
+  },
+  "heartbeat": {
+    "enabled": false,
+    "every": "30m"
   }
 }
 ```
