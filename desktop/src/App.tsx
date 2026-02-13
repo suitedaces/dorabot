@@ -103,7 +103,7 @@ export default function App() {
 
     switch (activeTab) {
       case 'chat':
-        return <ChatView gateway={gw} />;
+        return <ChatView gateway={gw} onNavigateSettings={() => setActiveTab('settings')} />;
       case 'channels':
         return <ChannelView channel={selectedChannel} gateway={gw} onViewSession={handleViewSession} onSwitchChannel={setSelectedChannel} />;
       case 'goals':
