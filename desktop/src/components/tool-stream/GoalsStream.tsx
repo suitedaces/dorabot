@@ -12,10 +12,10 @@ const COLUMN_COLORS: Record<string, string> = {
 }
 
 const TOOL_META: Record<string, { icon: typeof LayoutGrid; verb: string; color: string }> = {
-  board_view: { icon: Eye, verb: "viewing", color: "text-violet-400" },
-  board_add: { icon: Plus, verb: "adding", color: "text-blue-400" },
-  board_update: { icon: Pencil, verb: "updating", color: "text-amber-400" },
-  board_propose: { icon: Lightbulb, verb: "proposing", color: "text-emerald-400" },
+  goals_view: { icon: Eye, verb: "viewing", color: "text-violet-400" },
+  goals_add: { icon: Plus, verb: "adding", color: "text-blue-400" },
+  goals_update: { icon: Pencil, verb: "updating", color: "text-amber-400" },
+  goals_propose: { icon: Lightbulb, verb: "proposing", color: "text-emerald-400" },
 }
 
 function MiniBoard({ streaming }: { streaming?: boolean }) {
@@ -45,9 +45,9 @@ function MiniBoard({ streaming }: { streaming?: boolean }) {
   )
 }
 
-export function BoardStream({ name, input, output, isError, streaming }: ToolUIProps) {
+export function GoalsStream({ name, input, output, isError, streaming }: ToolUIProps) {
   const parsed = safeParse(input)
-  const meta = TOOL_META[name] || TOOL_META.board_view
+  const meta = TOOL_META[name] || TOOL_META.goals_view
   const Icon = meta.icon
   const done = !streaming && output != null
 
@@ -122,7 +122,7 @@ export function BoardStream({ name, input, output, isError, streaming }: ToolUIP
           )}
 
           {/* view filter */}
-          {name === "board_view" && parsed.status && parsed.status !== "all" && (
+          {name === "goals_view" && parsed.status && parsed.status !== "all" && (
             <motion.div
               className="text-[10px] text-muted-foreground/60"
               initial={{ opacity: 0 }}

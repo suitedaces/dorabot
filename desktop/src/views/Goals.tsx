@@ -28,7 +28,7 @@ import { Plus, X, Trash2, LayoutGrid, ChevronRight, Ban, User, Bot } from 'lucid
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-type BoardTask = {
+type GoalTask = {
   id: string;
   title: string;
   description?: string;
@@ -46,7 +46,7 @@ type Props = {
   gateway: ReturnType<typeof useGateway>;
 };
 
-const COLUMNS: { id: BoardTask['status']; label: string; bg: string; hoverColor: string }[] = [
+const COLUMNS: { id: GoalTask['status']; label: string; bg: string; hoverColor: string }[] = [
   { id: 'proposed', label: 'Proposed', bg: 'bg-amber-500/5', hoverColor: 'border-amber-500/40 bg-amber-500/10' },
   { id: 'approved', label: 'Approved', bg: 'bg-blue-500/5', hoverColor: 'border-blue-500/40 bg-blue-500/10' },
   { id: 'in_progress', label: 'In Progress', bg: 'bg-violet-500/5', hoverColor: 'border-violet-500/40 bg-violet-500/10' },
@@ -64,9 +64,9 @@ const PRIORITY_COLORS: Record<string, string> = {
 function KanbanColumn({ id, label, tasks, onDelete, onView, bg, hoverColor }: {
   id: string;
   label: string;
-  tasks: BoardTask[];
+  tasks: GoalTask[];
   onDelete: (id: string) => void;
-  onView: (task: BoardTask) => void;
+  onView: (task: GoalTask) => void;
   bg: string;
   hoverColor: string;
 }) {
@@ -103,9 +103,9 @@ function KanbanColumn({ id, label, tasks, onDelete, onView, bg, hoverColor }: {
 // ── Draggable Card ──
 
 function KanbanCard({ task, onDelete, onView, overlay }: {
-  task: BoardTask;
+  task: GoalTask;
   onDelete: (id: string) => void;
-  onView?: (task: BoardTask) => void;
+  onView?: (task: GoalTask) => void;
   overlay?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -181,15 +181,15 @@ function KanbanCard({ task, onDelete, onView, overlay }: {
   );
 }
 
-// ── Main Board View ──
+// ── Main Goals View ──
 
-export function BoardView({ gateway }: Props) {
-  const [tasks, setTasks] = useState<BoardTask[]>([]);
+export function GoalsView({ gateway }: Props) {
+  const [tasks, setTasks] = useState<GoalTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
   const [showRejected, setShowRejected] = useState(false);
-  const [activeTask, setActiveTask] = useState<BoardTask | null>(null);
-  const [viewTask, setViewTask] = useState<BoardTask | null>(null);
+  const [activeTask, setActiveTask] = useState<GoalTask | null>(null);
+  const [viewTask, setViewTask] = useState<GoalTask | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [newTask, setNewTask] = useState({
     title: '',
@@ -217,11 +217,11 @@ export function BoardView({ gateway }: Props) {
   const loadTasks = useCallback(async () => {
     if (gateway.connectionState !== 'connected') return;
     try {
-      const result = await gateway.rpc('board.list');
+      const result = await gateway.rpc('goals.list');
       if (Array.isArray(result)) setTasks(result);
       setLoading(false);
     } catch (err) {
-      console.error('failed to load board:', err);
+      console.error('failed to load goals:', err);
       setLoading(false);
     }
   }, [gateway.connectionState, gateway.rpc]);
@@ -230,14 +230,14 @@ export function BoardView({ gateway }: Props) {
     loadTasks();
   }, [loadTasks]);
 
-  // re-fetch when agent updates the board
+  // re-fetch when agent updates goals
   useEffect(() => {
-    if (gateway.boardVersion > 0) loadTasks();
-  }, [gateway.boardVersion, loadTasks]);
+    if (gateway.goalsVersion > 0) loadTasks();
+  }, [gateway.goalsVersion, loadTasks]);
 
   const addTask = async () => {
     try {
-      await gateway.rpc('board.add', {
+      await gateway.rpc('goals.add', {
         title: newTask.title,
         description: newTask.description || undefined,
         priority: newTask.priority,
@@ -248,16 +248,16 @@ export function BoardView({ gateway }: Props) {
       setShowAddForm(false);
       setTimeout(loadTasks, 100);
     } catch (err) {
-      console.error('failed to add task:', err);
+      console.error('failed to add goal:', err);
     }
   };
 
   const deleteTask = async (id: string) => {
     try {
-      await gateway.rpc('board.delete', { id });
+      await gateway.rpc('goals.delete', { id });
       setTimeout(loadTasks, 100);
     } catch (err) {
-      console.error('failed to delete task:', err);
+      console.error('failed to delete goal:', err);
     }
   };
 
@@ -277,15 +277,15 @@ export function BoardView({ gateway }: Props) {
     if (!task || task.status === newStatus) return;
 
     // optimistic update
-    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: newStatus as BoardTask['status'] } : t));
+    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: newStatus as GoalTask['status'] } : t));
 
     if (newStatus === 'approved') fireConfetti();
 
     try {
-      await gateway.rpc('board.move', { id: taskId, status: newStatus });
+      await gateway.rpc('goals.move', { id: taskId, status: newStatus });
       setTimeout(loadTasks, 100);
     } catch (err) {
-      console.error('failed to move task:', err);
+      console.error('failed to move goal:', err);
       loadTasks(); // revert
     }
   };
@@ -317,7 +317,7 @@ export function BoardView({ gateway }: Props) {
     <div className="flex flex-col h-full min-h-0">
       {/* header */}
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0">
-        <span className="font-semibold text-sm">Board</span>
+        <span className="font-semibold text-sm">Goals</span>
         <Badge variant="outline" className="text-[10px]">{tasks.filter(t => t.status !== 'rejected').length}</Badge>
         <Button
           variant={showAddForm ? 'outline' : 'default'}
@@ -325,7 +325,7 @@ export function BoardView({ gateway }: Props) {
           className="ml-auto h-6 text-[11px] px-2"
           onClick={() => setShowAddForm(!showAddForm)}
         >
-          {showAddForm ? <><X className="w-3 h-3 mr-1" />cancel</> : <><Plus className="w-3 h-3 mr-1" />new task</>}
+          {showAddForm ? <><X className="w-3 h-3 mr-1" />cancel</> : <><Plus className="w-3 h-3 mr-1" />new goal</>}
         </Button>
       </div>
 
@@ -383,7 +383,7 @@ export function BoardView({ gateway }: Props) {
                 </div>
               </div>
               <Button size="sm" className="w-full h-7 text-xs" onClick={addTask} disabled={!newTask.title}>
-                add task
+                add goal
               </Button>
             </CardContent>
           </Card>

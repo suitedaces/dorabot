@@ -4,7 +4,7 @@ import { getDb } from '../db.js';
 
 // ── Types ──
 
-export type BoardTask = {
+export type GoalTask = {
   id: string;
   title: string;
   description?: string;
@@ -18,21 +18,21 @@ export type BoardTask = {
   tags?: string[];
 };
 
-export type Board = {
-  tasks: BoardTask[];
+export type Goals = {
+  tasks: GoalTask[];
   lastPlanAt?: string;
   version: number;
 };
 
-// ── Board I/O ──
+// ── Goals I/O ──
 
-export function loadBoard(): Board {
+export function loadGoals(): Goals {
   const db = getDb();
-  const rows = db.prepare('SELECT data FROM board_tasks').all() as { data: string }[];
-  const tasks = rows.map(r => JSON.parse(r.data) as BoardTask);
+  const rows = db.prepare('SELECT data FROM goals_tasks').all() as { data: string }[];
+  const tasks = rows.map(r => JSON.parse(r.data) as GoalTask);
 
-  const versionRow = db.prepare("SELECT value FROM board_meta WHERE key = 'version'").get() as { value: string } | undefined;
-  const planRow = db.prepare("SELECT value FROM board_meta WHERE key = 'last_plan_at'").get() as { value: string } | undefined;
+  const versionRow = db.prepare("SELECT value FROM goals_meta WHERE key = 'version'").get() as { value: string } | undefined;
+  const planRow = db.prepare("SELECT value FROM goals_meta WHERE key = 'last_plan_at'").get() as { value: string } | undefined;
 
   return {
     tasks,
@@ -41,38 +41,38 @@ export function loadBoard(): Board {
   };
 }
 
-export function saveBoard(board: Board): void {
+export function saveGoals(goals: Goals): void {
   const db = getDb();
-  board.version = (board.version || 0) + 1;
+  goals.version = (goals.version || 0) + 1;
 
   const run = db.transaction(() => {
-    db.prepare('DELETE FROM board_tasks').run();
-    const insert = db.prepare('INSERT INTO board_tasks (id, data) VALUES (?, ?)');
-    for (const task of board.tasks) {
+    db.prepare('DELETE FROM goals_tasks').run();
+    const insert = db.prepare('INSERT INTO goals_tasks (id, data) VALUES (?, ?)');
+    for (const task of goals.tasks) {
       insert.run(task.id, JSON.stringify(task));
     }
-    db.prepare("INSERT OR REPLACE INTO board_meta (key, value) VALUES ('version', ?)").run(String(board.version));
-    if (board.lastPlanAt) {
-      db.prepare("INSERT OR REPLACE INTO board_meta (key, value) VALUES ('last_plan_at', ?)").run(board.lastPlanAt);
+    db.prepare("INSERT OR REPLACE INTO goals_meta (key, value) VALUES ('version', ?)").run(String(goals.version));
+    if (goals.lastPlanAt) {
+      db.prepare("INSERT OR REPLACE INTO goals_meta (key, value) VALUES ('last_plan_at', ?)").run(goals.lastPlanAt);
     }
   });
   run();
 }
 
-function nextId(board: Board): string {
-  const ids = board.tasks.map(t => parseInt(t.id, 10)).filter(n => !isNaN(n));
+function nextId(goals: Goals): string {
+  const ids = goals.tasks.map(t => parseInt(t.id, 10)).filter(n => !isNaN(n));
   return String((ids.length > 0 ? Math.max(...ids) : 0) + 1);
 }
 
 // ── Markdown serialization (used by system-prompt.ts for display) ──
 
-export function serializeBoard(board: Board): string {
-  const lines: string[] = ['# Board', ''];
-  if (board.lastPlanAt) {
-    lines.push(`Last planned: ${board.lastPlanAt}`, '');
+export function serializeGoals(goals: Goals): string {
+  const lines: string[] = ['# Goals', ''];
+  if (goals.lastPlanAt) {
+    lines.push(`Last planned: ${goals.lastPlanAt}`, '');
   }
 
-  const columns: Record<string, BoardTask[]> = {
+  const columns: Record<string, GoalTask[]> = {
     proposed: [],
     approved: [],
     in_progress: [],
@@ -80,7 +80,7 @@ export function serializeBoard(board: Board): string {
     rejected: [],
   };
 
-  for (const task of board.tasks) {
+  for (const task of goals.tasks) {
     columns[task.status]?.push(task);
   }
 
@@ -117,12 +117,12 @@ export function serializeBoard(board: Board): string {
 
 // ── Markdown parsing (used by migration script) ──
 
-export function parseBoard(raw: string): Board {
-  const board: Board = { tasks: [], version: 1 };
+export function parseGoals(raw: string): Goals {
+  const goals: Goals = { tasks: [], version: 1 };
   const lines = raw.split('\n');
 
   let currentStatus: string | null = null;
-  let currentTask: Partial<BoardTask> | null = null;
+  let currentTask: Partial<GoalTask> | null = null;
 
   const statusMap: Record<string, string> = {
     'proposed': 'proposed',
@@ -137,7 +137,7 @@ export function parseBoard(raw: string): Board {
     // last planned
     const planMatch = line.match(/^Last planned:\s*(.+)/);
     if (planMatch) {
-      board.lastPlanAt = planMatch[1].trim();
+      goals.lastPlanAt = planMatch[1].trim();
       continue;
     }
 
@@ -145,7 +145,7 @@ export function parseBoard(raw: string): Board {
     const headerMatch = line.match(/^## (.+)/);
     if (headerMatch) {
       if (currentTask?.id) {
-        board.tasks.push(currentTask as BoardTask);
+        goals.tasks.push(currentTask as GoalTask);
         currentTask = null;
       }
       const headerText = headerMatch[1].toLowerCase();
@@ -162,7 +162,7 @@ export function parseBoard(raw: string): Board {
     const taskMatch = line.match(/^- \*\*#(\d+)\*\*\s+(.+)/);
     if (taskMatch) {
       if (currentTask?.id) {
-        board.tasks.push(currentTask as BoardTask);
+        goals.tasks.push(currentTask as GoalTask);
       }
 
       const titlePart = taskMatch[2];
@@ -177,8 +177,8 @@ export function parseBoard(raw: string): Board {
       currentTask = {
         id: taskMatch[1],
         title,
-        status: (currentStatus || 'proposed') as BoardTask['status'],
-        priority: priorityMatch ? (priorityMatch[0].replace(/[()]/g, '') as BoardTask['priority']) : 'medium',
+        status: (currentStatus || 'proposed') as GoalTask['status'],
+        priority: priorityMatch ? (priorityMatch[0].replace(/[()]/g, '') as GoalTask['priority']) : 'medium',
         source: 'agent',
         tags: tagsMatch ? tagsMatch[1].split(',').map(s => s.trim()) : undefined,
         createdAt: new Date().toISOString(),
@@ -209,26 +209,26 @@ export function parseBoard(raw: string): Board {
   }
 
   if (currentTask?.id) {
-    board.tasks.push(currentTask as BoardTask);
+    goals.tasks.push(currentTask as GoalTask);
   }
 
-  return board;
+  return goals;
 }
 
 // ── MCP Tools ──
 
-export const boardViewTool = tool(
-  'board_view',
-  'View the kanban board - shows all tasks organized by status (proposed, approved, in_progress, done). Use this to see what needs to be done.',
+export const goalsViewTool = tool(
+  'goals_view',
+  'View your goals - shows all tasks organized by status (proposed, approved, in_progress, done). Use this to see what needs to be done.',
   {
     status: z.enum(['all', 'proposed', 'approved', 'in_progress', 'done', 'rejected']).optional()
       .describe('Filter by status. Default: all active (excludes done/rejected)'),
   },
   async (args) => {
-    const board = loadBoard();
+    const goals = loadGoals();
     const filter = args.status || 'all';
 
-    let tasks = board.tasks;
+    let tasks = goals.tasks;
     if (filter === 'all') {
       tasks = tasks.filter(t => !['done', 'rejected'].includes(t.status));
     } else {
@@ -236,7 +236,7 @@ export const boardViewTool = tool(
     }
 
     if (tasks.length === 0) {
-      return { content: [{ type: 'text', text: filter === 'all' ? 'Board is empty. No active tasks.' : `No tasks with status: ${filter}` }] };
+      return { content: [{ type: 'text', text: filter === 'all' ? 'No active goals.' : `No goals with status: ${filter}` }] };
     }
 
     const formatted = tasks.map(t => {
@@ -247,30 +247,30 @@ export const boardViewTool = tool(
     }).join('\n\n');
 
     return {
-      content: [{ type: 'text', text: `Board (${tasks.length} tasks):\n\n${formatted}` }],
+      content: [{ type: 'text', text: `Goals (${tasks.length} tasks):\n\n${formatted}` }],
     };
   }
 );
 
-export const boardAddTool = tool(
-  'board_add',
-  'Add a task to the board. Agent-proposed tasks start as "proposed" (need user approval). User-requested tasks start as "approved".',
+export const goalsAddTool = tool(
+  'goals_add',
+  'Add a goal. Agent-proposed goals start as "proposed" (need user approval). User-requested goals start as "approved".',
   {
-    title: z.string().describe('Short task title'),
+    title: z.string().describe('Short goal title'),
     description: z.string().optional().describe('Detailed description of what needs to be done'),
-    priority: z.enum(['high', 'medium', 'low']).optional().describe('Task priority. Default: medium'),
-    source: z.enum(['agent', 'user']).optional().describe('Who created this task. Default: agent'),
-    status: z.enum(['proposed', 'approved']).optional().describe('Initial status. Agent tasks default to proposed, user tasks to approved'),
+    priority: z.enum(['high', 'medium', 'low']).optional().describe('Goal priority. Default: medium'),
+    source: z.enum(['agent', 'user']).optional().describe('Who created this goal. Default: agent'),
+    status: z.enum(['proposed', 'approved']).optional().describe('Initial status. Agent goals default to proposed, user goals to approved'),
     tags: z.array(z.string()).optional().describe('Tags for categorization'),
   },
   async (args) => {
-    const board = loadBoard();
+    const goals = loadGoals();
     const source = args.source || 'agent';
     const status = args.status || (source === 'user' ? 'approved' : 'proposed');
     const now = new Date().toISOString();
 
-    const task: BoardTask = {
-      id: nextId(board),
+    const task: GoalTask = {
+      id: nextId(goals),
       title: args.title,
       description: args.description,
       status,
@@ -281,32 +281,32 @@ export const boardAddTool = tool(
       tags: args.tags,
     };
 
-    board.tasks.push(task);
-    saveBoard(board);
+    goals.tasks.push(task);
+    saveGoals(goals);
 
     return {
-      content: [{ type: 'text', text: `Task #${task.id} added: "${task.title}" [${task.status}]` }],
+      content: [{ type: 'text', text: `Goal #${task.id} added: "${task.title}" [${task.status}]` }],
     };
   }
 );
 
-export const boardUpdateTool = tool(
-  'board_update',
-  'Update a task on the board. Use to change status, add results, or modify details.',
+export const goalsUpdateTool = tool(
+  'goals_update',
+  'Update a goal. Use to change status, add results, or modify details.',
   {
-    id: z.string().describe('Task ID (number)'),
+    id: z.string().describe('Goal ID (number)'),
     status: z.enum(['proposed', 'approved', 'in_progress', 'done', 'rejected']).optional()
       .describe('New status'),
-    result: z.string().optional().describe('Result or outcome of the task'),
+    result: z.string().optional().describe('Result or outcome of the goal'),
     title: z.string().optional().describe('Updated title'),
     description: z.string().optional().describe('Updated description'),
     priority: z.enum(['high', 'medium', 'low']).optional().describe('Updated priority'),
   },
   async (args) => {
-    const board = loadBoard();
-    const task = board.tasks.find(t => t.id === args.id);
+    const goals = loadGoals();
+    const task = goals.tasks.find(t => t.id === args.id);
     if (!task) {
-      return { content: [{ type: 'text', text: `Task #${args.id} not found` }], isError: true };
+      return { content: [{ type: 'text', text: `Goal #${args.id} not found` }], isError: true };
     }
 
     const now = new Date().toISOString();
@@ -321,33 +321,33 @@ export const boardUpdateTool = tool(
       task.completedAt = now;
     }
 
-    saveBoard(board);
+    saveGoals(goals);
 
     return {
-      content: [{ type: 'text', text: `Task #${task.id} updated: "${task.title}" [${task.status}]${args.result ? ` - ${args.result}` : ''}` }],
+      content: [{ type: 'text', text: `Goal #${task.id} updated: "${task.title}" [${task.status}]${args.result ? ` - ${args.result}` : ''}` }],
     };
   }
 );
 
-export const boardBatchProposeTool = tool(
-  'board_propose',
-  'Propose multiple tasks at once for user approval. Used during planning cycles to batch-propose work.',
+export const goalsBatchProposeTool = tool(
+  'goals_propose',
+  'Propose multiple goals at once for user approval. Used during planning cycles to batch-propose work.',
   {
     tasks: z.array(z.object({
       title: z.string(),
       description: z.string().optional(),
       priority: z.enum(['high', 'medium', 'low']).optional(),
       tags: z.array(z.string()).optional(),
-    })).describe('Array of tasks to propose'),
+    })).describe('Array of goals to propose'),
   },
   async (args) => {
-    const board = loadBoard();
+    const goals = loadGoals();
     const now = new Date().toISOString();
     const added: string[] = [];
 
     for (const t of args.tasks) {
-      const task: BoardTask = {
-        id: nextId(board),
+      const task: GoalTask = {
+        id: nextId(goals),
         title: t.title,
         description: t.description,
         status: 'proposed',
@@ -357,22 +357,22 @@ export const boardBatchProposeTool = tool(
         updatedAt: now,
         tags: t.tags,
       };
-      board.tasks.push(task);
+      goals.tasks.push(task);
       added.push(`#${task.id}: ${task.title}`);
     }
 
-    board.lastPlanAt = now;
-    saveBoard(board);
+    goals.lastPlanAt = now;
+    saveGoals(goals);
 
     return {
-      content: [{ type: 'text', text: `Proposed ${added.length} tasks:\n${added.join('\n')}` }],
+      content: [{ type: 'text', text: `Proposed ${added.length} goals:\n${added.join('\n')}` }],
     };
   }
 );
 
-export const boardTools = [
-  boardViewTool,
-  boardAddTool,
-  boardUpdateTool,
-  boardBatchProposeTool,
+export const goalsTools = [
+  goalsViewTool,
+  goalsAddTool,
+  goalsUpdateTool,
+  goalsBatchProposeTool,
 ];

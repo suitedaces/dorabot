@@ -46,15 +46,19 @@ export function getDb(): Database.Database {
       data TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS board_tasks (
+    CREATE TABLE IF NOT EXISTS goals_tasks (
       id TEXT PRIMARY KEY,
       data TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS board_meta (
+    CREATE TABLE IF NOT EXISTS goals_meta (
       key TEXT PRIMARY KEY,
       value TEXT
     );
+
+    -- migrate from old board tables if they exist
+    INSERT OR IGNORE INTO goals_tasks SELECT * FROM board_tasks WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='board_tasks');
+    INSERT OR IGNORE INTO goals_meta SELECT * FROM board_meta WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='board_meta');
   `);
 
   return db;

@@ -308,7 +308,7 @@ export function useGateway(url = 'wss://localhost:18789') {
   const [telegramBotUsername, setTelegramBotUsername] = useState<string | null>(null);
   const [telegramLinkError, setTelegramLinkError] = useState<string | null>(null);
   const [providerInfo, setProviderInfo] = useState<{ name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } } | null>(null);
-  const [boardVersion, setBoardVersion] = useState(0);
+  const [goalsVersion, setGoalsVersion] = useState(0);
   const [backgroundRuns, setBackgroundRuns] = useState<BackgroundRun[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -627,8 +627,8 @@ export function useGateway(url = 'wss://localhost:18789') {
         break;
       }
 
-      case 'board.update': {
-        setBoardVersion(v => v + 1);
+      case 'goals.update': {
+        setGoalsVersion(v => v + 1);
         break;
       }
 
@@ -1163,7 +1163,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     telegramLink,
     telegramUnlink,
     providerInfo,
-    boardVersion,
+    goalsVersion,
     backgroundRuns,
     runBackground,
     getBackgroundRuns,

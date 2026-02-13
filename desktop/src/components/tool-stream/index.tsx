@@ -7,7 +7,7 @@ import { SearchStream } from "./SearchStream"
 import { ScreenshotStream } from "./ScreenshotStream"
 import { FileStream } from "./FileStream"
 import { CronStream } from "./CronStream"
-import { BoardStream } from "./BoardStream"
+import { GoalsStream } from "./GoalsStream"
 import { WebFetchStream } from "./WebFetchStream"
 import { TaskStream } from "./TaskStream"
 import { ProgressStream } from "./ProgressStream"
@@ -31,10 +31,10 @@ const STREAM_MAP: Record<string, React.ComponentType<ToolUIProps>> = {
   schedule_cron: CronStream,
   list_reminders: CronStream,
   cancel_reminder: CronStream,
-  board_view: BoardStream,
-  board_add: BoardStream,
-  board_update: BoardStream,
-  board_propose: BoardStream,
+  goals_view: GoalsStream,
+  goals_add: GoalsStream,
+  goals_update: GoalsStream,
+  goals_propose: GoalsStream,
   TodoWrite: ProgressStream,
   AskUserQuestion: QuestionStream,
 }

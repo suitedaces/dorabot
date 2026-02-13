@@ -25,7 +25,7 @@ import { getDefaultAuthDir } from '../channels/whatsapp/session.js';
 import { validateTelegramToken } from '../channels/telegram/bot.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { setCronRunner } from '../tools/index.js';
-import { loadBoard, saveBoard, type BoardTask } from '../tools/board.js';
+import { loadGoals, saveGoals, type GoalTask } from '../tools/goals.js';
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
 import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey } from '../providers/claude.js';
 import { isCodexInstalled, hasCodexAuth } from '../providers/codex.js';
@@ -1127,12 +1127,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               },
             });
 
-            // per-turn: broadcast board.update if agent used board tools
+            // per-turn: broadcast goals.update if agent used goals tools
             const tl = toolLogs.get(sessionKey);
             if (tl) {
               const allTools = [...tl.completed.map(t => t.name), tl.current?.name].filter(Boolean);
-              if (allTools.some(t => t?.startsWith('board_') || t?.startsWith('mcp__dorabot-tools__board_'))) {
-                broadcast({ event: 'board.update', data: {} });
+              if (allTools.some(t => t?.startsWith('goals_') || t?.startsWith('mcp__dorabot-tools__goals_'))) {
+                broadcast({ event: 'goals.update', data: {} });
               }
             }
 
@@ -1193,7 +1193,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
         }
 
-        // agent.result and board.update are broadcast per-turn inside executeStream's result handler.
+        // agent.result and goals.update are broadcast per-turn inside executeStream's result handler.
         // This point is only reached when the run actually ends (abort, error, or non-persistent provider).
         console.log(`[gateway] agent run ended: source=${source} result="${result.result.slice(0, 100)}..." cost=$${result.usage.totalCostUsd?.toFixed(4) || '?'}`);
       } catch (err) {
@@ -1590,80 +1590,80 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           return { id, result: runResult };
         }
 
-        case 'board.list': {
-          const board = loadBoard();
-          return { id, result: board.tasks };
+        case 'goals.list': {
+          const goals = loadGoals();
+          return { id, result: goals.tasks };
         }
 
-        case 'board.add': {
-          const board = loadBoard();
+        case 'goals.add': {
+          const goals = loadGoals();
           const title = params?.title as string;
           if (!title) return { id, error: 'title required' };
           const now = new Date().toISOString();
-          const ids = board.tasks.map(t => parseInt(t.id, 10)).filter(n => !isNaN(n));
+          const ids = goals.tasks.map(t => parseInt(t.id, 10)).filter(n => !isNaN(n));
           const newId = String((ids.length > 0 ? Math.max(...ids) : 0) + 1);
           const source = (params?.source as string) || 'user';
-          const task: BoardTask = {
+          const task: GoalTask = {
             id: newId,
             title,
             description: params?.description as string | undefined,
-            status: (params?.status as BoardTask['status']) || (source === 'user' ? 'approved' : 'proposed'),
-            priority: (params?.priority as BoardTask['priority']) || 'medium',
+            status: (params?.status as GoalTask['status']) || (source === 'user' ? 'approved' : 'proposed'),
+            priority: (params?.priority as GoalTask['priority']) || 'medium',
             source: source as 'agent' | 'user',
             createdAt: now,
             updatedAt: now,
             tags: params?.tags as string[] | undefined,
           };
-          board.tasks.push(task);
-          saveBoard(board);
-          broadcast({ event: 'board.update', data: {} });
+          goals.tasks.push(task);
+          saveGoals(goals);
+          broadcast({ event: 'goals.update', data: {} });
           return { id, result: task };
         }
 
-        case 'board.update': {
+        case 'goals.update': {
           const taskId = params?.id as string;
           if (!taskId) return { id, error: 'id required' };
-          const board = loadBoard();
-          const task = board.tasks.find(t => t.id === taskId);
+          const goals = loadGoals();
+          const task = goals.tasks.find(t => t.id === taskId);
           if (!task) return { id, error: 'task not found' };
           const now = new Date().toISOString();
-          if (params?.status !== undefined) task.status = params.status as BoardTask['status'];
+          if (params?.status !== undefined) task.status = params.status as GoalTask['status'];
           if (params?.title !== undefined) task.title = params.title as string;
           if (params?.description !== undefined) task.description = params.description as string;
-          if (params?.priority !== undefined) task.priority = params.priority as BoardTask['priority'];
+          if (params?.priority !== undefined) task.priority = params.priority as GoalTask['priority'];
           if (params?.result !== undefined) task.result = params.result as string;
           if (params?.tags !== undefined) task.tags = params.tags as string[];
           task.updatedAt = now;
           if (task.status === 'done') task.completedAt = now;
-          saveBoard(board);
-          broadcast({ event: 'board.update', data: {} });
+          saveGoals(goals);
+          broadcast({ event: 'goals.update', data: {} });
           return { id, result: task };
         }
 
-        case 'board.delete': {
+        case 'goals.delete': {
           const taskId = params?.id as string;
           if (!taskId) return { id, error: 'id required' };
-          const board = loadBoard();
-          const before = board.tasks.length;
-          board.tasks = board.tasks.filter(t => t.id !== taskId);
-          if (board.tasks.length === before) return { id, error: 'task not found' };
-          saveBoard(board);
-          broadcast({ event: 'board.update', data: {} });
+          const goals = loadGoals();
+          const before = goals.tasks.length;
+          goals.tasks = goals.tasks.filter(t => t.id !== taskId);
+          if (goals.tasks.length === before) return { id, error: 'task not found' };
+          saveGoals(goals);
+          broadcast({ event: 'goals.update', data: {} });
           return { id, result: { deleted: true } };
         }
 
-        case 'board.move': {
+        case 'goals.move': {
           const taskId = params?.id as string;
           const status = params?.status as string;
           if (!taskId || !status) return { id, error: 'id and status required' };
-          const board = loadBoard();
-          const task = board.tasks.find(t => t.id === taskId);
+          const goals = loadGoals();
+          const task = goals.tasks.find(t => t.id === taskId);
           if (!task) return { id, error: 'task not found' };
-          task.status = status as BoardTask['status'];
+          task.status = status as GoalTask['status'];
           task.updatedAt = new Date().toISOString();
           if (status === 'done') task.completedAt = task.updatedAt;
-          saveBoard(board);
-          broadcast({ event: 'board.update', data: {} });
+          saveGoals(goals);
+          broadcast({ event: 'goals.update', data: {} });
           return { id, result: task };
         }
 

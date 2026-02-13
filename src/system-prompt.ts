@@ -2,7 +2,7 @@ import { hostname } from 'node:os';
 import type { Config } from './config.js';
 import type { Skill } from './skills/loader.js';
 import { type WorkspaceFiles, buildWorkspaceSection, WORKSPACE_DIR } from './workspace.js';
-import { loadBoard } from './tools/board.js';
+import { loadGoals } from './tools/goals.js';
 
 export type SystemPromptOptions = {
   config: Config;
@@ -108,26 +108,26 @@ Your persistent memory lives in ~/.dorabot/workspace/MEMORY.md. Use it.
 **Privacy:** MEMORY.md content is loaded into your system prompt every session. Don't store secrets or credentials there.`);
   }
 
-  // board (kanban) - inject active tasks so agent is always aware
+  // goals - inject active tasks so agent is always aware
   if (config.systemPromptMode === 'full') {
     try {
-      const board = loadBoard();
-      const active = board.tasks.filter(t => !['done', 'rejected'].includes(t.status));
+      const goals = loadGoals();
+      const active = goals.tasks.filter(t => !['done', 'rejected'].includes(t.status));
       if (active.length > 0) {
         const lines = active.map(t => {
           const pri = t.priority !== 'medium' ? ` (${t.priority})` : '';
           const tags = t.tags?.length ? ` [${t.tags.join(', ')}]` : '';
           return `- #${t.id} [${t.status}] ${t.title}${pri}${tags}`;
         });
-        sections.push(`## Board
+        sections.push(`## Goals
 
-Active tasks on your kanban board. Use board_view/board_update/board_add tools to manage.
-Agent-proposed tasks need user approval before execution. User-requested tasks are auto-approved.
+Active goals. Use goals_view/goals_update/goals_add tools to manage.
+Agent-proposed goals need user approval before execution. User-requested goals are auto-approved.
 
 ${lines.join('\n')}`);
       }
     } catch {
-      // board not available, skip
+      // goals not available, skip
     }
   }
 

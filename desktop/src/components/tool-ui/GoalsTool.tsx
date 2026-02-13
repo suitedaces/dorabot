@@ -3,17 +3,17 @@ import { Badge } from "@/components/ui/badge"
 import { LayoutGrid } from "lucide-react"
 
 const TOOL_LABELS: Record<string, string> = {
-  board_view: "view board",
-  board_add: "add task",
-  board_update: "update task",
-  board_propose: "propose tasks",
+  goals_view: "view goals",
+  goals_add: "add goal",
+  goals_update: "update goal",
+  goals_propose: "propose goals",
 }
 
-export function BoardTool({ name, input, output, isError }: ToolUIProps) {
+export function GoalsTool({ name, input, output, isError }: ToolUIProps) {
   let parsed: any = {}
   try { parsed = JSON.parse(input) } catch {}
 
-  const label = TOOL_LABELS[name] || name.replace("board_", "")
+  const label = TOOL_LABELS[name] || name.replace("goals_", "")
   const title = parsed.title || ""
   const status = parsed.status || ""
   const id = parsed.id || ""
