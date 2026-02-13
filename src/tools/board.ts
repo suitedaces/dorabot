@@ -1,10 +1,6 @@
 import { z } from 'zod';
 import { tool } from '@anthropic-ai/claude-agent-sdk';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
-
-const BOARD_PATH = join(homedir(), '.dorabot', 'workspace', 'BOARD.md');
+import { getDb } from '../db.js';
 
 // ── Types ──
 
@@ -31,22 +27,36 @@ export type Board = {
 // ── Board I/O ──
 
 export function loadBoard(): Board {
-  if (!existsSync(BOARD_PATH)) {
-    return { tasks: [], version: 1 };
-  }
-  try {
-    const raw = readFileSync(BOARD_PATH, 'utf-8');
-    return parseBoard(raw);
-  } catch {
-    return { tasks: [], version: 1 };
-  }
+  const db = getDb();
+  const rows = db.prepare('SELECT data FROM board_tasks').all() as { data: string }[];
+  const tasks = rows.map(r => JSON.parse(r.data) as BoardTask);
+
+  const versionRow = db.prepare("SELECT value FROM board_meta WHERE key = 'version'").get() as { value: string } | undefined;
+  const planRow = db.prepare("SELECT value FROM board_meta WHERE key = 'last_plan_at'").get() as { value: string } | undefined;
+
+  return {
+    tasks,
+    version: versionRow ? parseInt(versionRow.value, 10) : 1,
+    lastPlanAt: planRow?.value || undefined,
+  };
 }
 
 export function saveBoard(board: Board): void {
-  const dir = join(homedir(), '.dorabot', 'workspace');
-  mkdirSync(dir, { recursive: true });
+  const db = getDb();
   board.version = (board.version || 0) + 1;
-  writeFileSync(BOARD_PATH, serializeBoard(board));
+
+  const run = db.transaction(() => {
+    db.prepare('DELETE FROM board_tasks').run();
+    const insert = db.prepare('INSERT INTO board_tasks (id, data) VALUES (?, ?)');
+    for (const task of board.tasks) {
+      insert.run(task.id, JSON.stringify(task));
+    }
+    db.prepare("INSERT OR REPLACE INTO board_meta (key, value) VALUES ('version', ?)").run(String(board.version));
+    if (board.lastPlanAt) {
+      db.prepare("INSERT OR REPLACE INTO board_meta (key, value) VALUES ('last_plan_at', ?)").run(board.lastPlanAt);
+    }
+  });
+  run();
 }
 
 function nextId(board: Board): string {
@@ -54,10 +64,9 @@ function nextId(board: Board): string {
   return String((ids.length > 0 ? Math.max(...ids) : 0) + 1);
 }
 
-// ── Markdown serialization ──
-// Format: human-readable markdown that's also machine-parseable
+// ── Markdown serialization (used by system-prompt.ts for display) ──
 
-function serializeBoard(board: Board): string {
+export function serializeBoard(board: Board): string {
   const lines: string[] = ['# Board', ''];
   if (board.lastPlanAt) {
     lines.push(`Last planned: ${board.lastPlanAt}`, '');
@@ -106,7 +115,9 @@ function serializeBoard(board: Board): string {
   return lines.join('\n');
 }
 
-function parseBoard(raw: string): Board {
+// ── Markdown parsing (used by migration script) ──
+
+export function parseBoard(raw: string): Board {
   const board: Board = { tasks: [], version: 1 };
   const lines = raw.split('\n');
 

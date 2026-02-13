@@ -78,6 +78,11 @@ export type RpcMethod =
   | 'cron.remove'
   | 'cron.toggle'
   | 'cron.run'
+  | 'board.list'
+  | 'board.add'
+  | 'board.update'
+  | 'board.delete'
+  | 'board.move'
   | 'heartbeat.status'
   | 'heartbeat.run'
   | 'skills.list'
@@ -90,7 +95,9 @@ export type RpcMethod =
   | 'fs.delete'
   | 'fs.rename'
   | 'fs.watch.start'
-  | 'fs.watch.stop';
+  | 'fs.watch.stop'
+  | 'agent.run_background'
+  | 'agent.background_runs';
 
 export type GatewayEventName =
   | 'agent.stream'
@@ -110,6 +117,8 @@ export type GatewayEventName =
   | 'cron.result'
   | 'session.update'
   | 'status.update'
+  | 'board.update'
+  | 'background.status'
   | 'fs.change';
 
 export type GatewayContext = {

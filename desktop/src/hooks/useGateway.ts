@@ -72,6 +72,9 @@ function applyStreamEvent(items: ChatItem[], evt: Record<string, unknown>): Chat
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];
       if ('streaming' in it && it.streaming) {
+        // tool_use: content_block_stop means input JSON is complete, NOT that the
+        // tool finished executing.  Keep streaming:true until agent.tool_result.
+        if (it.type === 'tool_use') return items;
         const u = [...items];
         u[i] = { ...it, streaming: false };
         return u;
@@ -144,6 +147,16 @@ export type ToolNotification = {
   input: Record<string, unknown>;
   tier: string;
   timestamp: number;
+};
+
+export type BackgroundRun = {
+  id: string;
+  sessionKey: string;
+  prompt: string;
+  startedAt: number;
+  status: 'running' | 'completed' | 'error';
+  result?: string;
+  error?: string;
 };
 
 type RpcResponse = {
@@ -294,6 +307,8 @@ export function useGateway(url = 'wss://localhost:18789') {
   const [telegramBotUsername, setTelegramBotUsername] = useState<string | null>(null);
   const [telegramLinkError, setTelegramLinkError] = useState<string | null>(null);
   const [providerInfo, setProviderInfo] = useState<{ name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } } | null>(null);
+  const [boardVersion, setBoardVersion] = useState(0);
+  const [backgroundRuns, setBackgroundRuns] = useState<BackgroundRun[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const rpcIdRef = useRef(0);
@@ -329,7 +344,7 @@ export function useGateway(url = 'wss://localhost:18789') {
 
     switch (name) {
       case 'agent.user_message': {
-        const d = data as { source: string; sessionKey?: string; prompt: string; timestamp: number };
+        const d = data as { source: string; sessionKey?: string; prompt: string; injected?: boolean; timestamp: number };
         if (d.sessionKey && d.sessionKey !== activeSessionKeyRef.current) break;
         // desktop/chat already adds user item in sendMessage, skip to avoid dupes
         if (d.source !== 'desktop/chat') {
@@ -338,7 +353,7 @@ export function useGateway(url = 'wss://localhost:18789') {
             content: d.prompt,
             timestamp: d.timestamp || Date.now(),
           }]);
-          setAgentStatus('thinking...');
+          setAgentStatus(prev => prev === 'idle' ? 'thinking...' : prev);
         }
         break;
       }
@@ -389,9 +404,18 @@ export function useGateway(url = 'wss://localhost:18789') {
           break;
         }
         setChatItems(prev => {
-          const updated = prev.map(item =>
-            'streaming' in item && item.streaming ? { ...item, streaming: false } : item
-          );
+          const updated = prev.map(item => {
+            let it = item;
+            if ('streaming' in it && it.streaming) it = { ...it, streaming: false };
+            // also clean up subItems for Task tools
+            if (it.type === 'tool_use' && it.subItems?.length) {
+              const subs = it.subItems.map(s =>
+                'streaming' in s && s.streaming ? { ...s, streaming: false } : s
+              );
+              it = { ...it, subItems: subs };
+            }
+            return it;
+          });
           updated.push({ type: 'result', cost: d.usage?.totalCostUsd, timestamp: Date.now() });
           return updated;
         });
@@ -536,6 +560,25 @@ export function useGateway(url = 'wss://localhost:18789') {
         setTimeout(() => {
           setNotifications(prev => prev.filter(n => n.timestamp !== d.timestamp));
         }, 5000);
+        break;
+      }
+
+      case 'board.update': {
+        setBoardVersion(v => v + 1);
+        break;
+      }
+
+      case 'background.status': {
+        const d = data as BackgroundRun;
+        setBackgroundRuns(prev => {
+          const idx = prev.findIndex(r => r.id === d.id);
+          if (idx >= 0) {
+            const updated = [...prev];
+            updated[idx] = d;
+            return updated;
+          }
+          return [...prev, d];
+        });
         break;
       }
 
@@ -713,7 +756,8 @@ export function useGateway(url = 'wss://localhost:18789') {
       content: prompt,
       timestamp: Date.now(),
     }]);
-    setAgentStatus('thinking...');
+    // don't override status if already running (injection case)
+    setAgentStatus(prev => prev === 'idle' ? 'thinking...' : prev);
     try {
       await rpc('chat.send', { prompt });
     } catch (err) {
@@ -973,6 +1017,16 @@ export function useGateway(url = 'wss://localhost:18789') {
     };
   }, [rpc]);
 
+  const runBackground = useCallback(async (prompt: string) => {
+    return await rpc('agent.run_background', { prompt }) as { backgroundRunId: string; sessionKey: string };
+  }, [rpc]);
+
+  const getBackgroundRuns = useCallback(async () => {
+    const runs = await rpc('agent.background_runs') as BackgroundRun[];
+    setBackgroundRuns(runs);
+    return runs;
+  }, [rpc]);
+
   const progress = useMemo<ProgressItem[]>(() => {
     for (let i = chatItems.length - 1; i >= 0; i--) {
       const item = chatItems[i];
@@ -1034,6 +1088,10 @@ export function useGateway(url = 'wss://localhost:18789') {
     telegramLink,
     telegramUnlink,
     providerInfo,
+    boardVersion,
+    backgroundRuns,
+    runBackground,
+    getBackgroundRuns,
     getProviderStatus,
     setProvider,
     authWithApiKey,

@@ -23,6 +23,7 @@
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@openai/codex-sdk": "^0.98.0",
     "@whiskeysockets/baileys": "^6.7.0",
+    "better-sqlite3": "^12.6.2",
     "dotenv": "^17.2.4",
     "grammy": "^1.21.0",
     "gray-matter": "^4.0.3",
@@ -33,6 +34,7 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/mime-types": "^3.0.1",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.1",

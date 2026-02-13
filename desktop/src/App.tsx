@@ -9,6 +9,7 @@ import { FileViewer } from './components/FileViewer';
 import { SettingsView } from './views/Settings';
 import { SoulView } from './views/Soul';
 import { SkillsView } from './views/Skills';
+import { BoardView } from './views/Board';
 import { OnboardingOverlay } from './components/Onboarding';
 import { Toaster, toast } from 'sonner';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -17,15 +18,16 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import {
   MessageSquare, Radio, Zap, Brain, Settings2,
-  FolderOpen, Sparkles
+  FolderOpen, Sparkles, LayoutGrid, Loader2
 } from 'lucide-react';
 
-type NavTab = 'chat' | 'channels' | 'automation' | 'skills' | 'memory' | 'settings';
+type NavTab = 'chat' | 'channels' | 'board' | 'automation' | 'skills' | 'memory' | 'settings';
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
 
 const NAV_ITEMS: { id: NavTab; label: string; icon: React.ReactNode }[] = [
   { id: 'chat', label: 'Task', icon: <MessageSquare className="w-3.5 h-3.5" /> },
   { id: 'channels', label: 'Channels', icon: <Radio className="w-3.5 h-3.5" /> },
+  { id: 'board', label: 'Board', icon: <LayoutGrid className="w-3.5 h-3.5" /> },
   { id: 'automation', label: 'Automations', icon: <Zap className="w-3.5 h-3.5" /> },
   { id: 'skills', label: 'Skills', icon: <Sparkles className="w-3.5 h-3.5" /> },
   { id: 'memory', label: 'Memory', icon: <Brain className="w-3.5 h-3.5" /> },
@@ -90,6 +92,8 @@ export default function App() {
         return <ChatView gateway={gw} />;
       case 'channels':
         return <ChannelView channel={selectedChannel} gateway={gw} onViewSession={handleViewSession} onSwitchChannel={setSelectedChannel} />;
+      case 'board':
+        return <BoardView gateway={gw} />;
       case 'automation':
         return <Automations gateway={gw} />;
       case 'skills':
@@ -162,6 +166,9 @@ export default function App() {
                     >
                       {item.icon}
                       {item.label}
+                      {item.id === 'chat' && gw.backgroundRuns.some(r => r.status === 'running') && (
+                        <Loader2 className="w-3 h-3 ml-auto animate-spin text-muted-foreground" />
+                      )}
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="right" className="text-[10px]">{item.label}</TooltipContent>

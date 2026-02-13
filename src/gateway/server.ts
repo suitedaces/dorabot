@@ -14,6 +14,7 @@ import { SessionRegistry } from './session-registry.js';
 import { ChannelManager } from './channel-manager.js';
 import { SessionManager } from '../session/manager.js';
 import { streamAgent, type AgentResult } from '../agent.js';
+import type { RunHandle } from '../providers/types.js';
 import { startHeartbeatRunner, type HeartbeatRunner } from '../heartbeat/runner.js';
 import { startCronRunner, loadCronJobs, saveCronJobs, type CronRunner } from '../cron/scheduler.js';
 import { checkSkillEligibility, loadAllSkills, findSkillByName } from '../skills/loader.js';
@@ -21,8 +22,10 @@ import type { InboundMessage } from '../channels/types.js';
 import { getAllChannelStatuses } from '../channels/index.js';
 import { loginWhatsApp, logoutWhatsApp, isWhatsAppLinked } from '../channels/whatsapp/login.js';
 import { getDefaultAuthDir } from '../channels/whatsapp/session.js';
+import { validateTelegramToken } from '../channels/telegram/bot.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { setCronRunner } from '../tools/index.js';
+import { loadBoard, saveBoard, type BoardTask } from '../tools/board.js';
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
 import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey } from '../providers/claude.js';
 import { isCodexInstalled, hasCodexAuth } from '../providers/codex.js';
@@ -213,8 +216,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     }
   };
 
-  const registryPath = join(config.sessionDir, '_registry.json');
-  const sessionRegistry = new SessionRegistry(registryPath);
+  const sessionRegistry = new SessionRegistry();
   sessionRegistry.loadFromDisk();
   const fileSessionManager = new SessionManager(config);
 
@@ -227,8 +229,51 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const pendingMessages = new Map<string, InboundMessage[]>();
   // accumulated tool log per active run
   const toolLogs = new Map<string, { completed: ToolEntry[]; current: { name: string; inputJson: string; detail: string } | null; lastEditAt: number }>();
+  // active RunHandles for message injection into running agent sessions
+  const runHandles = new Map<string, RunHandle>();
+
+  // per-session channel context so the stream loop can manage status messages
+  type ChannelRunContext = {
+    channel: string;
+    chatId: string;
+    statusMsgId?: string;
+    typingInterval?: ReturnType<typeof setInterval>;
+  };
+  const channelRunContexts = new Map<string, ChannelRunContext>();
+
+  // background runs state
+  type BackgroundRun = {
+    id: string; sessionKey: string; prompt: string;
+    startedAt: number; status: 'running' | 'completed' | 'error';
+    result?: string; error?: string;
+  };
+  const backgroundRuns = new Map<string, BackgroundRun>();
+
   // guard against overlapping WhatsApp login attempts
   let whatsappLoginInProgress = false;
+
+  // set up channel status message + typing for a session key
+  function setupChannelStatus(sessionKey: string, channel: string, chatId: string) {
+    const handler = getChannelHandler(channel);
+    if (!handler) return;
+
+    const ctx: ChannelRunContext = { channel, chatId };
+    channelRunContexts.set(sessionKey, ctx);
+
+    (async () => {
+      try {
+        if (handler.typing) handler.typing(chatId).catch(() => {});
+        const sent = await handler.send(chatId, 'thinking...');
+        ctx.statusMsgId = sent.id;
+        statusMessages.set(sessionKey, { channel, chatId, messageId: sent.id });
+      } catch {}
+      if (handler.typing) {
+        ctx.typingInterval = setInterval(() => {
+          handler.typing!(chatId).catch(() => {});
+        }, 4500);
+      }
+    })();
+  }
 
   // process a channel message (or batched messages) through the agent
   async function processChannelMessage(msg: InboundMessage, batchedBodies?: string[]) {
@@ -247,23 +292,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       senderName: msg.senderName,
     });
 
-    // send status message to channel + start typing indicator
-    const handler = getChannelHandler(msg.channel);
-    let statusMsgId: string | undefined;
-    let typingInterval: ReturnType<typeof setInterval> | undefined;
-    if (handler) {
-      try {
-        if (handler.typing) handler.typing(msg.chatId).catch(() => {});
-        const sent = await handler.send(msg.chatId, 'thinking...');
-        statusMsgId = sent.id;
-        statusMessages.set(session.key, { channel: msg.channel, chatId: msg.chatId, messageId: sent.id });
-      } catch {}
-      if (handler.typing) {
-        typingInterval = setInterval(() => {
-          handler.typing!(msg.chatId).catch(() => {});
-        }, 4500);
-      }
-    }
+    // send status message to channel + start typing indicator (stored in channelRunContexts)
+    setupChannelStatus(session.key, msg.channel, msg.chatId);
 
     // init tool log for this run
     toolLogs.set(session.key, { completed: [], current: null, lastEditAt: 0 });
@@ -277,13 +307,19 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     // escape < and > in body to prevent XML tag breakout
     const safeBody = body.replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+    // build media attribute if present
+    const mediaAttr = msg.mediaType ? ` media_type="${msg.mediaType}" media_path="${msg.mediaPath || ''}"` : '';
+
     const channelPrompt = [
-      `<incoming_message channel="${msg.channel}" sender="${safeSender}" chat="${msg.chatId}">`,
-      safeBody,
+      `<incoming_message channel="${msg.channel}" sender="${safeSender}" chat="${msg.chatId}"${mediaAttr}>`,
+      safeBody || (msg.mediaPath ? `[Attached: ${msg.mediaType || 'file'} at ${msg.mediaPath}]` : ''),
       `</incoming_message>`,
       '',
     ].join('\n');
 
+    // handleAgentRun may never return for persistent sessions (Claude async generator).
+    // Per-turn result handling is done inside the stream loop via channelRunContexts.
+    // For non-persistent providers (Codex), this returns normally and cleanup below runs as safety net.
     const result = await handleAgentRun({
       prompt: channelPrompt,
       sessionKey: session.key,
@@ -297,28 +333,24 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         body: body,
         replyToId: msg.replyToId,
         mediaType: msg.mediaType,
+        mediaPath: msg.mediaPath,
       },
     });
 
-    // clean up typing indicator and tool log
-    if (typingInterval) clearInterval(typingInterval);
+    // safety net cleanup for non-persistent providers (stream loop already handles this for persistent)
+    const ctx = channelRunContexts.get(session.key);
+    if (ctx) {
+      if (ctx.typingInterval) clearInterval(ctx.typingInterval);
+      channelRunContexts.delete(session.key);
+    }
     toolLogs.delete(session.key);
-
-    // delete the progress/status message, then send result as new message if needed
-    if (handler && statusMsgId) {
-      try { await handler.delete(statusMsgId, msg.chatId); } catch {}
-    }
     statusMessages.delete(session.key);
-    if (handler && !result?.usedMessageTool && result?.result) {
-      try { await handler.send(msg.chatId, result.result); } catch {}
-    }
 
-    // process any queued messages
+    // process any queued messages (only relevant for non-persistent providers)
     const queued = pendingMessages.get(session.key);
     if (queued && queued.length > 0) {
       const bodies = queued.map(m => m.body);
       pendingMessages.delete(session.key);
-      // use the last message as the "main" message for metadata
       const lastMsg = queued[queued.length - 1];
       await processChannelMessage(lastMsg, bodies);
     }
@@ -356,13 +388,41 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
       sessionRegistry.incrementMessages(session.key);
 
-      // if agent is already running for this chat, queue the message
+      // if agent is already running for this chat, try injection first
       if (session.activeRun) {
+        const handle = runHandles.get(session.key);
+        if (handle?.active) {
+          // sanitize sender name and body for injection
+          const safeSender = (msg.senderName || msg.senderId).replace(/[<>"'&\n\r]/g, '_').slice(0, 50);
+          const safeBody = msg.body.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          const mediaAttr = msg.mediaType ? ` media_type="${msg.mediaType}" media_path="${msg.mediaPath || ''}"` : '';
+          const channelPrompt = [
+            `<incoming_message channel="${msg.channel}" sender="${safeSender}" chat="${msg.chatId}"${mediaAttr}>`,
+            safeBody || (msg.mediaPath ? `[Attached: ${msg.mediaType || 'file'} at ${msg.mediaPath}]` : ''),
+            `</incoming_message>`,
+          ].join('\n');
+          handle.inject(channelPrompt);
+          // record injected user message in session (CLI doesn't echo user text back)
+          fileSessionManager.append(session.sessionId, {
+            type: 'user',
+            timestamp: new Date().toISOString(),
+            content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: channelPrompt }] } },
+            metadata: { channel: msg.channel, chatId: msg.chatId, body: msg.body, senderName: msg.senderName },
+          });
+          broadcast({ event: 'agent.user_message', data: {
+            source: `${msg.channel}/${msg.chatId}`, sessionKey: session.key,
+            prompt: msg.body, injected: true, timestamp: Date.now(),
+          }});
+          // the stream loop will create a fresh status message on the next tool_use
+          // (via channelRunContexts with no statusMsgId), giving full tool streaming UX
+          return;
+        }
+
+        // fallback: queue in pendingMessages (non-injection case)
         const queue = pendingMessages.get(session.key) || [];
         queue.push(msg);
         pendingMessages.set(session.key, queue);
 
-        // notify user
         const handler = getChannelHandler(msg.channel);
         if (handler) {
           try { await handler.send(msg.chatId, 'got it, I\'ll get to this after I\'m done'); } catch {}
@@ -718,6 +778,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           canUseTool: makeCanUseTool(channel, messageMetadata?.chatId),
           abortController,
           messageMetadata,
+          onRunReady: (handle) => { runHandles.set(sessionKey, handle); },
         });
 
         let agentText = '';
@@ -752,6 +813,23 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                   event: 'agent.tool_use',
                   data: { source, sessionKey, tool: toolName, timestamp: Date.now() },
                 });
+
+                // new turn on channel — create fresh status message if none exists
+                const ctx = channelRunContexts.get(sessionKey);
+                if (ctx && !ctx.statusMsgId) {
+                  const h = getChannelHandler(ctx.channel);
+                  if (h) {
+                    try {
+                      if (h.typing) h.typing(ctx.chatId).catch(() => {});
+                      const sent = await h.send(ctx.chatId, 'thinking...');
+                      ctx.statusMsgId = sent.id;
+                      statusMessages.set(sessionKey, { channel: ctx.channel, chatId: ctx.chatId, messageId: sent.id });
+                      if (h.typing) {
+                        ctx.typingInterval = setInterval(() => { h.typing!(ctx.chatId).catch(() => {}); }, 4500);
+                      }
+                    } catch {}
+                  }
+                }
 
                 const tl = toolLogs.get(sessionKey);
                 if (tl) {
@@ -920,6 +998,48 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               outputTokens: u?.output_tokens || 0,
               totalCostUsd: (m.total_cost_usd as number) || 0,
             };
+
+            // per-turn: broadcast agent.result so desktop sets agentStatus to idle
+            broadcast({
+              event: 'agent.result',
+              data: {
+                source,
+                sessionKey,
+                sessionId: agentSessionId || '',
+                result: agentText,
+                usage: agentUsage,
+                timestamp: Date.now(),
+              },
+            });
+
+            // per-turn: broadcast board.update if agent used board tools
+            const tl = toolLogs.get(sessionKey);
+            if (tl) {
+              const allTools = [...tl.completed.map(t => t.name), tl.current?.name].filter(Boolean);
+              if (allTools.some(t => t?.startsWith('board_') || t?.startsWith('mcp__dorabot-tools__board_'))) {
+                broadcast({ event: 'board.update', data: {} });
+              }
+            }
+
+            // per-turn channel cleanup — delete status msg, send result, reset for next turn
+            const ctx = channelRunContexts.get(sessionKey);
+            if (ctx) {
+              if (ctx.typingInterval) { clearInterval(ctx.typingInterval); ctx.typingInterval = undefined; }
+              const h = getChannelHandler(ctx.channel);
+              if (h && ctx.statusMsgId) {
+                try { await h.delete(ctx.statusMsgId, ctx.chatId); } catch {}
+                ctx.statusMsgId = undefined;
+              }
+              statusMessages.delete(sessionKey);
+              if (h && !usedMessageTool && agentText) {
+                try { await h.send(ctx.chatId, agentText); } catch {}
+              }
+            }
+
+            // reset for next turn (persistent sessions get multiple result events)
+            usedMessageTool = false;
+            agentText = '';
+            toolLogs.set(sessionKey, { completed: [], current: null, lastEditAt: 0 });
           }
         }
 
@@ -952,19 +1072,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
         }
 
-        console.log(`[gateway] agent done: source=${source} result="${result.result.slice(0, 100)}..." cost=$${result.usage.totalCostUsd?.toFixed(4) || '?'}`);
-
-        broadcast({
-          event: 'agent.result',
-          data: {
-            source,
-            sessionKey,
-            sessionId: result.sessionId,
-            result: result.result,
-            usage: result.usage,
-            timestamp: Date.now(),
-          },
-        });
+        // agent.result and board.update are broadcast per-turn inside executeStream's result handler.
+        // This point is only reached when the run actually ends (abort, error, or non-persistent provider).
+        console.log(`[gateway] agent run ended: source=${source} result="${result.result.slice(0, 100)}..." cost=$${result.usage.totalCostUsd?.toFixed(4) || '?'}`);
       } catch (err) {
         console.error(`[gateway] agent error: source=${source}`, err);
         broadcast({
@@ -974,6 +1084,19 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       } finally {
         activeAbortControllers.delete(sessionKey);
         activeRunChannels.delete(sessionKey);
+        runHandles.delete(sessionKey);
+        // clean up any remaining channel context (typing indicator, status message)
+        const ctx = channelRunContexts.get(sessionKey);
+        if (ctx) {
+          if (ctx.typingInterval) clearInterval(ctx.typingInterval);
+          if (ctx.statusMsgId) {
+            const h = getChannelHandler(ctx.channel);
+            if (h) { try { await h.delete(ctx.statusMsgId, ctx.chatId); } catch {} }
+          }
+          channelRunContexts.delete(sessionKey);
+        }
+        statusMessages.delete(sessionKey);
+        toolLogs.delete(sessionKey);
         sessionRegistry.setActiveRun(sessionKey, false);
         broadcast({ event: 'status.update', data: { activeRun: false, source, sessionKey } });
       }
@@ -1025,6 +1148,23 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           sessionRegistry.incrementMessages(session.key);
           fileSessionManager.setMetadata(session.sessionId, { channel: 'desktop', chatId: 'default', chatType: 'dm' });
 
+          // try injection into active run first
+          const handle = runHandles.get(sessionKey);
+          if (handle?.active) {
+            handle.inject(prompt);
+            // record injected user message in session (CLI doesn't echo user text back)
+            fileSessionManager.append(session.sessionId, {
+              type: 'user',
+              timestamp: new Date().toISOString(),
+              content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } },
+            });
+            broadcast({ event: 'agent.user_message', data: {
+              source: 'desktop/chat', sessionKey, prompt, injected: true, timestamp: Date.now(),
+            }});
+            return { id, result: { sessionKey, sessionId: session.sessionId, injected: true } };
+          }
+
+          // no active session — start new run
           handleAgentRun({
             prompt,
             sessionKey,
@@ -1195,6 +1335,78 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           return { id, result: { success: true } };
         }
 
+        case 'channels.telegram.status': {
+          const tokenFile = config.channels?.telegram?.tokenFile
+            || join(homedir(), '.dorabot', 'telegram', 'token');
+          const linked = existsSync(tokenFile) && readFileSync(tokenFile, 'utf-8').trim().length > 0;
+          const botUsername = linked ? (config.channels?.telegram?.accountId || null) : null;
+          return { id, result: { linked, botUsername } };
+        }
+
+        case 'channels.telegram.link': {
+          const token = (params?.token as string || '').trim();
+          if (!token) return { id, error: 'token is required' };
+          if (!token.includes(':')) {
+            return { id, error: 'Invalid token format. Expected format: 123456:ABC-DEF1234...' };
+          }
+
+          let botInfo: { id: number; username: string; firstName: string };
+          try {
+            botInfo = await validateTelegramToken(token);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return { id, error: `Invalid token: ${msg}` };
+          }
+
+          const tokenDir = join(homedir(), '.dorabot', 'telegram');
+          mkdirSync(tokenDir, { recursive: true });
+          writeFileSync(join(tokenDir, 'token'), token, { mode: 0o600 });
+
+          if (!config.channels) config.channels = {};
+          if (!config.channels.telegram) config.channels.telegram = {};
+          config.channels.telegram.enabled = true;
+          config.channels.telegram.accountId = `@${botInfo.username}`;
+          saveConfig(config);
+
+          broadcast({
+            event: 'telegram.link_status',
+            data: { status: 'linked', botUsername: `@${botInfo.username}` },
+          });
+
+          try {
+            await channelManager.startChannel('telegram');
+          } catch (err) {
+            console.error('[gateway] telegram auto-start failed:', err);
+          }
+
+          return {
+            id,
+            result: {
+              success: true,
+              botId: botInfo.id,
+              botUsername: `@${botInfo.username}`,
+              botName: botInfo.firstName,
+            },
+          };
+        }
+
+        case 'channels.telegram.unlink': {
+          await channelManager.stopChannel('telegram');
+
+          const tokenFile = config.channels?.telegram?.tokenFile
+            || join(homedir(), '.dorabot', 'telegram', 'token');
+          if (existsSync(tokenFile)) rmSync(tokenFile);
+
+          if (config.channels?.telegram) {
+            config.channels.telegram.enabled = false;
+            delete config.channels.telegram.accountId;
+            saveConfig(config);
+          }
+
+          broadcast({ event: 'telegram.link_status', data: { status: 'unlinked' } });
+          return { id, result: { success: true } };
+        }
+
         case 'cron.list': {
           const jobs = cronRunner?.listJobs() || loadCronJobs();
           return { id, result: jobs };
@@ -1231,6 +1443,83 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!jobId) return { id, error: 'id required' };
           const runResult = await cronRunner.runJobNow(jobId);
           return { id, result: runResult };
+        }
+
+        case 'board.list': {
+          const board = loadBoard();
+          return { id, result: board.tasks };
+        }
+
+        case 'board.add': {
+          const board = loadBoard();
+          const title = params?.title as string;
+          if (!title) return { id, error: 'title required' };
+          const now = new Date().toISOString();
+          const ids = board.tasks.map(t => parseInt(t.id, 10)).filter(n => !isNaN(n));
+          const newId = String((ids.length > 0 ? Math.max(...ids) : 0) + 1);
+          const source = (params?.source as string) || 'user';
+          const task: BoardTask = {
+            id: newId,
+            title,
+            description: params?.description as string | undefined,
+            status: (params?.status as BoardTask['status']) || (source === 'user' ? 'approved' : 'proposed'),
+            priority: (params?.priority as BoardTask['priority']) || 'medium',
+            source: source as 'agent' | 'user',
+            createdAt: now,
+            updatedAt: now,
+            tags: params?.tags as string[] | undefined,
+          };
+          board.tasks.push(task);
+          saveBoard(board);
+          broadcast({ event: 'board.update', data: {} });
+          return { id, result: task };
+        }
+
+        case 'board.update': {
+          const taskId = params?.id as string;
+          if (!taskId) return { id, error: 'id required' };
+          const board = loadBoard();
+          const task = board.tasks.find(t => t.id === taskId);
+          if (!task) return { id, error: 'task not found' };
+          const now = new Date().toISOString();
+          if (params?.status !== undefined) task.status = params.status as BoardTask['status'];
+          if (params?.title !== undefined) task.title = params.title as string;
+          if (params?.description !== undefined) task.description = params.description as string;
+          if (params?.priority !== undefined) task.priority = params.priority as BoardTask['priority'];
+          if (params?.result !== undefined) task.result = params.result as string;
+          if (params?.tags !== undefined) task.tags = params.tags as string[];
+          task.updatedAt = now;
+          if (task.status === 'done') task.completedAt = now;
+          saveBoard(board);
+          broadcast({ event: 'board.update', data: {} });
+          return { id, result: task };
+        }
+
+        case 'board.delete': {
+          const taskId = params?.id as string;
+          if (!taskId) return { id, error: 'id required' };
+          const board = loadBoard();
+          const before = board.tasks.length;
+          board.tasks = board.tasks.filter(t => t.id !== taskId);
+          if (board.tasks.length === before) return { id, error: 'task not found' };
+          saveBoard(board);
+          broadcast({ event: 'board.update', data: {} });
+          return { id, result: { deleted: true } };
+        }
+
+        case 'board.move': {
+          const taskId = params?.id as string;
+          const status = params?.status as string;
+          if (!taskId || !status) return { id, error: 'id and status required' };
+          const board = loadBoard();
+          const task = board.tasks.find(t => t.id === taskId);
+          if (!task) return { id, error: 'task not found' };
+          task.status = status as BoardTask['status'];
+          task.updatedAt = new Date().toISOString();
+          if (status === 'done') task.completedAt = task.updatedAt;
+          saveBoard(board);
+          broadcast({ event: 'board.update', data: {} });
+          return { id, result: task };
         }
 
         case 'heartbeat.status': {
@@ -1938,6 +2227,37 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           saveConfig(config);
           broadcast({ event: 'config.update', data: { key: `security.paths.${target}`, value: { allowed, denied } } });
           return { id, result: { target, allowed, denied } };
+        }
+
+        case 'agent.run_background': {
+          const prompt = params?.prompt as string;
+          if (!prompt) return { id, error: 'prompt required' };
+
+          const bgId = randomUUID();
+          const sessionKey = `bg:${bgId}`;
+          const bgRun: BackgroundRun = {
+            id: bgId, sessionKey, prompt,
+            startedAt: Date.now(), status: 'running',
+          };
+          backgroundRuns.set(bgId, bgRun);
+          broadcast({ event: 'background.status', data: bgRun });
+
+          // fire and forget — runs on its own session key
+          handleAgentRun({ prompt, sessionKey, source: 'desktop/background' }).then(result => {
+            bgRun.status = 'completed';
+            bgRun.result = result?.result;
+            broadcast({ event: 'background.status', data: bgRun });
+          }).catch(err => {
+            bgRun.status = 'error';
+            bgRun.error = err instanceof Error ? err.message : String(err);
+            broadcast({ event: 'background.status', data: bgRun });
+          });
+
+          return { id, result: { backgroundRunId: bgId, sessionKey } };
+        }
+
+        case 'agent.background_runs': {
+          return { id, result: Array.from(backgroundRuns.values()) };
         }
 
         default:

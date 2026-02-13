@@ -10,6 +10,7 @@ import { ScreenshotTool } from "./ScreenshotTool"
 import { MessageTool } from "./MessageTool"
 import { BrowserTool } from "./BrowserTool"
 import { CronTool } from "./CronTool"
+import { BoardTool } from "./BoardTool"
 import { TaskTool } from "./TaskTool"
 import { DefaultTool } from "./DefaultTool"
 
@@ -40,6 +41,10 @@ const TOOL_MAP: Record<string, React.ComponentType<ToolUIProps>> = {
   schedule_cron: CronTool,
   list_reminders: CronTool,
   cancel_reminder: CronTool,
+  board_view: BoardTool,
+  board_add: BoardTool,
+  board_update: BoardTool,
+  board_propose: BoardTool,
   Task: TaskTool,
 }
 

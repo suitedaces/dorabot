@@ -19,7 +19,7 @@ import {
   Square, Plus, ChevronDown, ChevronRight, Sparkles,
   FileText, FilePlus, Pencil, FolderSearch, FileSearch, Terminal,
   Globe, Search, Bot, MessageCircle, ListChecks, FileCode,
-  MessageSquare, Camera, Monitor, Clock, Wrench, ArrowUp,
+  MessageSquare, Camera, Monitor, Clock, Wrench, ArrowUp, LayoutGrid,
   Smile, Image,
   type LucideIcon,
 } from 'lucide-react';
@@ -49,6 +49,10 @@ const TOOL_TEXT: Record<string, { pending: string; done: string }> = {
   list_reminders: { pending: 'Listing reminders', done: 'Listed reminders' },
   cancel_reminder: { pending: 'Cancelling reminder', done: 'Cancelled reminder' },
   browser: { pending: 'Using browser', done: 'Used browser' },
+  board_view: { pending: 'Viewing board', done: 'Viewed board' },
+  board_add: { pending: 'Adding task', done: 'Added task' },
+  board_update: { pending: 'Updating task', done: 'Updated task' },
+  board_propose: { pending: 'Proposing tasks', done: 'Proposed tasks' },
 };
 
 function toolText(name: string, state: 'pending' | 'done'): string {
@@ -64,6 +68,8 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   message: MessageSquare, screenshot: Camera, browser: Monitor,
   schedule_reminder: Clock, schedule_recurring: Clock,
   schedule_cron: Clock, list_reminders: Clock, cancel_reminder: Clock,
+  board_view: LayoutGrid, board_add: LayoutGrid,
+  board_update: LayoutGrid, board_propose: LayoutGrid,
 };
 
 const ANTHROPIC_MODELS = [
