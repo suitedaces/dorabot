@@ -141,6 +141,7 @@ export type ToolApproval = {
   toolName: string;
   input: Record<string, unknown>;
   tier: string;
+  sessionKey?: string;
   timestamp: number;
 };
 
@@ -159,6 +160,19 @@ export type BackgroundRun = {
   status: 'running' | 'completed' | 'error';
   result?: string;
   error?: string;
+};
+
+export type SessionState = {
+  chatItems: ChatItem[];
+  agentStatus: string;
+  sessionId?: string;
+  pendingQuestion: AskUserQuestion | null;
+};
+
+const DEFAULT_SESSION_STATE: SessionState = {
+  chatItems: [],
+  agentStatus: 'idle',
+  pendingQuestion: null,
 };
 
 type RpcResponse = {
@@ -351,8 +365,6 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
   return items;
 }
 
-const SESSION_STORAGE_KEY = 'dorabot:sessionId';
-
 // Token consumed once from preload, cached in module scope — not re-extractable
 let cachedToken: string | null = null;
 function getToken(): string {
@@ -364,17 +376,32 @@ function getToken(): string {
   return cachedToken ?? '';
 }
 
+// Helper: update a single session's chatItems in the map
+function updateSessionChatItems(
+  prev: Record<string, SessionState>,
+  sk: string,
+  updater: (items: ChatItem[]) => ChatItem[],
+): Record<string, SessionState> {
+  const state = prev[sk];
+  if (!state) return prev;
+  const newItems = updater(state.chatItems);
+  if (newItems === state.chatItems) return prev;
+  return { ...prev, [sk]: { ...state, chatItems: newItems } };
+}
+
 export function useGateway(url = 'wss://localhost:18789') {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
-  const [chatItems, setChatItems] = useState<ChatItem[]>([]);
+
+  // Multi-session state: all tracked sessions' state keyed by sessionKey
+  const [sessionStates, setSessionStates] = useState<Record<string, SessionState>>({});
+  // Which session is currently active (displayed in the focused tab)
+  const [activeSessionKey, setActiveSessionKey] = useState<string>('');
+
   const [channelMessages, setChannelMessages] = useState<ChannelMessage[]>([]);
   const [channelStatuses, setChannelStatuses] = useState<ChannelStatusInfo[]>([]);
-  const [agentStatus, setAgentStatus] = useState<string>('idle');
   const [model, setModel] = useState<string>('');
   const [configData, setConfigData] = useState<Record<string, unknown> | null>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
-  const [currentSessionId, setCurrentSessionId] = useState<string | undefined>();
-  const [pendingQuestion, setPendingQuestion] = useState<AskUserQuestion | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<ToolApproval[]>([]);
   const [notifications, setNotifications] = useState<ToolNotification[]>([]);
   const [whatsappQr, setWhatsappQr] = useState<string | null>(null);
@@ -392,10 +419,13 @@ export function useGateway(url = 'wss://localhost:18789') {
   const pendingRpcRef = useRef(new Map<number, PendingRpc>());
   const reconnectTimerRef = useRef<number | null>(null);
   const fsChangeListenersRef = useRef<Set<(path: string) => void>>(new Set());
-  // track which session key we're viewing - only show stream events for this key
-  const activeSessionKeyRef = useRef<string>('desktop:dm:default');
-  // track the current desktop chatId so we can pass it to chat.send
+
+  // Refs for event handler (doesn't close over state)
+  const activeSessionKeyRef = useRef<string>('');
   const currentChatIdRef = useRef<string>(`task-${Date.now()}`);
+  const trackedSessionsRef = useRef<Set<string>>(new Set());
+  // Callback ref for tab system to be notified of sessionId changes
+  const onSessionIdChangeRef = useRef<((sessionKey: string, sessionId: string) => void) | null>(null);
 
   const rpc = useCallback(async (method: string, params?: Record<string, unknown>, timeoutMs = 30000): Promise<unknown> => {
     const ws = wsRef.current;
@@ -418,71 +448,133 @@ export function useGateway(url = 'wss://localhost:18789') {
     });
   }, []);
 
+  // --- Session tracking ---
+
+  const trackSession = useCallback((sessionKey: string) => {
+    trackedSessionsRef.current.add(sessionKey);
+    setSessionStates(prev => {
+      if (prev[sessionKey]) return prev;
+      return { ...prev, [sessionKey]: { ...DEFAULT_SESSION_STATE } };
+    });
+  }, []);
+
+  const untrackSession = useCallback((sessionKey: string) => {
+    trackedSessionsRef.current.delete(sessionKey);
+    setSessionStates(prev => {
+      if (!prev[sessionKey]) return prev;
+      const { [sessionKey]: _, ...rest } = prev;
+      return rest;
+    });
+  }, []);
+
+  const setActiveSession = useCallback((sessionKey: string, chatId: string) => {
+    activeSessionKeyRef.current = sessionKey;
+    currentChatIdRef.current = chatId;
+    setActiveSessionKey(sessionKey);
+  }, []);
+
+  const loadSessionIntoMap = useCallback(async (sessionId: string, sessionKey: string, chatId?: string) => {
+    try {
+      const res = await rpc('sessions.get', { sessionId }) as { sessionId: string; messages: SessionMessage[] };
+      if (res?.messages) {
+        const items = sessionMessagesToChatItems(res.messages);
+        setSessionStates(prev => ({
+          ...prev,
+          [sessionKey]: {
+            ...(prev[sessionKey] || DEFAULT_SESSION_STATE),
+            chatItems: items,
+            sessionId,
+          },
+        }));
+        // restore registry entry so next chat.send continues this conversation
+        rpc('sessions.resume', { sessionId }).catch((err: unknown) => {
+          console.warn('failed to resume session in registry:', err);
+        });
+      }
+    } catch (err) {
+      console.error('failed to load session into map:', err);
+    }
+  }, [rpc]);
+
+  // --- Event handling (routes to all tracked sessions) ---
+
   const handleEvent = useCallback((event: GatewayEvent) => {
     const { event: name, data } = event;
 
     switch (name) {
       case 'agent.user_message': {
         const d = data as { source: string; sessionKey?: string; prompt: string; injected?: boolean; timestamp: number };
-        if (d.sessionKey && d.sessionKey !== activeSessionKeyRef.current) break;
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk)) break;
         // desktop/chat already adds user item in sendMessage, skip to avoid dupes
         if (d.source !== 'desktop/chat') {
-          setChatItems(prev => [...prev, {
-            type: 'user',
-            content: d.prompt,
-            timestamp: d.timestamp || Date.now(),
-          }]);
-          setAgentStatus(prev => prev === 'idle' ? 'thinking...' : prev);
+          setSessionStates(prev => {
+            const state = prev[sk];
+            if (!state) return prev;
+            return {
+              ...prev,
+              [sk]: {
+                ...state,
+                chatItems: [...state.chatItems, { type: 'user', content: d.prompt, timestamp: d.timestamp || Date.now() }],
+                agentStatus: state.agentStatus === 'idle' ? 'thinking...' : state.agentStatus,
+              },
+            };
+          });
         }
         break;
       }
 
       case 'agent.tool_use': {
         const d = data as { source: string; sessionKey?: string; tool: string; timestamp: number };
-        if (d.sessionKey && d.sessionKey !== activeSessionKeyRef.current) break;
-        setAgentStatus(`${TOOL_PENDING_TEXT[d.tool] || `running ${d.tool}`}...`);
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk)) break;
+        setSessionStates(prev => {
+          const state = prev[sk];
+          if (!state) return prev;
+          return { ...prev, [sk]: { ...state, agentStatus: `${TOOL_PENDING_TEXT[d.tool] || `running ${d.tool}`}...` } };
+        });
         break;
       }
 
       case 'agent.stream': {
         const d = data as { source: string; sessionKey?: string; event: Record<string, unknown>; parentToolUseId?: string | null; timestamp: number };
-        if (d.sessionKey && d.sessionKey !== activeSessionKeyRef.current) break;
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk)) break;
         const evt = d.event;
         if (!evt) break;
         const parentId = d.parentToolUseId;
 
         if (parentId) {
           // subagent event — route into parent tool_use's subItems
-          setChatItems(prev => {
-            for (let i = prev.length - 1; i >= 0; i--) {
-              const it = prev[i];
+          setSessionStates(prev => updateSessionChatItems(prev, sk, items => {
+            for (let i = items.length - 1; i >= 0; i--) {
+              const it = items[i];
               if (it.type === 'tool_use' && it.id === parentId) {
-                const updated = [...prev];
+                const updated = [...items];
                 updated[i] = { ...it, subItems: applyStreamEvent(it.subItems || [], evt) };
                 return updated;
               }
             }
-            return prev;
-          });
+            return items;
+          }));
           break;
         }
 
         // top-level event
-        setChatItems(prev => applyStreamEvent(prev, evt));
+        setSessionStates(prev => updateSessionChatItems(prev, sk, items => applyStreamEvent(items, evt)));
         break;
       }
 
       case 'agent.result': {
         const d = data as { sessionKey?: string; sessionId: string; result: string; usage?: { totalCostUsd?: number } };
-        if (d.sessionKey && d.sessionKey !== activeSessionKeyRef.current) {
-          // not our session — session.update event handles sidebar refresh
-          break;
-        }
-        setChatItems(prev => {
-          const updated = prev.map(item => {
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk)) break;
+        setSessionStates(prev => {
+          const state = prev[sk];
+          if (!state) return prev;
+          const updated = state.chatItems.map(item => {
             let it = item;
             if ('streaming' in it && it.streaming) it = { ...it, streaming: false };
-            // also clean up subItems for Task tools
             if (it.type === 'tool_use' && it.subItems?.length) {
               const subs = it.subItems.map(s =>
                 'streaming' in s && s.streaming ? { ...s, streaming: false } : s
@@ -492,49 +584,71 @@ export function useGateway(url = 'wss://localhost:18789') {
             return it;
           });
           updated.push({ type: 'result', cost: d.usage?.totalCostUsd, timestamp: Date.now() });
-          return updated;
+          return {
+            ...prev,
+            [sk]: { ...state, chatItems: updated, agentStatus: 'idle', sessionId: d.sessionId || state.sessionId },
+          };
         });
-        setAgentStatus('idle');
-        if (d.sessionId) {
-          setCurrentSessionId(d.sessionId);
-          localStorage.setItem(SESSION_STORAGE_KEY, d.sessionId);
+        // Notify tab system of sessionId assignment
+        if (d.sessionId && onSessionIdChangeRef.current) {
+          onSessionIdChangeRef.current(sk, d.sessionId);
         }
         break;
       }
 
       case 'agent.error': {
         const d = data as { sessionKey?: string; error: string };
-        if (d.sessionKey && d.sessionKey !== activeSessionKeyRef.current) break;
-        setChatItems(prev => [...prev, {
-          type: 'error',
-          content: d.error,
-          timestamp: Date.now(),
-        }]);
-        setAgentStatus('idle');
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk)) break;
+        setSessionStates(prev => {
+          const state = prev[sk];
+          if (!state) return prev;
+          return {
+            ...prev,
+            [sk]: {
+              ...state,
+              chatItems: [...state.chatItems, { type: 'error', content: d.error, timestamp: Date.now() }],
+              agentStatus: 'idle',
+            },
+          };
+        });
         break;
       }
 
       case 'agent.ask_user': {
-        const d = data as { requestId: string; questions: AskUserQuestion['questions']; timestamp: number };
-        setPendingQuestion({ requestId: d.requestId, questions: d.questions });
-        setAgentStatus('waiting for input...');
+        const d = data as { requestId: string; sessionKey?: string; questions: AskUserQuestion['questions']; timestamp: number };
+        const sk = d.sessionKey;
+        if (sk && trackedSessionsRef.current.has(sk)) {
+          setSessionStates(prev => {
+            const state = prev[sk];
+            if (!state) return prev;
+            return {
+              ...prev,
+              [sk]: {
+                ...state,
+                pendingQuestion: { requestId: d.requestId, questions: d.questions },
+                agentStatus: 'waiting for input...',
+              },
+            };
+          });
+        }
         break;
       }
 
       case 'agent.message': {
         // Full assistant messages — from non-streaming providers (Codex) or subagent turns.
-        // SDK yields subagent turns as complete assistant messages with parent_tool_use_id set.
         const d = data as { source: string; sessionKey?: string; message: Record<string, unknown>; parentToolUseId?: string | null; timestamp: number };
-        if (d.sessionKey && d.sessionKey !== activeSessionKeyRef.current) break;
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk)) break;
         const parentId = d.parentToolUseId;
         const assistantMsg = d.message?.message as Record<string, unknown>;
         const content = assistantMsg?.content as unknown[];
 
         if (parentId && Array.isArray(content)) {
           // subagent message — route tool_use and text blocks into parent Task's subItems
-          setChatItems(prev => {
-            for (let i = prev.length - 1; i >= 0; i--) {
-              const it = prev[i];
+          setSessionStates(prev => updateSessionChatItems(prev, sk, items => {
+            for (let i = items.length - 1; i >= 0; i--) {
+              const it = items[i];
               if (it.type === 'tool_use' && it.id === parentId) {
                 const subs = [...(it.subItems || [])];
                 for (const block of content) {
@@ -550,56 +664,59 @@ export function useGateway(url = 'wss://localhost:18789') {
                     subs.push({ type: 'text', content: b.text as string, streaming: false, timestamp: d.timestamp || Date.now() });
                   }
                 }
-                const updated = [...prev];
+                const updated = [...items];
                 updated[i] = { ...it, subItems: subs };
                 return updated;
               }
             }
-            return prev;
-          });
+            return items;
+          }));
           break;
         }
 
         // top-level assistant message (non-streaming provider like Codex)
         if (Array.isArray(content)) {
-          for (const block of content) {
-            const b = block as Record<string, unknown>;
-            if (b.type === 'text' && typeof b.text === 'string') {
-              setChatItems(prev => [...prev, { type: 'text', content: b.text as string, streaming: false, timestamp: d.timestamp || Date.now() }]);
-            } else if (b.type === 'tool_use') {
-              setChatItems(prev => [...prev, {
-                type: 'tool_use',
-                id: (b.id as string) || '',
-                name: cleanToolName((b.name as string) || 'unknown'),
-                input: typeof b.input === 'string' ? b.input : JSON.stringify(b.input || {}),
-                streaming: true,
-                timestamp: d.timestamp || Date.now(),
-              }]);
-            } else if (b.type === 'thinking' && typeof b.thinking === 'string') {
-              setChatItems(prev => [...prev, { type: 'thinking', content: b.thinking as string, streaming: false, timestamp: d.timestamp || Date.now() }]);
+          setSessionStates(prev => updateSessionChatItems(prev, sk, items => {
+            const updated = [...items];
+            for (const block of content) {
+              const b = block as Record<string, unknown>;
+              if (b.type === 'text' && typeof b.text === 'string') {
+                updated.push({ type: 'text', content: b.text as string, streaming: false, timestamp: d.timestamp || Date.now() });
+              } else if (b.type === 'tool_use') {
+                updated.push({
+                  type: 'tool_use',
+                  id: (b.id as string) || '',
+                  name: cleanToolName((b.name as string) || 'unknown'),
+                  input: typeof b.input === 'string' ? b.input : JSON.stringify(b.input || {}),
+                  streaming: true,
+                  timestamp: d.timestamp || Date.now(),
+                });
+              } else if (b.type === 'thinking' && typeof b.thinking === 'string') {
+                updated.push({ type: 'thinking', content: b.thinking as string, streaming: false, timestamp: d.timestamp || Date.now() });
+              }
             }
-          }
+            return updated;
+          }));
         }
         break;
       }
 
       case 'agent.tool_result': {
         const d = data as { sessionKey?: string; tool_use_id: string; toolName?: string; content: string; imageData?: string; is_error?: boolean; parentToolUseId?: string | null };
-        if (d.sessionKey && d.sessionKey !== activeSessionKeyRef.current) break;
-        setChatItems(prev => {
-          // subagent tool result — SDK yields these with parent_tool_use_id set
-          // but does NOT yield subagent stream_events, so we create synthetic
-          // tool_use subItems for results that have no matching tool_use yet
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk)) break;
+        setSessionStates(prev => updateSessionChatItems(prev, sk, items => {
+          // subagent tool result
           if (d.parentToolUseId) {
-            for (let i = prev.length - 1; i >= 0; i--) {
-              const it = prev[i];
+            for (let i = items.length - 1; i >= 0; i--) {
+              const it = items[i];
               if (it.type === 'tool_use' && it.id === d.parentToolUseId) {
                 const subs = it.subItems || [];
                 // try to find existing tool_use subItem
                 for (let j = subs.length - 1; j >= 0; j--) {
                   const sub = subs[j];
                   if (sub.type === 'tool_use' && sub.id === d.tool_use_id) {
-                    const updated = [...prev];
+                    const updated = [...items];
                     const newSubs = [...subs];
                     newSubs[j] = { ...sub, output: d.content, imageData: d.imageData, is_error: d.is_error, streaming: false };
                     updated[i] = { ...it, subItems: newSubs };
@@ -607,7 +724,7 @@ export function useGateway(url = 'wss://localhost:18789') {
                   }
                 }
                 // no matching tool_use — create synthetic one with result
-                const updated = [...prev];
+                const updated = [...items];
                 const newSub: ChatItem = {
                   type: 'tool_use', id: d.tool_use_id, name: d.toolName || 'tool',
                   input: '', output: d.content, imageData: d.imageData,
@@ -620,18 +737,18 @@ export function useGateway(url = 'wss://localhost:18789') {
           }
           // top-level tool result
           let idx = -1;
-          for (let i = prev.length - 1; i >= 0; i--) {
-            const it = prev[i];
+          for (let i = items.length - 1; i >= 0; i--) {
+            const it = items[i];
             if (it.type === 'tool_use' && it.id === d.tool_use_id) { idx = i; break; }
           }
           if (idx >= 0) {
-            const updated = [...prev];
+            const updated = [...items];
             const item = updated[idx] as Extract<ChatItem, { type: 'tool_use' }>;
             updated[idx] = { ...item, output: d.content, imageData: d.imageData, is_error: d.is_error, streaming: false };
             return updated;
           }
-          return prev;
-        });
+          return items;
+        }));
         break;
       }
 
@@ -658,8 +775,15 @@ export function useGateway(url = 'wss://localhost:18789') {
       case 'status.update': {
         const d = data as { activeRun?: boolean; source?: string; sessionKey?: string; model?: string };
         if (d.model) setModel(d.model);
-        if (d.sessionKey === activeSessionKeyRef.current || !d.sessionKey) {
-          setAgentStatus(d.activeRun ? `running (${d.source || 'agent'})` : 'idle');
+        const sk = d.sessionKey;
+        if (sk && trackedSessionsRef.current.has(sk)) {
+          setSessionStates(prev => {
+            const state = prev[sk];
+            if (!state) return prev;
+            const newStatus = d.activeRun ? `running (${d.source || 'agent'})` : 'idle';
+            if (state.agentStatus === newStatus) return prev;
+            return { ...prev, [sk]: { ...state, agentStatus: newStatus } };
+          });
         }
         break;
       }
@@ -724,7 +848,6 @@ export function useGateway(url = 'wss://localhost:18789') {
 
       case 'fs.change': {
         const d = data as { path: string; eventType: string; filename: string | null };
-        // notify all listeners
         fsChangeListenersRef.current.forEach(listener => listener(d.path));
         break;
       }
@@ -810,28 +933,7 @@ export function useGateway(url = 'wss://localhost:18789') {
               const arr = res as SessionInfo[];
               if (Array.isArray(arr)) setSessions(arr);
             }).catch(() => {});
-            const savedSession = localStorage.getItem(SESSION_STORAGE_KEY);
-            if (savedSession) {
-              rpc('sessions.get', { sessionId: savedSession }).then((res) => {
-                const r = res as { sessionId: string; messages: SessionMessage[] };
-                if (r?.messages) {
-                  setChatItems(sessionMessagesToChatItems(r.messages));
-                  setCurrentSessionId(savedSession);
-                  // restore registry so conversation continues after reconnect
-                  rpc('sessions.resume', { sessionId: savedSession }).then((resumeRes) => {
-                    const rr = resumeRes as { key?: string } | undefined;
-                    if (rr?.key) {
-                      activeSessionKeyRef.current = rr.key;
-                      // extract chatId from key (channel:chatType:chatId)
-                      const parts = rr.key.split(':');
-                      if (parts.length >= 3) currentChatIdRef.current = parts.slice(2).join(':');
-                    }
-                  }).catch(() => {});
-                }
-              }).catch(() => {
-                localStorage.removeItem(SESSION_STORAGE_KEY);
-              });
-            }
+            // Tab system handles session restoration — no auto-restore here
           },
           reject: (err) => {
             console.error('auth failed:', err);
@@ -899,61 +1001,78 @@ export function useGateway(url = 'wss://localhost:18789') {
   }, [connect]);
 
   const sendMessage = useCallback(async (prompt: string) => {
-    setChatItems(prev => [...prev, {
-      type: 'user',
-      content: prompt,
-      timestamp: Date.now(),
-    }]);
-    // don't override status if already running (injection case)
-    setAgentStatus(prev => prev === 'idle' ? 'thinking...' : prev);
+    const sk = activeSessionKeyRef.current;
+    // Optimistic update: add user message and set status
+    setSessionStates(prev => {
+      const state = prev[sk] || { ...DEFAULT_SESSION_STATE };
+      return {
+        ...prev,
+        [sk]: {
+          ...state,
+          chatItems: [...state.chatItems, { type: 'user', content: prompt, timestamp: Date.now() }],
+          agentStatus: state.agentStatus === 'idle' ? 'thinking...' : state.agentStatus,
+        },
+      };
+    });
     try {
       const res = await rpc('chat.send', { prompt, chatId: currentChatIdRef.current }) as { sessionKey?: string } | undefined;
-      if (res?.sessionKey) {
+      if (res?.sessionKey && res.sessionKey !== sk) {
+        // sessionKey changed (e.g. server normalized it) — migrate state
         activeSessionKeyRef.current = res.sessionKey;
+        setActiveSessionKey(res.sessionKey);
       }
     } catch (err) {
-      setChatItems(prev => [...prev, {
-        type: 'error',
-        content: err instanceof Error ? err.message : String(err),
-        timestamp: Date.now(),
-      }]);
-      setAgentStatus('idle');
+      setSessionStates(prev => {
+        const state = prev[sk];
+        if (!state) return prev;
+        return {
+          ...prev,
+          [sk]: {
+            ...state,
+            chatItems: [...state.chatItems, { type: 'error', content: err instanceof Error ? err.message : String(err), timestamp: Date.now() }],
+            agentStatus: 'idle',
+          },
+        };
+      });
     }
   }, [rpc]);
 
   const loadSession = useCallback(async (sessionId: string, sessionKey?: string, chatId?: string) => {
-    try {
-      const res = await rpc('sessions.get', { sessionId }) as { sessionId: string; messages: SessionMessage[] };
-      if (res?.messages) {
-        const items = sessionMessagesToChatItems(res.messages);
-        setChatItems(items);
-        setCurrentSessionId(sessionId);
-        activeSessionKeyRef.current = sessionKey || 'desktop:dm:default';
-        // keep chatId ref in sync so sendMessage targets the right session
-        if (chatId) currentChatIdRef.current = chatId;
-        localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
-        // restore registry entry so next chat.send continues this conversation
-        rpc('sessions.resume', { sessionId }).catch((err: unknown) => {
-          console.warn('failed to resume session in registry:', err);
-        });
-      }
-    } catch (err) {
-      console.error('failed to load session:', err);
-    }
-  }, [rpc]);
+    // Legacy single-session load — now delegates to loadSessionIntoMap + setActiveSession
+    const sk = sessionKey || 'desktop:dm:default';
+    const cid = chatId || 'default';
+    trackedSessionsRef.current.add(sk);
+    setSessionStates(prev => {
+      if (prev[sk]) return prev;
+      return { ...prev, [sk]: { ...DEFAULT_SESSION_STATE } };
+    });
+    activeSessionKeyRef.current = sk;
+    currentChatIdRef.current = cid;
+    setActiveSessionKey(sk);
+    await loadSessionIntoMap(sessionId, sk, cid);
+  }, [loadSessionIntoMap]);
 
   const answerQuestion = useCallback(async (requestId: string, answers: Record<string, string>) => {
     try {
       await rpc('chat.answerQuestion', { requestId, answers });
-      setPendingQuestion(null);
-      setAgentStatus('thinking...');
+      const sk = activeSessionKeyRef.current;
+      setSessionStates(prev => {
+        const state = prev[sk];
+        if (!state) return prev;
+        return { ...prev, [sk]: { ...state, pendingQuestion: null, agentStatus: 'thinking...' } };
+      });
     } catch (err) {
       console.error('failed to answer question:', err);
     }
   }, [rpc]);
 
   const dismissQuestion = useCallback(() => {
-    setPendingQuestion(null);
+    const sk = activeSessionKeyRef.current;
+    setSessionStates(prev => {
+      const state = prev[sk];
+      if (!state) return prev;
+      return { ...prev, [sk]: { ...state, pendingQuestion: null } };
+    });
   }, []);
 
   const approveToolUse = useCallback(async (requestId: string, modifiedInput?: Record<string, unknown>) => {
@@ -974,9 +1093,9 @@ export function useGateway(url = 'wss://localhost:18789') {
     }
   }, [rpc]);
 
-  const abortAgent = useCallback(async () => {
+  const abortAgent = useCallback(async (sessionKey?: string) => {
     try {
-      await rpc('agent.abort', { sessionKey: activeSessionKeyRef.current });
+      await rpc('agent.abort', { sessionKey: sessionKey || activeSessionKeyRef.current });
     } catch (err) {
       console.error('failed to abort:', err);
     }
@@ -984,12 +1103,13 @@ export function useGateway(url = 'wss://localhost:18789') {
 
   const newSession = useCallback(() => {
     const newChatId = `task-${Date.now()}`;
+    const sk = `desktop:dm:${newChatId}`;
     currentChatIdRef.current = newChatId;
-    activeSessionKeyRef.current = `desktop:dm:${newChatId}`;
-    setCurrentSessionId(undefined);
-    setChatItems([]);
-    setAgentStatus('idle');
-    localStorage.removeItem(SESSION_STORAGE_KEY);
+    activeSessionKeyRef.current = sk;
+    trackedSessionsRef.current.add(sk);
+    setSessionStates(prev => ({ ...prev, [sk]: { ...DEFAULT_SESSION_STATE } }));
+    setActiveSessionKey(sk);
+    return { sessionKey: sk, chatId: newChatId };
   }, []);
 
   const changeModel = useCallback(async (newModel: string) => {
@@ -1181,6 +1301,15 @@ export function useGateway(url = 'wss://localhost:18789') {
     return runs;
   }, [rpc]);
 
+  // --- Derived values from active session (backward compat) ---
+
+  const activeState = sessionStates[activeSessionKey] || DEFAULT_SESSION_STATE;
+
+  const chatItems = activeState.chatItems;
+  const agentStatus = activeState.agentStatus;
+  const currentSessionId = activeState.sessionId;
+  const pendingQuestion = activeState.pendingQuestion;
+
   const progress = useMemo<ProgressItem[]>(() => {
     for (let i = chatItems.length - 1; i >= 0; i--) {
       const item = chatItems[i];
@@ -1213,22 +1342,39 @@ export function useGateway(url = 'wss://localhost:18789') {
 
   return {
     connectionState,
+    // Active session derived values (backward compat)
     chatItems,
     progress,
-    channelMessages,
-    channelStatuses,
     agentStatus,
-    sessions,
     currentSessionId,
     pendingQuestion,
     streamingQuestion,
+    // Multi-session state
+    sessionStates,
+    activeSessionKey,
+    trackSession,
+    untrackSession,
+    setActiveSession,
+    loadSessionIntoMap,
+    onSessionIdChangeRef,
+    // Global state
+    channelMessages,
+    channelStatuses,
+    sessions,
     ws: wsRef.current,
     rpc,
     sendMessage,
     abortAgent,
     newSession,
     loadSession,
-    setCurrentSessionId,
+    setCurrentSessionId: useCallback((id: string | undefined) => {
+      const sk = activeSessionKeyRef.current;
+      setSessionStates(prev => {
+        const state = prev[sk];
+        if (!state) return prev;
+        return { ...prev, [sk]: { ...state, sessionId: id } };
+      });
+    }, []),
     model,
     changeModel,
     configData,

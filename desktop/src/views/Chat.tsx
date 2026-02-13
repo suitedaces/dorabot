@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils';
 import { safeParse } from '@/lib/safe-parse';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
-  Square, Plus, ChevronDown, ChevronRight, Sparkles,
+  Square, ChevronDown, ChevronRight, Sparkles,
   FileText, FilePlus, Pencil, FolderSearch, FileSearch, Terminal,
   Globe, Search, Bot, MessageCircle, ListChecks, FileCode,
   MessageSquare, Camera, Monitor, Clock, Wrench, ArrowUp, LayoutGrid,
@@ -26,6 +26,10 @@ import {
 
 type Props = {
   gateway: ReturnType<typeof useGateway>;
+  chatItems: ChatItem[];
+  agentStatus: string;
+  pendingQuestion: AskUserQuestion | null;
+  streamingQuestion: AskUserQuestion['questions'] | null;
   onNavigateSettings?: () => void;
 };
 
@@ -446,18 +450,18 @@ function getGreeting(): string {
   return 'good evening';
 }
 
-export function ChatView({ gateway, onNavigateSettings }: Props) {
+export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, streamingQuestion, onNavigateSettings }: Props) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const landingInputRef = useRef<HTMLTextAreaElement>(null);
-  const isRunning = gateway.agentStatus !== 'idle';
-  const isEmpty = gateway.chatItems.length === 0;
+  const isRunning = agentStatus !== 'idle';
+  const isEmpty = chatItems.length === 0;
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [gateway.chatItems]);
+  }, [chatItems]);
 
   useEffect(() => {
     if (isEmpty) {
@@ -469,7 +473,7 @@ export function ChatView({ gateway, onNavigateSettings }: Props) {
 
   const handleSend = async (overridePrompt?: string) => {
     const prompt = overridePrompt || input.trim();
-    if (!prompt || sending || gateway.pendingQuestion) return;
+    if (!prompt || sending || pendingQuestion) return;
 
     if (!overridePrompt) setInput('');
     setSending(true);
@@ -558,20 +562,6 @@ export function ChatView({ gateway, onNavigateSettings }: Props) {
   if (isEmpty) {
     return (
       <div className="flex flex-col h-full min-h-0 min-w-0">
-        {/* header */}
-        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0 min-w-0">
-          <span className="text-muted-foreground text-[11px] font-mono">new task</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="ml-auto h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
-            onClick={gateway.newSession}
-            title="new task"
-          >
-            <Plus className="w-3.5 h-3.5" />
-          </Button>
-        </div>
-
         <div className="flex-1 flex items-center justify-center min-h-0 min-w-0">
           <AuroraBackground className="w-full h-full">
             <div className="w-full max-w-2xl px-6 space-y-6">
@@ -589,7 +579,7 @@ export function ChatView({ gateway, onNavigateSettings }: Props) {
               </div>
 
               {/* centered input */}
-              <Card className="rounded-2xl">
+              <Card className="rounded-2xl chat-input-area">
                 <Textarea
                   ref={landingInputRef}
                   value={input}
@@ -639,40 +629,24 @@ export function ChatView({ gateway, onNavigateSettings }: Props) {
   // conversation view — messages + bottom input
   return (
     <div className="flex flex-col h-full min-h-0 min-w-0">
-      {/* header */}
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0 min-w-0">
-        <span className="text-muted-foreground text-[11px] font-mono">
-          {gateway.currentSessionId ? gateway.currentSessionId.slice(0, 8) : 'new task'}
-        </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="ml-auto h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
-          onClick={gateway.newSession}
-          title="new task"
-        >
-          <Plus className="w-3.5 h-3.5" />
-        </Button>
-      </div>
-
       {/* messages */}
       <ScrollArea className="flex-1 min-h-0 min-w-0">
         <div className="px-4 py-3 min-w-0 overflow-hidden">
-          {gateway.chatItems.map((item, i) => renderItem(item, i))}
+          {chatItems.map((item, i) => renderItem(item, i))}
           <div ref={messagesEndRef} />
         </div>
       </ScrollArea>
 
       {/* question panel — show during streaming or when pending */}
-      {gateway.pendingQuestion ? (
+      {pendingQuestion ? (
         <AskUserQuestionPanel
-          question={gateway.pendingQuestion}
+          question={pendingQuestion}
           onAnswer={gateway.answerQuestion}
           onDismiss={gateway.dismissQuestion}
         />
-      ) : gateway.streamingQuestion ? (
+      ) : streamingQuestion ? (
         <AskUserQuestionPanel
-          question={{ requestId: '', questions: gateway.streamingQuestion }}
+          question={{ requestId: '', questions: streamingQuestion }}
           onAnswer={() => {}}
           onDismiss={() => {}}
           streaming
@@ -698,14 +672,14 @@ export function ChatView({ gateway, onNavigateSettings }: Props) {
 
       {/* input area */}
       <div className="px-4 py-3 shrink-0 min-w-0">
-        <Card className="rounded-2xl">
+        <Card className="rounded-2xl chat-input-area">
           <Textarea
             ref={inputRef}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={connected ? 'type a message...' : 'waiting for gateway...'}
-            disabled={!connected || !!gateway.pendingQuestion}
+            disabled={!connected || !!pendingQuestion}
             className="w-full min-h-[64px] max-h-[200px] resize-none text-[13px] border-0 rounded-2xl bg-transparent shadow-none focus-visible:ring-0"
             rows={2}
           />

@@ -1,5 +1,9 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useGateway } from './hooks/useGateway';
+import { useTabs, isChatTab } from './hooks/useTabs';
+import type { TabType } from './hooks/useTabs';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { TabBar } from './components/TabBar';
 import { ChatView } from './views/Chat';
 import { ChannelView } from './views/Channel';
 import { Automations } from './components/Automations';
@@ -21,10 +25,9 @@ import {
   FolderOpen, Sparkles, LayoutGrid, Loader2, Star
 } from 'lucide-react';
 
-type NavTab = 'chat' | 'channels' | 'goals' | 'automation' | 'skills' | 'memory' | 'settings';
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
 
-const NAV_ITEMS: { id: NavTab; label: string; icon: React.ReactNode }[] = [
+const NAV_ITEMS: { id: TabType; label: string; icon: React.ReactNode }[] = [
   { id: 'chat', label: 'Task', icon: <MessageSquare className="w-3.5 h-3.5" /> },
   { id: 'channels', label: 'Channels', icon: <Radio className="w-3.5 h-3.5" /> },
   { id: 'goals', label: 'Goals', icon: <LayoutGrid className="w-3.5 h-3.5" /> },
@@ -35,7 +38,6 @@ const NAV_ITEMS: { id: NavTab; label: string; icon: React.ReactNode }[] = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<NavTab>('chat');
   const [showFiles, setShowFiles] = useState(true);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState<SessionFilter>('all');
@@ -43,6 +45,7 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const onboardingCheckedRef = useRef(false);
   const gw = useGateway();
+  const tabState = useTabs(gw);
   const [starCount, setStarCount] = useState<number | null>(null);
 
   useEffect(() => {
@@ -92,18 +95,80 @@ export default function App() {
     const ct = chatType || 'dm';
     const cid = chatId || 'default';
     const sessionKey = `${ch}:${ct}:${cid}`;
-    gw.loadSession(sessionId, sessionKey, cid);
-    setActiveTab('chat');
+    const session = gw.sessions.find(s => s.id === sessionId);
+    const label = session?.senderName || session?.chatId || sessionId.slice(8, 16);
+
+    tabState.openChatTab({
+      sessionId,
+      sessionKey,
+      chatId: cid,
+      channel: ch,
+      label,
+    });
   };
 
-  const renderView = () => {
+  const handleNavClick = (navId: TabType) => {
+    if (navId === 'chat') {
+      // If active tab is already a chat tab, create a new one
+      if (tabState.activeTab && isChatTab(tabState.activeTab)) {
+        tabState.newChatTab();
+      } else {
+        // Focus existing chat tab or create new one
+        const existingChat = tabState.tabs.find(t => isChatTab(t));
+        if (existingChat) {
+          tabState.focusTab(existingChat.id);
+        } else {
+          tabState.newChatTab();
+        }
+      }
+    } else {
+      tabState.openViewTab(navId, NAV_ITEMS.find(n => n.id === navId)?.label || navId);
+    }
+    setSelectedFile(null);
+  };
+
+  // --- Keyboard shortcuts ---
+  const handleNavClickStable = useCallback((navId: TabType) => handleNavClick(navId), [tabState, gw.sessions]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const shortcutActions = useMemo(() => ({
+    newTab: () => tabState.newChatTab(),
+    closeTab: () => tabState.closeTab(tabState.activeTabId),
+    nextTab: () => tabState.nextTab(),
+    prevTab: () => tabState.prevTab(),
+    focusTabByIndex: (i: number) => tabState.focusTabByIndex(i),
+    toggleFiles: () => setShowFiles(f => !f),
+    openSettings: () => handleNavClickStable('settings'),
+    focusInput: () => {
+      const ta = document.querySelector<HTMLTextAreaElement>('.chat-input-area textarea');
+      ta?.focus();
+    },
+    abortAgent: () => gw.abortAgent(),
+  }), [tabState, gw, handleNavClickStable]);
+
+  useKeyboardShortcuts(shortcutActions);
+
+  const renderActiveTab = () => {
     if (selectedFile) {
       return <FileViewer filePath={selectedFile} rpc={gw.rpc} onClose={() => setSelectedFile(null)} />;
     }
 
-    switch (activeTab) {
-      case 'chat':
-        return <ChatView gateway={gw} onNavigateSettings={() => setActiveTab('settings')} />;
+    const tab = tabState.activeTab;
+    if (!tab) return null;
+
+    switch (tab.type) {
+      case 'chat': {
+        const ss = gw.sessionStates[tab.sessionKey] || { chatItems: [], agentStatus: 'idle', pendingQuestion: null };
+        return (
+          <ChatView
+            gateway={gw}
+            chatItems={ss.chatItems}
+            agentStatus={ss.agentStatus}
+            pendingQuestion={ss.pendingQuestion}
+            streamingQuestion={gw.streamingQuestion}
+            onNavigateSettings={() => handleNavClick('settings')}
+          />
+        );
+      }
       case 'channels':
         return <ChannelView channel={selectedChannel} gateway={gw} onViewSession={handleViewSession} onSwitchChannel={setSelectedChannel} />;
       case 'goals':
@@ -113,7 +178,7 @@ export default function App() {
       case 'skills':
         return <SkillsView gateway={gw} />;
       case 'memory':
-        return <SoulView gateway={gw} onSetupChat={(prompt) => { gw.sendMessage(prompt); setActiveTab('chat'); }} />;
+        return <SoulView gateway={gw} onSetupChat={(prompt) => { gw.sendMessage(prompt); handleNavClick('chat'); }} />;
       case 'settings':
         return <SettingsView gateway={gw} />;
     }
@@ -125,11 +190,19 @@ export default function App() {
     return <MessageSquare className="w-3 h-3 opacity-50" />;
   };
 
+  // Determine which nav item is "active" based on the current tab type
+  const activeNavId = tabState.activeTab?.type || 'chat';
+
   const statusDotColor = gw.connectionState === 'connected'
     ? 'bg-success'
     : gw.connectionState === 'connecting'
     ? 'bg-warning'
     : 'bg-destructive';
+
+  // Get active tab's session state for status bar
+  const activeSessionState = tabState.activeTab && isChatTab(tabState.activeTab)
+    ? gw.sessionStates[tabState.activeTab.sessionKey]
+    : null;
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -183,17 +256,11 @@ export default function App() {
                   <TooltipTrigger asChild>
                     <button
                       className={`flex items-center gap-2 w-full px-2.5 py-1.5 rounded-md text-xs transition-colors ${
-                        activeTab === item.id
+                        activeNavId === item.id
                           ? 'bg-secondary text-foreground'
                           : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'
                       }`}
-                      onClick={() => {
-                        if (item.id === 'chat' && activeTab === 'chat' && gw.currentSessionId) {
-                          gw.newSession();
-                        }
-                        setActiveTab(item.id);
-                        setSelectedFile(null);
-                      }}
+                      onClick={() => handleNavClick(item.id)}
                     >
                       {item.icon}
                       {item.label}
@@ -236,30 +303,34 @@ export default function App() {
                   </div>
                 </div>
                 <ScrollArea className="flex-1 min-h-0 px-2 pb-2">
-                  {filteredSessions.slice(0, 30).map(s => (
-                    <button
-                      key={s.id}
-                      className={`flex items-center gap-1.5 w-full px-2.5 py-1 rounded-md text-[10px] transition-colors ${
-                        gw.currentSessionId === s.id
-                          ? 'bg-secondary text-foreground'
-                          : 'text-muted-foreground hover:bg-secondary/50'
-                      }`}
-                      onClick={() => handleViewSession(s.id, s.channel, s.chatId, s.chatType)}
-                      title={`${s.channel || 'desktop'} | ${s.messageCount} msgs | ${new Date(s.updatedAt).toLocaleString()}`}
-                    >
-                      <span className="w-3 h-3 shrink-0 flex items-center justify-center">{channelIcon(s.channel)}</span>
-                      <span className="truncate flex-1 text-left">
-                        {s.senderName || s.chatId || s.id.slice(8, 16)}
-                      </span>
-                      {s.activeRun ? (
-                        <Loader2 className="w-3 h-3 shrink-0 animate-spin text-primary" />
-                      ) : (
-                        <span className="text-[9px] text-muted-foreground shrink-0">
-                          {new Date(s.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                  {filteredSessions.slice(0, 30).map(s => {
+                    // Highlight if this session is the active chat tab's session
+                    const isActive = tabState.activeTab && isChatTab(tabState.activeTab) && tabState.activeTab.sessionId === s.id;
+                    return (
+                      <button
+                        key={s.id}
+                        className={`flex items-center gap-1.5 w-full px-2.5 py-1 rounded-md text-[10px] transition-colors ${
+                          isActive
+                            ? 'bg-secondary text-foreground'
+                            : 'text-muted-foreground hover:bg-secondary/50'
+                        }`}
+                        onClick={() => handleViewSession(s.id, s.channel, s.chatId, s.chatType)}
+                        title={`${s.channel || 'desktop'} | ${s.messageCount} msgs | ${new Date(s.updatedAt).toLocaleString()}`}
+                      >
+                        <span className="w-3 h-3 shrink-0 flex items-center justify-center">{channelIcon(s.channel)}</span>
+                        <span className="truncate flex-1 text-left">
+                          {s.senderName || s.chatId || s.id.slice(8, 16)}
                         </span>
-                      )}
-                    </button>
-                  ))}
+                        {s.activeRun ? (
+                          <Loader2 className="w-3 h-3 shrink-0 animate-spin text-primary" />
+                        ) : (
+                          <span className="text-[9px] text-muted-foreground shrink-0">
+                            {new Date(s.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </ScrollArea>
               </>
             )}
@@ -270,10 +341,12 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <div className={`w-2 h-2 rounded-full ${statusDotColor}`} />
                 <span className="text-[10px] text-muted-foreground">{gw.connectionState}</span>
-                <span className="text-[10px] text-muted-foreground ml-auto">{gw.agentStatus}</span>
+                <span className="text-[10px] text-muted-foreground ml-auto">
+                  {activeSessionState?.agentStatus || 'idle'}
+                </span>
               </div>
               <div className="text-[10px] text-muted-foreground">
-                {gw.currentSessionId ? `session: ${gw.currentSessionId.slice(0, 8)}` : 'no session'}
+                {activeSessionState?.sessionId ? `session: ${activeSessionState.sessionId.slice(0, 8)}` : 'no session'}
               </div>
             </div>
           </div>
@@ -284,7 +357,19 @@ export default function App() {
         {/* main content */}
         <ResizablePanel defaultSize={showFiles ? "55%" : "85%"} minSize="30%" className="overflow-hidden min-w-0">
           <div className="flex flex-col h-full min-h-0 min-w-0">
-            {renderView()}
+            {/* tab bar */}
+            <TabBar
+              tabs={tabState.tabs}
+              activeTabId={tabState.activeTabId}
+              sessionStates={gw.sessionStates}
+              onFocusTab={tabState.focusTab}
+              onCloseTab={tabState.closeTab}
+              onNewChat={tabState.newChatTab}
+            />
+            {/* active tab content */}
+            <div className="flex-1 min-h-0 min-w-0">
+              {renderActiveTab()}
+            </div>
           </div>
         </ResizablePanel>
 

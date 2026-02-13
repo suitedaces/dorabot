@@ -305,3 +305,12 @@
 .markdown-viewer table { @apply border-collapse my-2 w-full; }
 .markdown-viewer th, .markdown-viewer td { @apply border border-border px-3 py-1.5 text-left; }
 .markdown-viewer th { @apply bg-secondary font-semibold; }
+
+/* hide scrollbar for tab bar overflow */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}

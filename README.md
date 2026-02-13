@@ -9,7 +9,15 @@
 
 </div>
 
-<img width="4336" height="2644" alt="image" src="https://github.com/user-attachments/assets/8ebfb9cf-0e41-45b9-9fed-26b5a9d14d5c" />
+<img width="4336" height="2644" alt="Desktop app" src="https://github.com/user-attachments/assets/8ebfb9cf-0e41-45b9-9fed-26b5a9d14d5c" />
+
+> **Goals board** — The desktop app's Kanban view where the agent proposes goals autonomously and you drag them through Proposed → Approved → In Progress → Done. The right panel shows the project file tree and each card is tagged with priority, owner, and the feature branch it shipped on.
+
+<img alt="Goals Kanban board" src="public/desktop-goals.jpeg" width="800" />
+
+> **Telegram channel** — A real conversation on Telegram where dorabot reports back after completing three feature branches (Slack integration, MiniMax provider, Skills gallery). It summarizes what shipped, what needs attention, and follows up by pushing branches when asked — all without leaving the chat.
+
+<img alt="Telegram chat" src="public/image.png" width="400" />
 
 ## What It Does
 
