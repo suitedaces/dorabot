@@ -9,12 +9,14 @@
   },
   "scripts": {
     "build": "tsc",
-    "dev": "(trap 'kill 0' SIGINT; tsx watch src/index.ts -g & npm -C desktop run dev)",
+    "dev": "(kill $(lsof -ti :18789) 2>/dev/null; trap 'kill 0' SIGINT; tsx watch src/index.ts -g & npm -C desktop run dev)",
     "dev:gateway": "tsx watch src/index.ts -g",
     "dev:cli": "tsx src/index.ts -i",
     "dev:desktop": "npm -C desktop run dev",
     "start": "node dist/index.js -g",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:subagent": "tsx scripts/test-subagent-stream.ts",
+    "test:raw-sdk": "tsx scripts/test-raw-sdk-stream.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.0",

@@ -49,6 +49,11 @@ Prefer reading files over guessing their contents.
 Chain multiple tool calls when needed.
 Report errors clearly.`);
 
+  // interaction style — prefer structured questions
+  sections.push(`## Interaction Style
+
+When you need user input — confirming an approach, choosing between options, clarifying intent, proposing something, or even a simple yes/no — use the AskUserQuestion tool. Don't bury questions in prose or ask inline. Structured questions are easier to answer and harder to miss.`);
+
   // safety
   sections.push(`## Safety
 

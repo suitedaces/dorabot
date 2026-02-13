@@ -231,7 +231,33 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   // status messages sent to channels while agent is working
   const statusMessages = new Map<string, { channel: string; chatId: string; messageId: string }>();
   // remember the owner's chat ID per channel so the agent can reach them cross-channel
+  const ownerChatIdsFile = join(homedir(), '.dorabot', 'owner-chat-ids.json');
   const ownerChatIds = new Map<string, string>();
+
+  // load persisted owner chat IDs from disk
+  try {
+    if (existsSync(ownerChatIdsFile)) {
+      const saved = JSON.parse(readFileSync(ownerChatIdsFile, 'utf-8'));
+      for (const [ch, id] of Object.entries(saved)) {
+        if (typeof id === 'string') ownerChatIds.set(ch, id);
+      }
+    }
+  } catch {}
+
+  // seed from config allowFrom[0] for channels that aren't already known
+  if (config.channels?.whatsapp?.enabled && config.channels.whatsapp.allowFrom?.[0] && !ownerChatIds.has('whatsapp')) {
+    ownerChatIds.set('whatsapp', config.channels.whatsapp.allowFrom[0] + '@s.whatsapp.net');
+  }
+  if (config.channels?.telegram?.enabled && config.channels.telegram.allowFrom?.[0] && !ownerChatIds.has('telegram')) {
+    ownerChatIds.set('telegram', config.channels.telegram.allowFrom[0]);
+  }
+
+  function persistOwnerChatIds() {
+    try {
+      const obj = Object.fromEntries(ownerChatIds);
+      writeFileSync(ownerChatIdsFile, JSON.stringify(obj, null, 2));
+    } catch {}
+  }
   // queued messages for sessions with active runs
   const pendingMessages = new Map<string, InboundMessage[]>();
   // accumulated tool log per active run
@@ -307,6 +333,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   // process a channel message (or batched messages) through the agent
   async function processChannelMessage(msg: InboundMessage, batchedBodies?: string[]) {
     ownerChatIds.set(msg.channel, msg.chatId);
+    persistOwnerChatIds();
     const session = sessionRegistry.getOrCreate({
       channel: msg.channel,
       chatType: msg.chatType,
@@ -418,37 +445,48 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       sessionRegistry.incrementMessages(session.key);
       broadcastSessionUpdate(session.key);
 
-      // if agent is already running for this chat, try injection first
-      if (session.activeRun) {
-        const handle = runHandles.get(session.key);
-        if (handle?.active) {
-          // sanitize sender name and body for injection
-          const safeSender = (msg.senderName || msg.senderId).replace(/[<>"'&\n\r]/g, '_').slice(0, 50);
-          const safeBody = msg.body.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-          const mediaAttr = msg.mediaType ? ` media_type="${msg.mediaType}" media_path="${msg.mediaPath || ''}"` : '';
-          const channelPrompt = [
-            `<incoming_message channel="${msg.channel}" sender="${safeSender}" chat="${msg.chatId}"${mediaAttr}>`,
-            safeBody || (msg.mediaPath ? `[Attached: ${msg.mediaType || 'file'} at ${msg.mediaPath}]` : ''),
-            `</incoming_message>`,
-          ].join('\n');
-          handle.inject(channelPrompt);
-          // record injected user message in session (CLI doesn't echo user text back)
-          fileSessionManager.append(session.sessionId, {
-            type: 'user',
-            timestamp: new Date().toISOString(),
-            content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: channelPrompt }] } },
-            metadata: { channel: msg.channel, chatId: msg.chatId, body: msg.body, senderName: msg.senderName },
-          });
-          broadcast({ event: 'agent.user_message', data: {
-            source: `${msg.channel}/${msg.chatId}`, sessionKey: session.key,
-            prompt: msg.body, injected: true, timestamp: Date.now(),
-          }});
-          // the stream loop will create a fresh status message on the next tool_use
-          // (via channelRunContexts with no statusMsgId), giving full tool streaming UX
-          return;
+      // try injection into active persistent session (even if idle between turns)
+      const handle = runHandles.get(session.key);
+      console.log(`[onMessage] key=${session.key} activeRun=${session.activeRun} handleExists=${!!handle} handleActive=${handle?.active} runQueueHas=${runQueues.has(session.key)}`);
+      if (handle?.active) {
+        const safeSender = (msg.senderName || msg.senderId).replace(/[<>"'&\n\r]/g, '_').slice(0, 50);
+        const safeBody = msg.body.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const mediaAttr = msg.mediaType ? ` media_type="${msg.mediaType}" media_path="${msg.mediaPath || ''}"` : '';
+        const channelPrompt = [
+          `<incoming_message channel="${msg.channel}" sender="${safeSender}" chat="${msg.chatId}"${mediaAttr}>`,
+          safeBody || (msg.mediaPath ? `[Attached: ${msg.mediaType || 'file'} at ${msg.mediaPath}]` : ''),
+          `</incoming_message>`,
+        ].join('\n');
+        console.log(`[onMessage] INJECTING into ${session.key}`);
+        handle.inject(channelPrompt);
+        fileSessionManager.append(session.sessionId, {
+          type: 'user',
+          timestamp: new Date().toISOString(),
+          content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: channelPrompt }] } },
+          metadata: { channel: msg.channel, chatId: msg.chatId, body: msg.body, senderName: msg.senderName },
+        });
+        broadcast({ event: 'agent.user_message', data: {
+          source: `${msg.channel}/${msg.chatId}`, sessionKey: session.key,
+          prompt: msg.body, injected: true, timestamp: Date.now(),
+        }});
+        // re-activate if idle between turns
+        if (!session.activeRun) {
+          sessionRegistry.setActiveRun(session.key, true);
+          broadcast({ event: 'status.update', data: { activeRun: true, source: `${msg.channel}/${msg.chatId}`, sessionKey: session.key } });
         }
+        // ensure channel context exists for status message creation in stream loop
+        if (!channelRunContexts.has(session.key)) {
+          channelRunContexts.set(session.key, { channel: msg.channel, chatId: msg.chatId });
+        }
+        const h = getChannelHandler(msg.channel);
+        if (h?.typing) h.typing(msg.chatId).catch(() => {});
+        toolLogs.set(session.key, { completed: [], current: null, lastEditAt: 0 });
+        return;
+      }
 
-        // fallback: queue in pendingMessages (non-injection case)
+      // agent running but no injectable handle — queue
+      console.log(`[onMessage] handle not active, checking activeRun=${session.activeRun}`);
+      if (session.activeRun) {
         const queue = pendingMessages.get(session.key) || [];
         queue.push(msg);
         pendingMessages.set(session.key, queue);
@@ -460,6 +498,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         return;
       }
 
+      console.log(`[onMessage] falling through to processChannelMessage for ${session.key}`);
       await processChannelMessage(msg);
     },
     onCommand: async (channel, cmd, chatId) => {
@@ -779,9 +818,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     console.log(`[gateway] agent run: source=${source} sessionKey=${sessionKey} prompt="${prompt.slice(0, 80)}..."`);
 
     const prev = runQueues.get(sessionKey) || Promise.resolve();
+    const hasPrev = runQueues.has(sessionKey);
+    console.log(`[handleAgentRun] sessionKey=${sessionKey} hasPrevInQueue=${hasPrev}`);
     let result: AgentResult | null = null;
 
     const run = prev.then(async () => {
+      console.log(`[handleAgentRun] prev resolved, starting run for ${sessionKey}`);
       sessionRegistry.setActiveRun(sessionKey, true);
       if (channel) activeRunChannels.set(sessionKey, channel);
       broadcast({ event: 'status.update', data: { activeRun: true, source, sessionKey } });
