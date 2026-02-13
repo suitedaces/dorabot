@@ -26,6 +26,7 @@ import {
 
 type Props = {
   gateway: ReturnType<typeof useGateway>;
+  onNavigateSettings?: () => void;
 };
 
 const TOOL_TEXT: Record<string, { pending: string; done: string }> = {
@@ -288,10 +289,12 @@ function AskUserQuestionPanel({
   question,
   onAnswer,
   onDismiss,
+  streaming,
 }: {
   question: AskUserQuestion;
   onAnswer: (requestId: string, answers: Record<string, string>) => void;
   onDismiss: () => void;
+  streaming?: boolean;
 }) {
   const [step, setStep] = useState(0);
   const [selections, setSelections] = useState<Record<string, string>>({});
@@ -408,11 +411,17 @@ function AskUserQuestionPanel({
           )}
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={isLast ? handleSubmit : () => setStep(s => s + 1)}>skip</Button>
-          {isLast ? (
-            <Button size="sm" className="h-7 text-xs" onClick={handleSubmit} disabled={!currentAnswered}>answer</Button>
+          {streaming ? (
+            <span className="text-[10px] text-muted-foreground animate-pulse">loading options...</span>
           ) : (
-            <Button size="sm" className="h-7 text-xs" onClick={() => setStep(s => s + 1)} disabled={!currentAnswered}>next</Button>
+            <>
+              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={isLast ? handleSubmit : () => setStep(s => s + 1)}>skip</Button>
+              {isLast ? (
+                <Button size="sm" className="h-7 text-xs" onClick={handleSubmit} disabled={!currentAnswered}>answer</Button>
+              ) : (
+                <Button size="sm" className="h-7 text-xs" onClick={() => setStep(s => s + 1)} disabled={!currentAnswered}>next</Button>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -436,7 +445,7 @@ function getGreeting(): string {
   return 'good evening';
 }
 
-export function ChatView({ gateway }: Props) {
+export function ChatView({ gateway, onNavigateSettings }: Props) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -498,6 +507,24 @@ export function ChatView({ gateway }: Props) {
           </div>
         );
       case 'tool_use':
+        if (item.name === 'TodoWrite') {
+          const todos = safeParse(item.input).todos || [];
+          const done = todos.filter((t: any) => t.status === 'completed').length;
+          return (
+            <div key={i} className="flex items-center gap-2 text-[10px] text-muted-foreground py-0.5">
+              <ListChecks className="w-3 h-3" />
+              <span>tasks {done}/{todos.length}</span>
+            </div>
+          );
+        }
+        if (item.name === 'AskUserQuestion') {
+          return (
+            <div key={i} className="flex items-center gap-2 text-[10px] text-muted-foreground py-0.5">
+              <MessageCircle className="w-3 h-3" />
+              <span>{item.streaming ? 'asking...' : item.output ? 'answered' : 'waiting for answer'}</span>
+            </div>
+          );
+        }
         return <div key={i} className="my-1.5"><ToolUseItem item={item} /></div>;
       case 'thinking':
         return (
@@ -556,7 +583,7 @@ export function ChatView({ gateway }: Props) {
                 <h1 className="text-lg font-semibold text-foreground">{getGreeting()}</h1>
                 <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
                   <div className={cn('w-1.5 h-1.5 rounded-full', isReady ? 'bg-success' : connected && !authenticated ? 'bg-warning' : connected ? 'bg-success' : 'bg-destructive')} />
-                  {!connected ? 'connecting...' : !authenticated ? 'set up provider in Settings' : 'ready'}
+                  {!connected ? 'connecting...' : !authenticated ? <>set up provider in <button type="button" className="underline hover:text-foreground transition-colors" onClick={onNavigateSettings}>Settings</button></> : 'ready'}
                 </div>
               </div>
 
@@ -635,14 +662,21 @@ export function ChatView({ gateway }: Props) {
         </div>
       </ScrollArea>
 
-      {/* question panel */}
-      {gateway.pendingQuestion && (
+      {/* question panel — show during streaming or when pending */}
+      {gateway.pendingQuestion ? (
         <AskUserQuestionPanel
           question={gateway.pendingQuestion}
           onAnswer={gateway.answerQuestion}
           onDismiss={gateway.dismissQuestion}
         />
-      )}
+      ) : gateway.streamingQuestion ? (
+        <AskUserQuestionPanel
+          question={{ requestId: '', questions: gateway.streamingQuestion }}
+          onAnswer={() => {}}
+          onDismiss={() => {}}
+          streaming
+        />
+      ) : null}
 
       {/* approval cards */}
       {gateway.pendingApprovals.length > 0 && (

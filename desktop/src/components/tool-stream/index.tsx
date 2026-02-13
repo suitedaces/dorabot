@@ -10,8 +10,7 @@ import { CronStream } from "./CronStream"
 import { GoalsStream } from "./GoalsStream"
 import { WebFetchStream } from "./WebFetchStream"
 import { TaskStream } from "./TaskStream"
-import { ProgressStream } from "./ProgressStream"
-import { QuestionStream } from "./QuestionStream"
+// ProgressStream and QuestionStream no longer used as stream cards
 
 const STREAM_MAP: Record<string, React.ComponentType<ToolUIProps>> = {
   browser: BrowserStream,
@@ -35,8 +34,7 @@ const STREAM_MAP: Record<string, React.ComponentType<ToolUIProps>> = {
   goals_add: GoalsStream,
   goals_update: GoalsStream,
   goals_propose: GoalsStream,
-  TodoWrite: ProgressStream,
-  AskUserQuestion: QuestionStream,
+  // TodoWrite and AskUserQuestion handled inline — not as stream cards
 }
 
 function StreamProgress() {

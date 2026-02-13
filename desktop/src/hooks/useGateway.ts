@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { jsonrepair } from 'jsonrepair';
 
 /** Deep-set a dotted key path (e.g. "provider.codex.model") in an immutable object */
 function setNestedKey(obj: Record<string, unknown>, key: string, value: unknown): Record<string, unknown> {
@@ -1105,11 +1106,31 @@ export function useGateway(url = 'wss://localhost:18789') {
   const progress = useMemo<ProgressItem[]>(() => {
     for (let i = chatItems.length - 1; i >= 0; i--) {
       const item = chatItems[i];
-      if (item.type === 'tool_use' && item.name === 'TodoWrite' && !item.streaming) {
-        try { return JSON.parse(item.input).todos || []; } catch { return []; }
+      if (item.type === 'tool_use' && item.name === 'TodoWrite') {
+        try {
+          const parsed = item.streaming
+            ? JSON.parse(jsonrepair(item.input))
+            : JSON.parse(item.input);
+          return parsed.todos || [];
+        } catch { return []; }
       }
     }
     return [];
+  }, [chatItems]);
+
+  // derive streaming question from AskUserQuestion tool_use in chat items
+  const streamingQuestion = useMemo<AskUserQuestion['questions'] | null>(() => {
+    for (let i = chatItems.length - 1; i >= 0; i--) {
+      const item = chatItems[i];
+      if (item.type === 'tool_use' && item.name === 'AskUserQuestion' && item.streaming) {
+        try {
+          const parsed = JSON.parse(jsonrepair(item.input));
+          const qs = parsed.questions;
+          return Array.isArray(qs) && qs.length > 0 ? qs : null;
+        } catch { return null; }
+      }
+    }
+    return null;
   }, [chatItems]);
 
   return {
@@ -1122,6 +1143,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     sessions,
     currentSessionId,
     pendingQuestion,
+    streamingQuestion,
     ws: wsRef.current,
     rpc,
     sendMessage,
