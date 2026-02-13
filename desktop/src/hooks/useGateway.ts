@@ -1102,7 +1102,7 @@ export function useGateway(url = 'wss://localhost:18789') {
   }, [rpc]);
 
   const newSession = useCallback(() => {
-    const newChatId = `task-${Date.now()}`;
+    const newChatId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const sk = `desktop:dm:${newChatId}`;
     currentChatIdRef.current = newChatId;
     activeSessionKeyRef.current = sk;

@@ -104,13 +104,14 @@ type TabBarProps = {
   activeTabId: string;
   sessionStates: Record<string, SessionState>;
   isActiveGroup?: boolean;
+  isMultiPane?: boolean;
   groupId?: string;
   onFocusTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onNewChat: () => void;
 };
 
-export function TabBar({ tabs, activeTabId, sessionStates, isActiveGroup, groupId, onFocusTab, onCloseTab, onNewChat }: TabBarProps) {
+export function TabBar({ tabs, activeTabId, sessionStates, isActiveGroup, isMultiPane, groupId, onFocusTab, onCloseTab, onNewChat }: TabBarProps) {
   const { setNodeRef, isOver } = useDroppable({
     id: `group-drop:${groupId || 'default'}`,
     data: { groupId },
@@ -121,7 +122,7 @@ export function TabBar({ tabs, activeTabId, sessionStates, isActiveGroup, groupI
       ref={setNodeRef}
       className={cn(
         "flex items-center h-[34px] bg-card border-b shrink-0 min-w-0 transition-colors",
-        isActiveGroup ? "border-b-primary/50" : "border-b-border",
+        isMultiPane && isActiveGroup ? "border-b-2 border-b-primary" : "border-b-border",
         isOver && "bg-primary/10 border-b-primary",
       )}
     >

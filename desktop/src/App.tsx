@@ -3,6 +3,7 @@ import { useGateway } from './hooks/useGateway';
 import { useTabs, isChatTab } from './hooks/useTabs';
 import type { Tab, TabType } from './hooks/useTabs';
 import { useLayout } from './hooks/useLayout';
+import { useTheme } from './hooks/useTheme';
 import type { GroupId } from './hooks/useLayout';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { EditorGroupPanel } from './components/EditorGroupPanel';
@@ -19,7 +20,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import {
   MessageSquare, Radio, Zap, Brain, Settings2,
-  FolderOpen, Sparkles, LayoutGrid, Loader2, Star
+  FolderOpen, Sparkles, LayoutGrid, Loader2, Star,
+  Sun, Moon
 } from 'lucide-react';
 
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
@@ -46,6 +48,7 @@ export default function App() {
   const tabState = useTabs(gw, layout);
   const [starCount, setStarCount] = useState<number | null>(null);
   const [draggingTab, setDraggingTab] = useState<Tab | null>(null);
+  const { theme, toggle: toggleTheme } = useTheme();
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -153,8 +156,18 @@ export default function App() {
     toggleFiles: () => setShowFiles(f => !f),
     openSettings: () => handleNavClick('settings'),
     focusInput: () => {
-      const ta = document.querySelector<HTMLTextAreaElement>('.chat-input-area textarea');
+      const group = layout.groups.find(g => g.id === layout.activeGroupId);
+      const groupEl = document.querySelector<HTMLElement>(`[data-group-id="${layout.activeGroupId}"]`);
+      const ta = groupEl?.querySelector<HTMLTextAreaElement>('.chat-input-area textarea')
+        || document.querySelector<HTMLTextAreaElement>('.chat-input-area textarea');
       ta?.focus();
+      // Sync gateway so messages route to the focused group's session
+      if (group?.activeTabId) {
+        const tab = tabState.tabs.find(t => t.id === group.activeTabId);
+        if (tab && isChatTab(tab)) {
+          gw.setActiveSession(tab.sessionKey, tab.chatId);
+        }
+      }
     },
     abortAgent: () => gw.abortAgent(),
     splitHorizontal: () => {
@@ -289,12 +302,23 @@ export default function App() {
   // Shared props for EditorGroupPanel
   const groupPanelProps = useCallback((groupId: GroupId) => ({
     tabs: tabState.tabs,
+    isMultiPane: layout.isMultiPane,
     isDragging: !!draggingTab,
     gateway: gw,
     tabState,
     selectedFile,
     selectedChannel,
-    onFocusGroup: () => layout.focusGroup(groupId),
+    onFocusGroup: () => {
+      layout.focusGroup(groupId);
+      // Sync gateway immediately so messages route to the right session
+      const group = layout.groups.find(g => g.id === groupId);
+      if (group?.activeTabId) {
+        const tab = tabState.tabs.find(t => t.id === group.activeTabId);
+        if (tab && isChatTab(tab)) {
+          gw.setActiveSession(tab.sessionKey, tab.chatId);
+        }
+      }
+    },
     onNavigateSettings: () => handleNavClick('settings'),
     onViewSession: handleViewSession,
     onSwitchChannel: setSelectedChannel,
@@ -444,6 +468,14 @@ export default function App() {
             </span>
           )}
         </a>
+        <button
+          onClick={toggleTheme}
+          className="ml-2 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
+          style={{ WebkitAppRegion: 'no-drag' } as any}
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        >
+          {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+        </button>
       </div>
 
       {/* main layout */}

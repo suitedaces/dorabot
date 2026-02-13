@@ -46,6 +46,7 @@ type Props = {
   group: EditorGroup;
   tabs: Tab[];
   isActive: boolean;
+  isMultiPane: boolean;
   isDragging: boolean;
   gateway: ReturnType<typeof useGateway>;
   tabState: ReturnType<typeof useTabs>;
@@ -64,6 +65,7 @@ export function EditorGroupPanel({
   group,
   tabs,
   isActive,
+  isMultiPane,
   isDragging,
   gateway,
   tabState,
@@ -143,9 +145,12 @@ export function EditorGroupPanel({
 
   return (
     <div
+      data-group-id={group.id}
       className={cn(
-        'flex flex-col h-full min-h-0 min-w-0',
-        isActive && 'ring-1 ring-primary/30 ring-inset',
+        'flex flex-col h-full min-h-0 min-w-0 transition-all duration-150',
+        isMultiPane && (isActive
+          ? 'ring-2 ring-primary/50 ring-inset'
+          : 'opacity-75 hover:opacity-90'),
       )}
       onClick={onFocusGroup}
     >
@@ -154,6 +159,7 @@ export function EditorGroupPanel({
         activeTabId={group.activeTabId || ''}
         sessionStates={gateway.sessionStates}
         isActiveGroup={isActive}
+        isMultiPane={isMultiPane}
         groupId={group.id}
         onFocusTab={(id) => {
           onFocusGroup();
