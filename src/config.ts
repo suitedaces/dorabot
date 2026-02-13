@@ -58,6 +58,11 @@ export type CronConfig = {
   jobsFile?: string;
 };
 
+export type CalendarConfig = {
+  enabled?: boolean;
+  tickIntervalMs?: number;
+};
+
 export type WhatsAppChannelConfig = {
   enabled?: boolean;
   authDir?: string;
@@ -148,6 +153,7 @@ export type Config = {
   sandbox: SandboxSettings;
   heartbeat?: HeartbeatConfig;
   cron?: CronConfig;
+  calendar?: CalendarConfig;
   channels?: ChannelsConfig;
   gateway?: GatewayConfig;
   browser?: BrowserConfig;
