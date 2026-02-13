@@ -72,6 +72,9 @@ function applyStreamEvent(items: ChatItem[], evt: Record<string, unknown>): Chat
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];
       if ('streaming' in it && it.streaming) {
+        // tool_use: content_block_stop means input JSON is complete, NOT that the
+        // tool finished executing.  Keep streaming:true until agent.tool_result.
+        if (it.type === 'tool_use') return items;
         const u = [...items];
         u[i] = { ...it, streaming: false };
         return u;
@@ -390,9 +393,18 @@ export function useGateway(url = 'wss://localhost:18789') {
           break;
         }
         setChatItems(prev => {
-          const updated = prev.map(item =>
-            'streaming' in item && item.streaming ? { ...item, streaming: false } : item
-          );
+          const updated = prev.map(item => {
+            let it = item;
+            if ('streaming' in it && it.streaming) it = { ...it, streaming: false };
+            // also clean up subItems for Task tools
+            if (it.type === 'tool_use' && it.subItems?.length) {
+              const subs = it.subItems.map(s =>
+                'streaming' in s && s.streaming ? { ...s, streaming: false } : s
+              );
+              it = { ...it, subItems: subs };
+            }
+            return it;
+          });
           updated.push({ type: 'result', cost: d.usage?.totalCostUsd, timestamp: Date.now() });
           return updated;
         });
