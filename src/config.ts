@@ -88,9 +88,22 @@ export type TelegramChannelConfig = {
   deniedPaths?: string[];
 };
 
+export type SlackChannelConfig = {
+  enabled?: boolean;
+  botToken?: string;
+  appToken?: string;
+  accountId?: string;
+  dmPolicy?: 'open' | 'allowlist';
+  allowFrom?: string[];
+  tools?: ToolPolicyConfig;
+  allowedPaths?: string[];
+  deniedPaths?: string[];
+};
+
 export type ChannelsConfig = {
   whatsapp?: WhatsAppChannelConfig;
   telegram?: TelegramChannelConfig;
+  slack?: SlackChannelConfig;
 };
 
 export type GatewayConfig = {
@@ -253,6 +266,8 @@ export const ALWAYS_DENIED = [
   '~/.dorabot/whatsapp/auth',
   '~/.dorabot/gateway-token',
   '~/.dorabot/codex-auth.json',
+  '~/.dorabot/slack/bot-token',
+  '~/.dorabot/slack/app-token',
   '~/.dorabot/tls',
   '~/.config/nanoclaw',
 ];

@@ -24,6 +24,7 @@
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@openai/codex-sdk": "^0.98.0",
+    "@slack/bolt": "^4.6.0",
     "@whiskeysockets/baileys": "^6.7.0",
     "better-sqlite3": "^12.6.2",
     "dotenv": "^17.2.4",

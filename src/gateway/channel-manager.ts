@@ -2,6 +2,7 @@ import type { Config } from '../config.js';
 import type { InboundMessage, ChannelStatus } from '../channels/types.js';
 import { startWhatsAppMonitor, type WhatsAppMonitorHandle } from '../channels/whatsapp/monitor.js';
 import { startTelegramMonitor, type TelegramMonitorHandle } from '../channels/telegram/monitor.js';
+import { startSlackMonitor, type SlackMonitorHandle } from '../channels/slack/monitor.js';
 
 // unified request types (superset of both channels)
 export type ApprovalRequest = {
@@ -75,6 +76,8 @@ export class ChannelManager {
         await this.startWhatsApp(state);
       } else if (channelId === 'telegram') {
         await this.startTelegram(state);
+      } else if (channelId === 'slack') {
+        await this.startSlack(state);
       } else {
         throw new Error(`Unknown channel: ${channelId}`);
       }
@@ -157,6 +160,42 @@ export class ChannelManager {
     this.emitStatus(state);
   }
 
+  private async startSlack(state: ChannelState): Promise<void> {
+    const slackConfig = this.config.channels?.slack;
+    if (!slackConfig?.enabled) {
+      state.lastError = 'Slack not enabled in config';
+      return;
+    }
+
+    state.accountId = slackConfig.accountId || '';
+    state.running = true;
+    this.emitStatus(state);
+
+    const result = await startSlackMonitor({
+      botToken: slackConfig.botToken,
+      appToken: slackConfig.appToken,
+      accountId: slackConfig.accountId,
+      allowFrom: slackConfig.allowFrom,
+      onMessage: async (raw) => {
+        const msg = raw as InboundMessage;
+        state.connected = true;
+        state.lastError = null;
+        await this.onMessage(msg);
+      },
+      onCommand: this.onCommand
+        ? async (cmd, chatId) => this.onCommand!('slack', cmd, chatId)
+        : undefined,
+      onApprovalResponse: this.onApprovalResponse,
+      onQuestionResponse: this.onQuestionResponse,
+    });
+
+    state.connected = true;
+    state.stop = result.stop;
+    state.sendApprovalRequest = result.sendApprovalRequest;
+    state.sendQuestion = result.sendQuestion;
+    this.emitStatus(state);
+  }
+
   async stopChannel(channelId: string): Promise<void> {
     const state = this.channels.get(channelId);
     if (!state) return;
@@ -179,6 +218,9 @@ export class ChannelManager {
     }
     if (this.config.channels?.telegram?.enabled) {
       promises.push(this.startChannel('telegram'));
+    }
+    if (this.config.channels?.slack?.enabled) {
+      promises.push(this.startChannel('slack'));
     }
 
     await Promise.allSettled(promises);

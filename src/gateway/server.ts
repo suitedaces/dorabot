@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { createServer as createTlsServer } from 'node:https';
 import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, chmodSync, watch, type FSWatcher } from 'node:fs';
 import { execSync } from 'node:child_process';
-import { resolve as pathResolve, join } from 'node:path';
+import { resolve as pathResolve, join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 
 const resolve = (p: string) => pathResolve(p.startsWith('~') ? p.replace('~', homedir()) : p);
@@ -248,6 +248,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   }
   if (config.channels?.telegram?.enabled && config.channels.telegram.allowFrom?.[0] && !ownerChatIds.has('telegram')) {
     ownerChatIds.set('telegram', config.channels.telegram.allowFrom[0]);
+  }
+  if (config.channels?.slack?.enabled && config.channels.slack.allowFrom?.[0] && !ownerChatIds.has('slack')) {
+    ownerChatIds.set('slack', config.channels.slack.allowFrom[0]);
   }
 
   function persistOwnerChatIds() {
@@ -619,6 +622,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     if (!channel || channel === 'desktop') return undefined;
     if (channel === 'whatsapp') return config.channels?.whatsapp?.tools;
     if (channel === 'telegram') return config.channels?.telegram?.tools;
+    if (channel === 'slack') return config.channels?.slack?.tools;
     return undefined;
   }
 
@@ -1547,6 +1551,100 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
 
           broadcast({ event: 'telegram.link_status', data: { status: 'unlinked' } });
+          return { id, result: { success: true } };
+        }
+
+        case 'channels.slack.status': {
+          const slackDir = join(homedir(), '.dorabot', 'slack');
+          const botTokenFile = join(slackDir, 'bot-token');
+          const appTokenFile = join(slackDir, 'app-token');
+          const hasBotToken = existsSync(botTokenFile) && readFileSync(botTokenFile, 'utf-8').trim().length > 0;
+          const hasAppToken = existsSync(appTokenFile) && readFileSync(appTokenFile, 'utf-8').trim().length > 0;
+          const linked = hasBotToken && hasAppToken;
+          const botName = linked ? (config.channels?.slack?.accountId || null) : null;
+          return { id, result: { linked, botName } };
+        }
+
+        case 'channels.slack.link': {
+          const botTokenParam = (params?.botToken as string || '').trim();
+          const appTokenParam = (params?.appToken as string || '').trim();
+
+          if (!botTokenParam) return { id, error: 'botToken is required' };
+          if (!appTokenParam) return { id, error: 'appToken is required' };
+
+          if (!botTokenParam.startsWith('xoxb-')) {
+            return { id, error: 'Invalid bot token format. Expected format: xoxb-...' };
+          }
+          if (!appTokenParam.startsWith('xapp-')) {
+            return { id, error: 'Invalid app token format. Expected format: xapp-...' };
+          }
+
+          // validate tokens by calling auth.test
+          let botName = '';
+          try {
+            const { App } = await import('@slack/bolt');
+            const testApp = new App({
+              token: botTokenParam,
+              socketMode: true,
+              appToken: appTokenParam,
+              logLevel: 'ERROR' as any,
+            });
+            const authResult = await testApp.client.auth.test({ token: botTokenParam });
+            botName = authResult.user || authResult.bot_id || '';
+            // don't start the test app, just validated the token
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return { id, error: `Invalid tokens: ${msg}` };
+          }
+
+          // save tokens
+          const slackTokenDir = join(homedir(), '.dorabot', 'slack');
+          mkdirSync(slackTokenDir, { recursive: true });
+          writeFileSync(join(slackTokenDir, 'bot-token'), botTokenParam, { mode: 0o600 });
+          writeFileSync(join(slackTokenDir, 'app-token'), appTokenParam, { mode: 0o600 });
+
+          if (!config.channels) config.channels = {};
+          if (!config.channels.slack) config.channels.slack = {};
+          config.channels.slack.enabled = true;
+          config.channels.slack.accountId = botName;
+          saveConfig(config);
+
+          broadcast({
+            event: 'slack.link_status',
+            data: { status: 'linked', botName },
+          });
+
+          try {
+            await channelManager.startChannel('slack');
+          } catch (err) {
+            console.error('[gateway] slack auto-start failed:', err);
+          }
+
+          return {
+            id,
+            result: {
+              success: true,
+              botName,
+            },
+          };
+        }
+
+        case 'channels.slack.unlink': {
+          await channelManager.stopChannel('slack');
+
+          const slackTokenDir = join(homedir(), '.dorabot', 'slack');
+          const slackBotTokenFile = join(slackTokenDir, 'bot-token');
+          const slackAppTokenFile = join(slackTokenDir, 'app-token');
+          if (existsSync(slackBotTokenFile)) rmSync(slackBotTokenFile);
+          if (existsSync(slackAppTokenFile)) rmSync(slackAppTokenFile);
+
+          if (config.channels?.slack) {
+            config.channels.slack.enabled = false;
+            delete config.channels.slack.accountId;
+            saveConfig(config);
+          }
+
+          broadcast({ event: 'slack.link_status', data: { status: 'unlinked' } });
           return { id, result: { success: true } };
         }
 
