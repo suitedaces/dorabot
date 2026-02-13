@@ -220,9 +220,13 @@ export default function App() {
                       <span className="truncate flex-1 text-left">
                         {s.senderName || s.chatId || s.id.slice(8, 16)}
                       </span>
-                      <span className="text-[9px] text-muted-foreground shrink-0">
-                        {new Date(s.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-                      </span>
+                      {s.activeRun ? (
+                        <Loader2 className="w-3 h-3 shrink-0 animate-spin text-primary" />
+                      ) : (
+                        <span className="text-[9px] text-muted-foreground shrink-0">
+                          {new Date(s.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                        </span>
+                      )}
                     </button>
                   ))}
                 </ScrollArea>

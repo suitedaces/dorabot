@@ -156,9 +156,9 @@ export class SessionManager {
       message.timestamp,
     );
 
-    // update session counts
+    // update timestamps (message_count is managed by sessionRegistry.incrementMessages)
     db.prepare(`
-      UPDATE sessions SET message_count = message_count + 1, updated_at = ?, last_message_at = ?
+      UPDATE sessions SET updated_at = ?, last_message_at = ?
       WHERE id = ?
     `).run(now, Date.now(), sessionId);
   }

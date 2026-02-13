@@ -132,14 +132,9 @@ export class SessionRegistry {
 
   remove(key: string): boolean {
     this.activeRuns.delete(key);
-    const s = this.sessions.get(key);
-    const removed = this.sessions.delete(key);
-    if (removed && s) {
-      // remove from sessions table but keep messages for history
-      const db = getDb();
-      db.prepare('DELETE FROM sessions WHERE id = ?').run(s.sessionId);
-    }
-    return removed;
+    // only remove from in-memory map — old session row stays in DB so it's
+    // still browsable in sessions.list and messages aren't orphaned
+    return this.sessions.delete(key);
   }
 
   clear(): void {

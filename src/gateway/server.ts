@@ -171,6 +171,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         ws.send(data);
       }
     }
+    // buffer agent events for replay on reconnect
+    const sk = (event.data as any)?.sessionKey as string | undefined;
+    if (sk && typeof event.event === 'string' && event.event.startsWith('agent.') && event.event !== 'agent.error') {
+      let buf = streamBuffers.get(sk);
+      if (!buf) { buf = []; streamBuffers.set(sk, buf); }
+      buf.push(data);
+    }
   };
 
   // file system watcher manager
@@ -231,6 +238,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const toolLogs = new Map<string, { completed: ToolEntry[]; current: { name: string; inputJson: string; detail: string } | null; lastEditAt: number }>();
   // active RunHandles for message injection into running agent sessions
   const runHandles = new Map<string, RunHandle>();
+  // buffered events per session for replay on reconnect (cleared each turn)
+  const streamBuffers = new Map<string, string[]>();
 
   // per-session channel context so the stream loop can manage status messages
   type ChannelRunContext = {
@@ -251,6 +260,26 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
   // guard against overlapping WhatsApp login attempts
   let whatsappLoginInProgress = false;
+
+  // broadcast session.update so sidebar can show new/updated sessions + running state
+  function broadcastSessionUpdate(sessionKey: string) {
+    const reg = sessionRegistry.get(sessionKey);
+    if (!reg) return;
+    const meta = fileSessionManager.getMetadata(reg.sessionId);
+    broadcast({
+      event: 'session.update',
+      data: {
+        id: reg.sessionId,
+        channel: reg.channel,
+        chatId: reg.chatId,
+        chatType: reg.chatType,
+        senderName: meta?.senderName,
+        messageCount: reg.messageCount,
+        activeRun: reg.activeRun,
+        updatedAt: new Date().toISOString(),
+      },
+    });
+  }
 
   // set up channel status message + typing for a session key
   function setupChannelStatus(sessionKey: string, channel: string, chatId: string) {
@@ -387,6 +416,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       }
 
       sessionRegistry.incrementMessages(session.key);
+      broadcastSessionUpdate(session.key);
 
       // if agent is already running for this chat, try injection first
       if (session.activeRun) {
@@ -755,6 +785,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       sessionRegistry.setActiveRun(sessionKey, true);
       if (channel) activeRunChannels.set(sessionKey, channel);
       broadcast({ event: 'status.update', data: { activeRun: true, source, sessionKey } });
+      broadcastSessionUpdate(sessionKey);
       broadcast({ event: 'agent.user_message', data: { source, sessionKey, prompt, timestamp: Date.now() } });
       const runStart = Date.now();
 
@@ -1040,6 +1071,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             usedMessageTool = false;
             agentText = '';
             toolLogs.set(sessionKey, { completed: [], current: null, lastEditAt: 0 });
+            streamBuffers.delete(sessionKey);
           }
         }
 
@@ -1097,8 +1129,10 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         }
         statusMessages.delete(sessionKey);
         toolLogs.delete(sessionKey);
+        streamBuffers.delete(sessionKey);
         sessionRegistry.setActiveRun(sessionKey, false);
         broadcast({ event: 'status.update', data: { activeRun: false, source, sessionKey } });
+        broadcastSessionUpdate(sessionKey);
       }
     });
 
@@ -1141,12 +1175,23 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!prompt) return { id, error: 'prompt required' };
 
           const sessionKey = 'desktop:dm:default';
-          const session = sessionRegistry.getOrCreate({
+          let session = sessionRegistry.getOrCreate({
             channel: 'desktop',
             chatId: 'default',
           });
+
+          // idle timeout: reset session if too long since last message
+          const desktopGap = Date.now() - session.lastMessageAt;
+          if (session.messageCount > 0 && desktopGap > IDLE_TIMEOUT_MS) {
+            console.log(`[gateway] idle timeout for ${session.key} (${Math.floor(desktopGap / 3600000)}h), starting new session`);
+            fileSessionManager.setMetadata(session.sessionId, { sdkSessionId: undefined });
+            sessionRegistry.remove(session.key);
+            session = sessionRegistry.getOrCreate({ channel: 'desktop', chatId: 'default' });
+          }
+
           sessionRegistry.incrementMessages(session.key);
           fileSessionManager.setMetadata(session.sessionId, { channel: 'desktop', chatId: 'default', chatType: 'dm' });
+          broadcastSessionUpdate(sessionKey);
 
           // try injection into active run first
           const handle = runHandles.get(sessionKey);
@@ -1204,7 +1249,16 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
         case 'sessions.list': {
           const fileSessions = fileSessionManager.list();
-          return { id, result: fileSessions };
+          const activeIds = new Set(
+            sessionRegistry.getActiveRunKeys()
+              .map(k => sessionRegistry.get(k)?.sessionId)
+              .filter(Boolean),
+          );
+          const result = fileSessions.map(s => ({
+            ...s,
+            activeRun: activeIds.has(s.id),
+          }));
+          return { id, result };
         }
 
         case 'sessions.get': {
@@ -2359,16 +2413,29 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (token === gatewayToken) {
             clientState!.authenticated = true;
             console.log(`[gateway] client authenticated (${Array.from(clients.values()).filter(c => c.authenticated).length} authenticated)`);
+            const activeRunKeys = sessionRegistry.getActiveRunKeys();
+            const hasActiveRun = activeRunKeys.length > 0;
             ws.send(JSON.stringify({
               event: 'status.update',
               data: {
                 running: true,
                 startedAt,
+                activeRun: hasActiveRun,
+                source: hasActiveRun ? activeRunKeys[0] : undefined,
+                sessionKey: activeRunKeys[0] || 'desktop:dm:default',
                 channels: channelManager.getStatuses(),
                 sessions: sessionRegistry.list(),
               },
             }));
             ws.send(JSON.stringify({ id: msg.id, result: { authenticated: true } }));
+
+            // replay buffered stream events for all active runs
+            for (const sk of activeRunKeys) {
+              const buf = streamBuffers.get(sk);
+              if (buf) {
+                for (const bufferedMsg of buf) ws.send(bufferedMsg);
+              }
+            }
           } else {
             ws.send(JSON.stringify({ id: msg.id, error: 'invalid token' }));
             ws.close();

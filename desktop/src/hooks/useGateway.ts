@@ -122,6 +122,7 @@ export type SessionInfo = {
   chatId?: string;
   chatType?: string;
   senderName?: string;
+  activeRun?: boolean;
 };
 
 export type AskUserQuestion = {
@@ -396,11 +397,7 @@ export function useGateway(url = 'wss://localhost:18789') {
       case 'agent.result': {
         const d = data as { sessionKey?: string; sessionId: string; result: string; usage?: { totalCostUsd?: number } };
         if (d.sessionKey && d.sessionKey !== activeSessionKeyRef.current) {
-          // not our session, just refresh sessions list
-          rpc('sessions.list').then((res) => {
-            const arr = res as SessionInfo[];
-            if (Array.isArray(arr)) setSessions(arr);
-          }).catch(() => {});
+          // not our session — session.update event handles sidebar refresh
           break;
         }
         setChatItems(prev => {
@@ -536,9 +533,27 @@ export function useGateway(url = 'wss://localhost:18789') {
       }
 
       case 'status.update': {
-        const d = data as { activeRun?: boolean; source?: string; model?: string };
+        const d = data as { activeRun?: boolean; source?: string; sessionKey?: string; model?: string };
         if (d.model) setModel(d.model);
-        setAgentStatus(d.activeRun ? `running (${d.source || 'agent'})` : 'idle');
+        if (d.sessionKey === activeSessionKeyRef.current || !d.sessionKey) {
+          setAgentStatus(d.activeRun ? `running (${d.source || 'agent'})` : 'idle');
+        }
+        break;
+      }
+
+      case 'session.update': {
+        const d = data as SessionInfo;
+        if (!d.id) break;
+        setSessions(prev => {
+          const idx = prev.findIndex(s => s.id === d.id);
+          if (idx >= 0) {
+            const updated = [...prev];
+            updated[idx] = { ...updated[idx], ...d };
+            return updated;
+          }
+          // new session — insert at top (most recent)
+          return [d, ...prev];
+        });
         break;
       }
 

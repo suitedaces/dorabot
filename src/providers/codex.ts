@@ -554,6 +554,13 @@ export class CodexProvider implements Provider {
     let lastAgentMessage = '';
     let usage = { inputTokens: 0, outputTokens: 0, totalCostUsd: 0 };
 
+    // stream event helpers — emit Claude-compatible stream_events so the gateway
+    // and frontend handle Codex through the exact same code path as Claude
+    const se = (ev: Record<string, unknown>): ProviderMessage =>
+      ({ type: 'stream_event', event: ev } as ProviderMessage);
+    const itemTexts = new Map<string, string>();
+    const startedBlocks = new Set<string>();
+
     try {
       for await (const event of events) {
         switch (event.type) {
@@ -620,54 +627,68 @@ export class CodexProvider implements Provider {
 
             switch (item.type) {
               case 'agent_message': {
-                if (item.text) {
-                  lastAgentMessage = item.text;
-                  result = item.text;
-                  yield {
-                    type: 'assistant',
-                    message: {
-                      role: 'assistant',
-                      content: [{ type: 'text', text: item.text }],
-                    },
-                  } as ProviderMessage;
+                const text = item.text || '';
+                if (!text && event.type === 'item.completed') break;
+                const prev = itemTexts.get(item.id) || '';
+
+                if (!startedBlocks.has(item.id)) {
+                  startedBlocks.add(item.id);
+                  yield se({ type: 'content_block_start', content_block: { type: 'text' } });
+                }
+
+                const delta = text.slice(prev.length);
+                if (delta) {
+                  yield se({ type: 'content_block_delta', delta: { type: 'text_delta', text: delta } });
+                  itemTexts.set(item.id, text);
+                }
+
+                if (event.type === 'item.completed') {
+                  yield se({ type: 'content_block_stop' });
+                  startedBlocks.delete(item.id);
+                  itemTexts.delete(item.id);
+                  lastAgentMessage = text;
+                  result = text;
+                  yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } } as ProviderMessage;
                 }
                 break;
               }
 
               case 'reasoning': {
-                if (item.text) {
-                  yield {
-                    type: 'assistant',
-                    message: {
-                      role: 'assistant',
-                      content: [{ type: 'thinking', thinking: item.text }],
-                    },
-                  } as ProviderMessage;
+                const text = item.text || '';
+                if (!text && event.type === 'item.completed') break;
+                const prev = itemTexts.get(item.id) || '';
+
+                if (!startedBlocks.has(item.id)) {
+                  startedBlocks.add(item.id);
+                  yield se({ type: 'content_block_start', content_block: { type: 'thinking' } });
+                }
+
+                const delta = text.slice(prev.length);
+                if (delta) {
+                  yield se({ type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: delta } });
+                  itemTexts.set(item.id, text);
+                }
+
+                if (event.type === 'item.completed') {
+                  yield se({ type: 'content_block_stop' });
+                  startedBlocks.delete(item.id);
+                  itemTexts.delete(item.id);
+                  yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', thinking: text }] } } as ProviderMessage;
                 }
                 break;
               }
 
               case 'command_execution': {
+                const toolId = `codex-${item.id}`;
                 if (event.type === 'item.started') {
-                  yield {
-                    type: 'assistant',
-                    message: {
-                      role: 'assistant',
-                      content: [{
-                        type: 'tool_use',
-                        id: `codex-${item.id}`,
-                        name: 'Bash',
-                        input: { command: item.command, description: 'Codex shell command' },
-                      }],
-                    },
-                  } as ProviderMessage;
+                  yield se({ type: 'content_block_start', content_block: { type: 'tool_use', id: toolId, name: 'Bash' } });
+                  yield se({ type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: JSON.stringify({ command: item.command }) } });
+                  yield se({ type: 'content_block_stop' });
+                  yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: toolId, name: 'Bash', input: { command: item.command } }] } } as ProviderMessage;
                 }
-
                 if (event.type === 'item.completed') {
                   yield {
-                    type: 'result',
-                    subtype: 'tool_result',
-                    tool_use_id: `codex-${item.id}`,
+                    type: 'result', subtype: 'tool_result', tool_use_id: toolId,
                     content: [{ type: 'text', text: item.aggregated_output || '(no output)' }],
                     is_error: item.status === 'failed',
                   } as ProviderMessage;
@@ -677,55 +698,40 @@ export class CodexProvider implements Provider {
 
               case 'file_change': {
                 if (event.type !== 'item.completed') break;
-                const desc = item.changes
-                  .map(c => `${c.kind}: ${c.path}`)
-                  .join('\n') || 'Files modified';
+                const changes = item.changes || [];
+                const firstPath = changes[0]?.path || '';
+                const desc = changes.map(c => `${c.kind}: ${c.path}`).join('\n') || 'Files modified';
+                const isCreate = changes.length === 1 && changes[0]?.kind === 'add';
+                const toolName = isCreate ? 'Write' : 'Edit';
+                const toolId = `codex-${item.id}`;
+                const input = { file_path: firstPath, description: desc };
 
-                yield {
-                  type: 'assistant',
-                  message: {
-                    role: 'assistant',
-                    content: [{
-                      type: 'tool_use',
-                      id: `codex-${item.id}`,
-                      name: 'Edit',
-                      input: { description: desc },
-                    }],
-                  },
-                } as ProviderMessage;
-
-                yield {
-                  type: 'result',
-                  subtype: 'tool_result',
-                  tool_use_id: `codex-${item.id}`,
-                  content: [{ type: 'text', text: desc }],
-                } as ProviderMessage;
+                yield se({ type: 'content_block_start', content_block: { type: 'tool_use', id: toolId, name: toolName } });
+                yield se({ type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } });
+                yield se({ type: 'content_block_stop' });
+                yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: toolId, name: toolName, input }] } } as ProviderMessage;
+                yield { type: 'result', subtype: 'tool_result', tool_use_id: toolId, content: [{ type: 'text', text: desc }] } as ProviderMessage;
                 break;
               }
 
               case 'mcp_tool_call': {
-                if (event.type === 'item.started') {
-                  yield {
-                    type: 'assistant',
-                    message: {
-                      role: 'assistant',
-                      content: [{
-                        type: 'tool_use',
-                        id: `codex-${item.id}`,
-                        name: `mcp:${item.server}/${item.tool}`,
-                        input: item.arguments,
-                      }],
-                    },
-                  } as ProviderMessage;
+                const toolId = `codex-${item.id}`;
+                const tool = item.tool || 'unknown';
+                if (!startedBlocks.has(item.id)) {
+                  startedBlocks.add(item.id);
+                  const input = item.arguments || {};
+                  yield se({ type: 'content_block_start', content_block: { type: 'tool_use', id: toolId, name: tool } });
+                  yield se({ type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } });
+                  yield se({ type: 'content_block_stop' });
+                  yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: toolId, name: tool, input }] } } as ProviderMessage;
                 }
                 if (event.type === 'item.completed') {
+                  startedBlocks.delete(item.id);
                   const text = item.error?.message
                     || (item.result?.content?.map((b: any) => b.text || '').join('\n'))
                     || '(no result)';
                   yield {
-                    type: 'result',
-                    subtype: 'tool_result',
-                    tool_use_id: `codex-${item.id}`,
+                    type: 'result', subtype: 'tool_result', tool_use_id: toolId,
                     content: [{ type: 'text', text }],
                     is_error: item.status === 'failed',
                   } as ProviderMessage;
@@ -734,25 +740,34 @@ export class CodexProvider implements Provider {
               }
 
               case 'web_search': {
-                if (event.type === 'item.started') {
-                  yield {
-                    type: 'assistant',
-                    message: {
-                      role: 'assistant',
-                      content: [{
-                        type: 'tool_use',
-                        id: `codex-${item.id}`,
-                        name: 'WebSearch',
-                        input: { query: item.query },
-                      }],
-                    },
-                  } as ProviderMessage;
+                const toolId = `codex-${item.id}`;
+                if (!startedBlocks.has(item.id)) {
+                  startedBlocks.add(item.id);
+                  yield se({ type: 'content_block_start', content_block: { type: 'tool_use', id: toolId, name: 'WebSearch' } });
+                  yield se({ type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: JSON.stringify({ query: item.query }) } });
+                  yield se({ type: 'content_block_stop' });
+                  yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: toolId, name: 'WebSearch', input: { query: item.query } }] } } as ProviderMessage;
+                }
+                if (event.type === 'item.completed') {
+                  startedBlocks.delete(item.id);
+                  yield { type: 'result', subtype: 'tool_result', tool_use_id: toolId, content: [{ type: 'text', text: `Searched: ${item.query}` }] } as ProviderMessage;
                 }
                 break;
               }
 
-              case 'todo_list':
+              case 'todo_list': {
+                if (event.type !== 'item.completed') break;
+                const todos = (item as any).items || [];
+                const toolId = `codex-${item.id}`;
+                const input = { todos: todos.map((t: any) => ({ content: t.text, status: t.completed ? 'completed' : 'in_progress', activeForm: t.text })) };
+
+                yield se({ type: 'content_block_start', content_block: { type: 'tool_use', id: toolId, name: 'TodoWrite' } });
+                yield se({ type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } });
+                yield se({ type: 'content_block_stop' });
+                yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: toolId, name: 'TodoWrite', input }] } } as ProviderMessage;
+                yield { type: 'result', subtype: 'tool_result', tool_use_id: toolId, content: [{ type: 'text', text: 'Plan updated' }] } as ProviderMessage;
                 break;
+              }
 
               case 'error': {
                 console.error(`[codex] item error: ${item.message}`);
