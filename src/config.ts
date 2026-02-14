@@ -182,7 +182,7 @@ const DEFAULT_CONFIG: Config = {
     autoAllowBashIfSandboxed: false,
   },
   sessionDir: join(homedir(), '.dorabot', 'sessions'),
-  cwd: process.cwd(),
+  cwd: process.env.DORABOT_ELECTRON ? join(homedir(), 'Desktop') : process.cwd(),
 };
 
 export async function loadConfig(configPath?: string): Promise<Config> {

@@ -1,0 +1,53 @@
+appId: com.dorabot.desktop
+productName: dorabot
+copyright: Copyright 2026 Ishan Nagpal
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**/*
+  - "!**/*.ts"
+  - "!**/*.map"
+
+asarUnpack:
+  - "**/*.node"
+
+extraResources:
+  - from: resources/gateway/dist
+    to: gateway/dist
+    filter:
+      - "**/*"
+  - from: resources/gateway/node_modules
+    to: gateway/node_modules
+    filter:
+      - "**/*"
+  - from: resources/gateway/package.json
+    to: gateway/package.json
+
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  gatekeeperAssess: false
+
+dmg:
+  title: "${productName}"
+  contents:
+    - x: 130
+      y: 220
+      type: file
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# Don't try to code sign if no identity is available
+afterSign: null

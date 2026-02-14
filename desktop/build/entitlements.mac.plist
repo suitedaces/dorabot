@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Allow outbound network connections (API calls) -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- Allow inbound network connections (gateway WebSocket server) -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+
+    <!-- Allow loading unsigned dynamic libraries (better-sqlite3 native addon) -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- Allow JIT compilation (V8/Node.js) -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- Allow unsigned executable memory (Node.js native addons) -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+</dict>
+</plist>

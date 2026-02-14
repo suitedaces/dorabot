@@ -11,6 +11,8 @@ out/
 desktop/dist/
 desktop/dist-electron/
 desktop/out/
+desktop/release/
+desktop/resources/gateway/
 
 # environment variables
 .env

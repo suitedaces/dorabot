@@ -7,7 +7,11 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "package": "electron-vite build && electron-builder",
+    "bundle-gateway": "cd .. && npm run build && bash scripts/bundle-gateway.sh",
+    "package": "npm run bundle-gateway && electron-vite build && electron-builder --mac && npm run install-app",
+    "package:arm64": "npm run bundle-gateway && electron-vite build && electron-builder --mac --arm64 && npm run install-app",
+    "package:universal": "npm run bundle-gateway && electron-vite build && electron-builder --mac --universal && npm run install-app",
+    "install-app": "APP=$(find release -maxdepth 2 -name 'dorabot.app' -type d | head -1) && cp -R \"$APP\" /Applications/ && echo \"Installed $APP to /Applications/\"",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
