@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, session } from 'electron';
+import { app, BrowserWindow, Tray, Menu, nativeImage, session, ipcMain } from 'electron';
 import { is } from '@electron-toolkit/utils';
 import * as path from 'path';
 import { GatewayManager } from './gateway-manager';
@@ -152,6 +152,12 @@ app.on('ready', async () => {
   });
 
   createWindow();
+
+  ipcMain.on('dock-bounce', (_event, type: 'critical' | 'informational') => {
+    if (app.dock) {
+      app.dock.bounce(type);
+    }
+  });
 });
 
 app.on('window-all-closed', () => {

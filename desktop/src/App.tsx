@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { dorabotImg, whatsappImg, telegramImg } from './assets';
-import { useGateway } from './hooks/useGateway';
+import { useGateway, type NotifiableEvent } from './hooks/useGateway';
 import { useTabs, isChatTab } from './hooks/useTabs';
 import type { Tab, TabType } from './hooks/useTabs';
 import { useLayout } from './hooks/useLayout';
@@ -111,6 +111,58 @@ export default function App() {
     }
     prevNotifCount.current = gw.notifications.length;
   }, [gw.notifications]);
+
+  // subscribe to notifiable gateway events for toasts + OS notifications
+  useEffect(() => {
+    gw.onNotifiableEventRef.current = (event: NotifiableEvent) => {
+      const windowFocused = document.hasFocus();
+
+      switch (event.type) {
+        case 'agent.result': {
+          const costStr = event.cost ? ` ($${event.cost.toFixed(4)})` : '';
+          toast.success('agent finished', { description: event.sessionKey.split(':').pop() + costStr, duration: 4000 });
+          if (!windowFocused) {
+            new Notification('dorabot', { body: `agent finished${costStr}` });
+            (window as any).electronAPI?.dockBounce?.('informational');
+          }
+          break;
+        }
+        case 'agent.error':
+          toast.error('agent error', { description: event.error.slice(0, 120), duration: 6000 });
+          if (!windowFocused) {
+            new Notification('dorabot', { body: `agent error: ${event.error.slice(0, 80)}` });
+          }
+          break;
+        case 'tool_approval':
+          toast.warning('approval needed', { description: event.toolName, duration: 10000 });
+          new Notification('dorabot', { body: `approve tool: ${event.toolName}` });
+          (window as any).electronAPI?.dockBounce?.('critical');
+          break;
+        case 'goals.update':
+          toast('goals updated', { duration: 3000 });
+          break;
+        case 'whatsapp.status':
+          toast(event.status === 'connected' ? 'whatsapp connected' : 'whatsapp disconnected', { duration: 3000 });
+          break;
+        case 'telegram.status':
+          toast(event.status === 'linked' ? 'telegram linked' : 'telegram unlinked', { duration: 3000 });
+          break;
+        case 'heartbeat':
+          toast('heartbeat', { description: event.text.slice(0, 80), duration: 5000 });
+          if (!windowFocused) {
+            new Notification('dorabot', { body: `heartbeat: ${event.text.slice(0, 80)}` });
+          }
+          break;
+        case 'calendar':
+          toast('calendar event', { description: event.summary, duration: 5000 });
+          if (!windowFocused) {
+            new Notification('dorabot', { body: `calendar: ${event.summary}` });
+          }
+          break;
+      }
+    };
+    return () => { gw.onNotifiableEventRef.current = null; };
+  }, [gw.onNotifiableEventRef]);
 
   const filteredSessions = useMemo(() => {
     if (sessionFilter === 'all') return gw.sessions;

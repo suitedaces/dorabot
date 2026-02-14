@@ -89,8 +89,9 @@ Pick the model you're already paying for.
 
 | Provider | Auth | SDK |
 |----------|------|-----|
-| **Claude** (default) | API key or Pro/Max subscription OAuth | [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) |
+| **Claude** (default) | API key or Pro/Max subscription | [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) |
 | **OpenAI Codex** | API key or ChatGPT OAuth | [Codex SDK](https://www.npmjs.com/package/@openai/codex-sdk) |
+| **MiniMax** | API key | OpenAI-compatible REST API |
 
 Switch providers from the desktop Settings page or via gateway RPC.
 
@@ -109,6 +110,15 @@ dorabot --whatsapp-login    # scan the QR code
 3. Start from the desktop app or config
 
 Supports text, photos, videos, audio, documents, voice messages, and inline approval buttons.
+
+### Slack
+
+1. Create a Slack app with Socket Mode enabled
+2. Add bot token scopes: `chat:write`, `im:history`, `im:read`, `im:write`, `files:read`, `files:write`, `users:read`
+3. Add `connections:write` to the App-Level Token
+4. Paste both tokens via the desktop app or `channels.slack.link` RPC
+
+DM-based, same as Telegram. The bot listens for direct messages and responds in-thread.
 
 ## Skills
 
@@ -145,29 +155,29 @@ Ask dorabot to onboard you, or edit the files directly:
 ## Architecture
 
 ```
-┌─────────────┐   ┌─────────────┐   ┌─────────────┐
-│  Desktop App │   │  Telegram   │   │  WhatsApp   │
-│  (Electron)  │   │  (grammy)   │   │  (Baileys)  │
-└──────┬───────┘   └──────┬──────┘   └──────┬──────┘
-       │                  │                  │
-       └──────────┬───────┴──────────────────┘
-                  │
-         ┌────────▼────────┐
-         │  Gateway Server  │  WebSocket RPC (port 18789)
-         │  (server.ts)     │  Token-authenticated
-         └────────┬────────┘
-                  │
-         ┌────────▼────────┐
-         │  Provider Layer  │  Claude / Codex
-         │  (providers/)    │  Singleton + lazy init
-         └────────┬────────┘
-                  │
-    ┌─────────────┼─────────────┐
-    │             │             │
-┌───▼───┐  ┌─────▼─────┐  ┌───▼───┐
-│ Tools │  │  Sessions  │  │  Cron │
-│ (MCP) │  │  (SQLite)  │  │ Sched │
-└───────┘  └───────────┘  └───────┘
+┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
+│ Desktop  │  │ Telegram │  │ WhatsApp │  │  Slack   │
+│(Electron)│  │ (grammy) │  │(Baileys) │  │ (Bolt)   │
+└────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘
+     │             │             │             │
+     └─────────┬───┴─────────────┴─────┬───────┘
+               │                       │
+      ┌────────▼────────┐              │
+      │  Gateway Server  │  WebSocket RPC (port 18789)
+      │  (server.ts)     │  Token-authenticated
+      └────────┬────────┘
+               │
+      ┌────────▼────────┐
+      │  Provider Layer  │  Claude / Codex / MiniMax
+      │  (providers/)    │  Singleton + lazy init
+      └────────┬────────┘
+               │
+  ┌────────────┼────────────┐
+  │            │            │
+┌─▼─────┐ ┌───▼─────┐ ┌───▼───┐
+│ Tools │ │Sessions │ │ Cron  │
+│ (MCP) │ │(SQLite) │ │ Sched │
+└───────┘ └─────────┘ └───────┘
 ```
 
 - **Gateway** - Central hub. ~70 RPC methods for config, sessions, channels, cron, skills, goals, provider management, and tool approval.

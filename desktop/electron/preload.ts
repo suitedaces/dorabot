@@ -20,6 +20,7 @@ const electronAPI = {
     return gatewayToken;
   },
   openExternal: (url: string) => shell.openExternal(url),
+  dockBounce: (type: 'critical' | 'informational') => ipcRenderer.send('dock-bounce', type),
   onCloseTab: (cb: () => void) => {
     ipcRenderer.on('close-tab', cb);
     return () => { ipcRenderer.removeListener('close-tab', cb); };

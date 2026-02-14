@@ -152,6 +152,16 @@ export type ToolNotification = {
   timestamp: number;
 };
 
+export type NotifiableEvent =
+  | { type: 'agent.result'; sessionKey: string; cost?: number }
+  | { type: 'agent.error'; sessionKey: string; error: string }
+  | { type: 'tool_approval'; toolName: string }
+  | { type: 'goals.update' }
+  | { type: 'whatsapp.status'; status: string }
+  | { type: 'telegram.status'; status: string }
+  | { type: 'heartbeat'; text: string }
+  | { type: 'calendar'; summary: string };
+
 export type BackgroundRun = {
   id: string;
   sessionKey: string;
@@ -426,6 +436,7 @@ export function useGateway(url = 'wss://localhost:18789') {
   const trackedSessionsRef = useRef<Set<string>>(new Set());
   // Callback ref for tab system to be notified of sessionId changes
   const onSessionIdChangeRef = useRef<((sessionKey: string, sessionId: string) => void) | null>(null);
+  const onNotifiableEventRef = useRef<((event: NotifiableEvent) => void) | null>(null);
 
   const rpc = useCallback(async (method: string, params?: Record<string, unknown>, timeoutMs = 30000): Promise<unknown> => {
     const ws = wsRef.current;
@@ -593,6 +604,7 @@ export function useGateway(url = 'wss://localhost:18789') {
         if (d.sessionId && onSessionIdChangeRef.current) {
           onSessionIdChangeRef.current(sk, d.sessionId);
         }
+        onNotifiableEventRef.current?.({ type: 'agent.result', sessionKey: sk, cost: d.usage?.totalCostUsd });
         break;
       }
 
@@ -613,6 +625,7 @@ export function useGateway(url = 'wss://localhost:18789') {
             },
           };
         });
+        onNotifiableEventRef.current?.({ type: 'agent.error', sessionKey: sk, error: d.error });
         break;
       }
 
@@ -829,6 +842,7 @@ export function useGateway(url = 'wss://localhost:18789') {
       case 'agent.tool_approval': {
         const d = data as ToolApproval;
         setPendingApprovals(prev => [...prev, d]);
+        onNotifiableEventRef.current?.({ type: 'tool_approval', toolName: cleanToolName(d.toolName) });
         break;
       }
 
@@ -843,6 +857,7 @@ export function useGateway(url = 'wss://localhost:18789') {
 
       case 'goals.update': {
         setGoalsVersion(v => v + 1);
+        onNotifiableEventRef.current?.({ type: 'goals.update' });
         break;
       }
 
@@ -866,6 +881,20 @@ export function useGateway(url = 'wss://localhost:18789') {
         break;
       }
 
+      case 'heartbeat.result': {
+        const d = data as { text: string; timestamp: number };
+        if (d.text) {
+          onNotifiableEventRef.current?.({ type: 'heartbeat', text: d.text });
+        }
+        break;
+      }
+
+      case 'calendar.result': {
+        const d = data as { item: string; summary: string; timestamp: number };
+        onNotifiableEventRef.current?.({ type: 'calendar', summary: d.summary || d.item });
+        break;
+      }
+
       case 'whatsapp.qr': {
         const d = data as { qr: string };
         setWhatsappQr(d.qr);
@@ -878,6 +907,7 @@ export function useGateway(url = 'wss://localhost:18789') {
         if (d.status === 'failed') {
           setWhatsappLoginError(d.error || 'WhatsApp login failed');
           setWhatsappQr(null);
+          onNotifiableEventRef.current?.({ type: 'whatsapp.status', status: 'failed' });
           break;
         }
         if (d.status === 'connecting' || d.status === 'qr_ready' || d.status === 'connected' || d.status === 'disconnected' || d.status === 'not_linked') {
@@ -885,6 +915,9 @@ export function useGateway(url = 'wss://localhost:18789') {
         }
         if (d.status === 'connected' || d.status === 'failed' || d.status === 'disconnected') {
           setWhatsappQr(null);
+        }
+        if (d.status === 'connected' || d.status === 'disconnected') {
+          onNotifiableEventRef.current?.({ type: 'whatsapp.status', status: d.status });
         }
         break;
       }
@@ -895,10 +928,12 @@ export function useGateway(url = 'wss://localhost:18789') {
           setTelegramLinkStatus('linked');
           setTelegramBotUsername(d.botUsername || null);
           setTelegramLinkError(null);
+          onNotifiableEventRef.current?.({ type: 'telegram.status', status: 'linked' });
         } else if (d.status === 'unlinked') {
           setTelegramLinkStatus('unlinked');
           setTelegramBotUsername(null);
           setTelegramLinkError(null);
+          onNotifiableEventRef.current?.({ type: 'telegram.status', status: 'unlinked' });
         }
         break;
       }
@@ -1373,6 +1408,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     setActiveSession,
     loadSessionIntoMap,
     onSessionIdChangeRef,
+    onNotifiableEventRef,
     // Global state
     channelMessages,
     channelStatuses,
