@@ -5,6 +5,7 @@ import type { useGateway, ChatItem, AskUserQuestion } from '../hooks/useGateway'
 import { ApprovalUI } from '@/components/approval-ui';
 import { ToolUI } from '@/components/tool-ui';
 import { ToolStreamCard, hasStreamCard } from '@/components/tool-stream';
+import { InlineErrorBoundary } from '@/components/ErrorBoundary';
 import { AuroraBackground } from '@/components/aceternity/aurora-background';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
@@ -136,7 +137,7 @@ function ModelSelector({ gateway, disabled }: { gateway: ReturnType<typeof useGa
       <Select value={currentValue} onValueChange={handleChange} disabled={disabled}>
         <SelectTrigger size="sm" className="h-7 gap-1.5 text-[11px] rounded-lg shadow-none w-auto">
           <img
-            src={providerName === 'codex' ? '/openai-icon.svg' : '/claude-icon.svg'}
+            src={providerName === 'codex' ? './openai-icon.svg' : './claude-icon.svg'}
             alt=""
             className="w-3 h-3"
           />
@@ -147,7 +148,7 @@ function ModelSelector({ gateway, disabled }: { gateway: ReturnType<typeof useGa
           {ANTHROPIC_MODELS.map(m => (
             <SelectItem key={m.value} value={`claude:${m.value}`} className="text-xs">
               <span className="flex items-center gap-1.5">
-                <img src="/claude-icon.svg" alt="" className="w-3 h-3" />
+                <img src="./claude-icon.svg" alt="" className="w-3 h-3" />
                 {m.label}
               </span>
             </SelectItem>
@@ -156,7 +157,7 @@ function ModelSelector({ gateway, disabled }: { gateway: ReturnType<typeof useGa
           {OPENAI_MODELS.map(m => (
             <SelectItem key={m.value} value={`codex:${m.value}`} className="text-xs">
               <span className="flex items-center gap-1.5">
-                <img src="/openai-icon.svg" alt="" className="w-3 h-3" />
+                <img src="./openai-icon.svg" alt="" className="w-3 h-3" />
                 {m.label}
               </span>
             </SelectItem>
@@ -308,6 +309,7 @@ function AskUserQuestionPanel({
 
   const total = question.questions.length;
   const q = question.questions[step];
+  const options = q?.options || [];
 
   const handleSelect = (questionText: string, label: string, multiSelect: boolean) => {
     if (multiSelect) {
@@ -338,6 +340,8 @@ function AskUserQuestionPanel({
     onAnswer(question.requestId, answers);
   };
 
+  if (!q) return null;
+
   const currentAnswered =
     (useOther[q.question] && otherTexts[q.question]) || selections[q.question];
   const isLast = step === total - 1;
@@ -363,7 +367,7 @@ function AskUserQuestionPanel({
         </div>
         <p className="text-[13px]">{q.question}</p>
         <div className="flex flex-col gap-1">
-          {q.options.map((opt, oi) => {
+          {options.map((opt, oi) => {
             const selected = q.multiSelect
               ? (selections[q.question] || '').split(', ').includes(opt.label)
               : selections[q.question] === opt.label && !useOther[q.question];
@@ -443,6 +447,16 @@ const SUGGESTIONS: { icon: LucideIcon; label: string; prompt: string }[] = [
   { icon: Camera, label: 'take a screenshot', prompt: 'take a screenshot of my screen' },
 ];
 
+const SHORTCUTS: { keys: string; label: string }[] = [
+  { keys: '⌘T', label: 'new tab' },
+  { keys: '⌘W', label: 'close tab' },
+  { keys: '⌘L', label: 'focus input' },
+  { keys: '⌘B', label: 'files' },
+  { keys: '⌘D', label: 'split' },
+  { keys: '⌘,', label: 'settings' },
+  { keys: 'Esc', label: 'stop' },
+];
+
 function getGreeting(): string {
   const h = new Date().getHours();
   if (h < 12) return 'good morning';
@@ -466,7 +480,9 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
       if (item.type === 'tool_use' && item.name === 'AskUserQuestion' && item.streaming) {
         const parsed = safeParse(item.input);
         const qs = parsed.questions;
-        return Array.isArray(qs) && qs.length > 0 ? qs : null;
+        if (!Array.isArray(qs) || qs.length === 0) return null;
+        const valid = qs.filter((q: any) => q?.question && Array.isArray(q?.options));
+        return valid.length > 0 ? valid : null;
       }
     }
     return null;
@@ -549,7 +565,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             </div>
           );
         }
-        return <div key={i} className="my-1.5"><ToolUseItem item={item} /></div>;
+        return <div key={i} className="my-1.5"><InlineErrorBoundary><ToolUseItem item={item} /></InlineErrorBoundary></div>;
       case 'thinking':
         return (
           <div key={i} className="text-muted-foreground italic text-xs border-l-2 border-border pl-2 my-1 break-words min-w-0">
@@ -588,7 +604,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
               <div className="text-center space-y-2">
                 <div className="relative w-24 h-24 mx-auto">
                   <div className="absolute inset-0 rounded-full bg-success/30 blur-xl animate-pulse" />
-                  <img src="/dorabot-computer.png" alt="dorabot" className="relative w-24 h-24 dorabot-alive" />
+                  <img src="./dorabot-computer.png" alt="dorabot" className="relative w-24 h-24 dorabot-alive" />
                 </div>
                 <h1 className="text-lg font-semibold text-foreground">{getGreeting()}</h1>
                 <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
@@ -638,6 +654,16 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                   ))}
                 </div>
               )}
+
+              {/* keyboard shortcuts */}
+              <div className="flex flex-wrap justify-center gap-x-4 gap-y-1.5 text-[10px] text-muted-foreground/60 pt-2">
+                {SHORTCUTS.map(s => (
+                  <span key={s.keys} className="flex items-center gap-1">
+                    <kbd className="px-1 py-0.5 rounded bg-muted/50 text-[9px] font-mono">{s.keys}</kbd>
+                    <span>{s.label}</span>
+                  </span>
+                ))}
+              </div>
             </div>
           </AuroraBackground>
         </div>

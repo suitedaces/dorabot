@@ -586,7 +586,7 @@ export function useGateway(url = 'wss://localhost:18789') {
           updated.push({ type: 'result', cost: d.usage?.totalCostUsd, timestamp: Date.now() });
           return {
             ...prev,
-            [sk]: { ...state, chatItems: updated, agentStatus: 'idle', sessionId: d.sessionId || state.sessionId },
+            [sk]: { ...state, chatItems: updated, agentStatus: 'idle', pendingQuestion: null, sessionId: d.sessionId || state.sessionId },
           };
         });
         // Notify tab system of sessionId assignment
@@ -609,6 +609,7 @@ export function useGateway(url = 'wss://localhost:18789') {
               ...state,
               chatItems: [...state.chatItems, { type: 'error', content: d.error, timestamp: Date.now() }],
               agentStatus: 'idle',
+              pendingQuestion: null,
             },
           };
         });
@@ -630,6 +631,19 @@ export function useGateway(url = 'wss://localhost:18789') {
                 agentStatus: 'waiting for input...',
               },
             };
+          });
+        }
+        break;
+      }
+
+      case 'agent.question_dismissed': {
+        const d = data as { requestId: string; sessionKey?: string; reason: string };
+        const sk = d.sessionKey;
+        if (sk && trackedSessionsRef.current.has(sk)) {
+          setSessionStates(prev => {
+            const state = prev[sk];
+            if (!state || state.pendingQuestion?.requestId !== d.requestId) return prev;
+            return { ...prev, [sk]: { ...state, pendingQuestion: null } };
           });
         }
         break;
@@ -1333,7 +1347,9 @@ export function useGateway(url = 'wss://localhost:18789') {
         try {
           const parsed = JSON.parse(jsonrepair(item.input));
           const qs = parsed.questions;
-          return Array.isArray(qs) && qs.length > 0 ? qs : null;
+          if (!Array.isArray(qs) || qs.length === 0) return null;
+          const valid = qs.filter((q: any) => q?.question && Array.isArray(q?.options));
+          return valid.length > 0 ? valid : null;
         } catch { return null; }
       }
     }

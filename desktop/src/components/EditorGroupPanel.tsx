@@ -13,6 +13,7 @@ import { SoulView } from '../views/Soul';
 import { SkillsView } from '../views/Skills';
 import { GoalsView } from '../views/Goals';
 import { FileViewer } from './FileViewer';
+import { ErrorBoundary } from './ErrorBoundary';
 import { cn } from '@/lib/utils';
 
 // VS Code-style drop zone inside a panel — shows quadrant highlights when dragging
@@ -169,7 +170,9 @@ export function EditorGroupPanel({
         }}
       />
       <div className="@container flex-1 min-h-0 min-w-0 relative">
-        {renderContent()}
+        <ErrorBoundary>
+          {renderContent()}
+        </ErrorBoundary>
         {isDragging && (
           <>
             <PanelDropZone groupId={group.id} zone="left" />

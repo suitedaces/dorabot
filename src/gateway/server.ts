@@ -726,17 +726,17 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     return { allowedPaths: ch.allowedPaths, deniedPaths: ch.deniedPaths };
   }
 
-  function makeCanUseTool(runChannel?: string, runChatId?: string) {
+  function makeCanUseTool(runChannel?: string, runChatId?: string, runSessionKey?: string) {
     return async (toolName: string, input: Record<string, unknown>) => {
-      return canUseToolImpl(toolName, input, runChannel, runChatId);
+      return canUseToolImpl(toolName, input, runChannel, runChatId, runSessionKey);
     };
   }
 
   const canUseTool = async (toolName: string, input: Record<string, unknown>) => {
-    return canUseToolImpl(toolName, input, undefined, undefined);
+    return canUseToolImpl(toolName, input, undefined, undefined, undefined);
   };
 
-  const canUseToolImpl = async (toolName: string, input: Record<string, unknown>, runChannel?: string, runChatId?: string) => {
+  const canUseToolImpl = async (toolName: string, input: Record<string, unknown>, runChannel?: string, runChatId?: string, runSessionKey?: string) => {
     // AskUserQuestion — route to channel or desktop
     if (toolName === 'AskUserQuestion') {
       const questions = input.questions as unknown[];
@@ -799,7 +799,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       const requestId = randomUUID();
       broadcast({
         event: 'agent.ask_user',
-        data: { requestId, questions, timestamp: Date.now() },
+        data: { requestId, questions, sessionKey: runSessionKey, timestamp: Date.now() },
       });
 
       const answers = await new Promise<Record<string, string>>((resolveQ, rejectQ) => {
@@ -807,6 +807,10 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         setTimeout(() => {
           if (pendingQuestions.has(requestId)) {
             pendingQuestions.delete(requestId);
+            broadcast({
+              event: 'agent.question_dismissed',
+              data: { requestId, sessionKey: runSessionKey, reason: 'timeout' },
+            });
             rejectQ(new Error('Question timeout - no answer received'));
           }
         }, 300000);
@@ -942,7 +946,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           channel,
           connectedChannels: connected,
           extraContext,
-          canUseTool: makeCanUseTool(channel, messageMetadata?.chatId),
+          canUseTool: makeCanUseTool(channel, messageMetadata?.chatId, sessionKey),
           abortController,
           messageMetadata,
           onRunReady: (handle) => { runHandles.set(sessionKey, handle); },
