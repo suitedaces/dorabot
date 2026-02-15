@@ -28,6 +28,3 @@ export function createAgentMcpServer() {
   });
 }
 
-export function getCustomToolNames(): string[] {
-  return customTools.map(t => t.name);
-}

@@ -44,7 +44,7 @@ export const messageTool = tool(
     action: z.enum(['send', 'edit', 'delete']),
     channel: z.string().describe('Channel name: whatsapp, telegram, discord, slack, signal, console'),
     target: z.string().optional().describe('Recipient ID, chat ID, or channel ID'),
-    message: z.string().optional().describe('Message content (for send/edit). Telegram uses HTML parse mode: <b>, <i>, <code>, <pre>, <a href="url">. Do not use markdown for Telegram.'),
+    message: z.string().optional().describe('Message content (for send/edit). Telegram uses HTML parse mode — supported tags: <b>, <i>, <u>, <s>, <code>, <pre>, <pre><code class="language-x">, <a href="url">, <blockquote>, <tg-spoiler>. Escape &, <, > as &amp; &lt; &gt;. Nest tags freely. Do NOT use markdown syntax for Telegram.'),
     messageId: z.string().optional().describe('Message ID to edit or delete'),
     chatId: z.string().optional().describe('Chat ID (required for edit/delete on some channels)'),
     media: z.string().optional().describe('Path to media file to attach'),

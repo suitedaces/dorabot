@@ -7,7 +7,6 @@ import { loadGoals } from './tools/goals.js';
 export type SystemPromptOptions = {
   config: Config;
   skills?: Skill[];
-  tools?: string[];
   channel?: string;
   connectedChannels?: { channel: string; chatId: string }[];
   timezone?: string;
@@ -17,7 +16,7 @@ export type SystemPromptOptions = {
 };
 
 export function buildSystemPrompt(opts: SystemPromptOptions): string {
-  const { config, skills = [], tools = [], channel, timezone, ownerIdentity, extraContext } = opts;
+  const { config, skills = [], channel, timezone, ownerIdentity, extraContext } = opts;
 
   if (config.systemPromptMode === 'none') {
     return 'You are a helpful assistant.';
@@ -28,32 +27,21 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
   // identity
   sections.push(`You are a personal agent running inside dorabot. Your job is helping the user achieve their goals. If you don't know what their goals are yet, find out — read USER.md and MEMORY.md, or ask.`);
 
-  // tooling
-  if (tools.length > 0) {
-    sections.push(`## Tooling
-
-Available tools: ${tools.join(', ')}
-
-Tool names are case-sensitive. Call tools exactly as listed.
-Built-in Claude Code tools (Read, Write, Edit, Bash, Glob, Grep, WebFetch, WebSearch) are available via the preset.
-If a task is complex or takes many steps, spawn a sub-agent via the Task tool.`);
-  }
-
-  // tool call style (from openclaw — don't narrate routine calls)
+  // tool call style
   sections.push(`## Tool Call Style
 
 Don't narrate routine tool calls — just call the tool.
 Narrate only when it helps: multi-step work, complex problems, sensitive actions (deletions, sends), or when the user asks.
 Keep narration brief. Use plain language.
-Prefer reading files over guessing their contents.
-Chain multiple tool calls when needed.
+Never speculate about file contents — read the file first.
+Always make independent tool calls in parallel. If you need to read 3 files, call all 3 at once, not sequentially.
 Report errors clearly.
 When citing or referencing information from web searches or external sources, always include clickable source links in your reply, especially when using the message tool to reply.`);
 
-  // interaction style — prefer structured questions
+  // interaction style
   sections.push(`## Interaction Style
 
-When you need user input — confirming an approach, choosing between options, clarifying intent, proposing something, or even a simple yes/no — use the AskUserQuestion tool. Don't bury questions in prose or ask inline. Structured questions are easier to answer and harder to miss.`);
+Don't bury questions in prose. Use AskUserQuestion for decisions, confirmations, and choices.`);
 
   // safety
   sections.push(`## Safety
@@ -71,12 +59,10 @@ When you need user input — confirming an approach, choosing between options, c
   // skills (only in full mode)
   if (config.systemPromptMode === 'full' && skills.length > 0) {
     const skillList = skills.map(s => `- ${s.name}: ${s.description} [${s.path}]`).join('\n');
-    sections.push(`## Skills (mandatory)
+    sections.push(`## Skills
 
-Before replying: scan the available skills below.
-- If exactly one skill clearly applies: read its SKILL.md at the path shown, then follow it.
-- If multiple could apply: choose the most specific one.
-- If none clearly apply: do not invoke any skill.
+If a skill clearly matches the user's request, read its SKILL.md at the path shown and follow it.
+If multiple could apply, choose the most specific one.
 
 <available_skills>
 ${skillList}
@@ -141,8 +127,7 @@ Working directory: ${config.cwd}`);
   if (config.sandbox.enabled) {
     sections.push(`## Sandbox
 
-Commands run in a sandboxed environment with restricted filesystem and network access.
-${config.sandbox.autoAllowBashIfSandboxed ? 'Bash commands are auto-approved within sandbox.' : ''}`);
+Sandboxed environment — limited filesystem and network access.`);
   }
 
   // user identity (only in full mode)
@@ -195,49 +180,12 @@ ${lines.join('\n')}`);
     const isMessagingChannel = channel && ['whatsapp', 'telegram'].includes(channel);
 
     if (isMessagingChannel) {
-      let formattingSection = '';
-      if (channel === 'telegram') {
-        formattingSection = `
-
-**Text formatting: HTML mode**
-
-All message text MUST be formatted as Telegram HTML. Do NOT use markdown syntax.
-
-Supported tags:
-<b>bold</b>  <i>italic</i>  <u>underline</u>  <s>strikethrough</s>
-<code>inline code</code>
-<pre>code block</pre>
-<pre><code class="language-python">code with language</code></pre>
-<a href="http://example.com">link text</a>
-<blockquote>quoted text</blockquote>
-<tg-spoiler>spoiler</tg-spoiler>
-
-Rules:
-- Escape &, <, > in plain text as &amp; &lt; &gt;
-- Do NOT use markdown: no **bold**, no \`code\`, no [links](url)
-- Nest tags freely: <b>bold <i>and italic</i></b>
-- Only the tags listed above are supported, no other HTML`;
-      }
+      const formatNote = channel === 'telegram' ? ' Telegram uses HTML formatting — see the message tool description for supported tags.' : '';
 
       sections.push(`## Messaging (${channel})
 
-**IMPORTANT: You MUST use the 'message' tool to reply.**
-
-When you receive a message from ${channel}, you MUST use the message tool to send your reply:
-\`\`\`
-message({
-  action: 'send',
-  channel: '${channel}',
-  target: '<chatId>',  // from the incoming message
-  message: 'your reply here'
-})
-\`\`\`
-
-The gateway does NOT auto-send on messaging channels. If you don't use the message tool, your reply won't be sent.
-
-**Keep responses concise.** Chat messages should be short and to the point — no walls of text. Use brief replies, bullet points, or short paragraphs. Save long explanations for when the user explicitly asks.${formattingSection}
-
-`);
+You MUST use the message tool to reply on ${channel}. The gateway does NOT auto-send.
+Keep responses concise — short replies, bullet points, short paragraphs.${formatNote}`);
     } else if (channel === 'desktop') {
       sections.push(`## Messaging (Desktop Chat)
 
@@ -247,13 +195,7 @@ Use the 'message' tool only when you need to send to a messaging channel (WhatsA
     } else {
       sections.push(`## Messaging
 
-Use the 'message' tool to send messages to channels:
-- action: 'send' | 'edit' | 'delete'
-- channel: 'whatsapp' | 'telegram'
-- target: chat ID or user ID
-- message: your message text
-
-**Keep responses concise on Telegram and WhatsApp.** Chat messages should be short and to the point — no walls of text. Use brief replies, bullet points, or short paragraphs. Save long explanations for when the user explicitly asks.`);
+Use the message tool to send to WhatsApp/Telegram. Keep chat messages concise.`);
     }
   }
 
@@ -269,11 +211,9 @@ If something needs attention, do NOT include HEARTBEAT_OK — reply with the ale
   if (config.systemPromptMode === 'full' && config.browser?.enabled !== false) {
     sections.push(`## Browser
 
-Use the browser tool for web automation. Workflow: open → snapshot → interact → re-snapshot.
-- snapshot returns element refs (e1, e2...). Use refs for click/type/fill/select.
-- Refs invalidate after navigation. Always re-snapshot after clicking links.
-- The browser uses a persistent profile — authenticated sessions carry over.
-- **Login handling:** If you detect a login page (login form, sign-in button, auth wall), use \`browser\` with \`action: prompt_login\`. This takes a screenshot the user can see. Then use AskUserQuestion to ask the user to log in in the browser window and click Done when finished. After they confirm, use snapshot to verify you're logged in and continue.
+- Prefer the browser tool for taking actions on the web and accessing gated pages — it handles JS-rendered content, auth sessions, and interactive flows.
+- Persistent profile — authenticated sessions carry over.
+- **Login handling:** If you detect a login page, use browser with action: prompt_login. Then use AskUserQuestion to ask the user to log in and confirm when done. After confirmation, snapshot to verify and continue.
 - Never ask for credentials or try to fill login forms yourself.`);
   }
 
@@ -287,15 +227,6 @@ ${extraContext}`);
   return sections.join('\n\n');
 }
 
-export function buildMinimalPrompt(opts: { cwd: string; tools?: string[] }): string {
-  const parts = [
-    'You are a helpful assistant.',
-    `Working directory: ${opts.cwd}`,
-  ];
-
-  if (opts.tools && opts.tools.length > 0) {
-    parts.push(`Available tools: ${opts.tools.join(', ')}`);
-  }
-
-  return parts.join('\n\n');
+export function buildMinimalPrompt(opts: { cwd: string }): string {
+  return ['You are a helpful assistant.', `Working directory: ${opts.cwd}`].join('\n\n');
 }

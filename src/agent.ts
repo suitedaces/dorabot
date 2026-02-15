@@ -20,7 +20,7 @@ function resolveSandbox(sandbox: SandboxSettings, channel?: string): SandboxSett
   return { ...sandbox, enabled };
 }
 import { buildSystemPrompt } from './system-prompt.js';
-import { createAgentMcpServer, getCustomToolNames } from './tools/index.js';
+import { createAgentMcpServer } from './tools/index.js';
 import { getEligibleSkills, matchSkillToPrompt, type Skill } from './skills/loader.js';
 import { createDefaultHooks, mergeHooks, type HookEvent, type HookCallbackMatcher } from './hooks/index.js';
 import { getAllAgents } from './agents/definitions.js';
@@ -109,15 +109,6 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     enhancedPrompt = `[Skill: ${matchedSkill.name}]\n\n${matchedSkill.content}\n\n---\n\nUser request: ${prompt}`;
   }
 
-  // get all available tools
-  const builtInTools = [
-    'Read', 'Write', 'Edit', 'Glob', 'Grep',
-    'Bash', 'WebFetch', 'WebSearch',
-    'Task', 'AskUserQuestion', 'TodoWrite',
-  ];
-  const customTools = getCustomToolNames();
-  const allTools = [...builtInTools, ...customTools];
-
   // load workspace files (SOUL.md, USER.md, MEMORY.md, etc.)
   ensureWorkspace();
   const workspaceFiles = loadWorkspaceFiles();
@@ -126,7 +117,6 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
   const systemPrompt = buildSystemPrompt({
     config,
     skills,
-    tools: allTools,
     channel,
     connectedChannels: opts.connectedChannels,
     timezone,
@@ -288,14 +278,6 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
     enhancedPrompt = `[Skill: ${matchedSkill.name}]\n\n${matchedSkill.content}\n\n---\n\nUser request: ${prompt}`;
   }
 
-  const builtInTools = [
-    'Read', 'Write', 'Edit', 'Glob', 'Grep',
-    'Bash', 'WebFetch', 'WebSearch',
-    'Task', 'AskUserQuestion', 'TodoWrite',
-  ];
-  const customTools = getCustomToolNames();
-  const allTools = [...builtInTools, ...customTools];
-
   // load workspace files (SOUL.md, USER.md, MEMORY.md, etc.)
   ensureWorkspace();
   const workspaceFiles = loadWorkspaceFiles();
@@ -303,7 +285,6 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
   const systemPrompt = buildSystemPrompt({
     config,
     skills,
-    tools: allTools,
     channel,
     connectedChannels: opts.connectedChannels,
     timezone,
