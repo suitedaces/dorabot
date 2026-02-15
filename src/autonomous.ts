@@ -1,11 +1,11 @@
 import { getTodayMemoryDir, MEMORIES_DIR, WORKSPACE_DIR } from './workspace.js';
 
-export const AUTONOMOUS_SCHEDULE_ID = 'autonomous-checkin';
+export const AUTONOMOUS_SCHEDULE_ID = 'autonomy-pulse';
 
 export function buildAutonomousPrompt(timezone?: string): string {
   const todayDir = getTodayMemoryDir(timezone);
 
-  return `You're running autonomously. This is a scheduled check-in, not a user message.
+  return `You're running autonomously. This is a scheduled pulse, not a user message.
 
 1. Read ${WORKSPACE_DIR}/MEMORY.md for your working knowledge.
 2. Read ${todayDir}/MEMORY.md if it exists to see what you've already done today.
@@ -15,14 +15,14 @@ export function buildAutonomousPrompt(timezone?: string): string {
 6. If anything important changed (new patterns, completed goals, key decisions), update MEMORY.md.
 7. If something is urgent or noteworthy, message the owner on an available channel.
 
-Don't do busywork. If nothing needs attention, append a short "checked in, nothing to act on" to today's journal and stop. The goal is useful work, not activity for its own sake.`;
+Don't do busywork. If nothing needs attention, append a short "pulse, nothing to act on" to today's journal and stop. The goal is useful work, not activity for its own sake.`;
 }
 
 export function buildAutonomousCalendarItem(timezone?: string) {
   return {
     type: 'event' as const,
-    summary: 'Autonomous check-in',
-    description: 'Periodic autonomous agent run',
+    summary: 'Autonomy pulse',
+    description: 'Periodic autonomy pulse',
     dtstart: new Date().toISOString(),
     rrule: 'FREQ=MINUTELY;INTERVAL=30',
     timezone,

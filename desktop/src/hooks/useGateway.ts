@@ -1045,6 +1045,18 @@ export function useGateway(url = 'wss://localhost:18789') {
       wsRef.current = null;
       pendingRpcRef.current.forEach(p => p.reject(new Error('Connection closed')));
       pendingRpcRef.current.clear();
+      // clear stale pending questions — server-side promises are dead
+      setSessionStates(prev => {
+        let changed = false;
+        const next = { ...prev };
+        for (const sk of Object.keys(next)) {
+          if (next[sk].pendingQuestion) {
+            next[sk] = { ...next[sk], pendingQuestion: null };
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = window.setTimeout(connect, 3000);
     };
@@ -1130,6 +1142,13 @@ export function useGateway(url = 'wss://localhost:18789') {
       });
     } catch (err) {
       console.error('failed to answer question:', err);
+      // question already timed out or gone server-side — clear UI anyway
+      const sk = sessionKey || activeSessionKeyRef.current;
+      setSessionStates(prev => {
+        const state = prev[sk];
+        if (!state) return prev;
+        return { ...prev, [sk]: { ...state, pendingQuestion: null } };
+      });
     }
   }, [rpc]);
 

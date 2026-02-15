@@ -294,7 +294,7 @@ export function startScheduler(opts: {
   config: Config;
   tickIntervalMs?: number;
   getContext?: () => SchedulerContext;
-  onItemRun?: (item: CalendarItem, result: { status: string; result?: string }) => void;
+  onItemRun?: (item: CalendarItem, result: { status: string; result?: string; sessionId?: string; usage?: { inputTokens: number; outputTokens: number; totalCostUsd: number }; durationMs?: number; messaged?: boolean }) => void;
 }): SchedulerRunner {
   const { config, onItemRun } = opts;
   const tickMs = opts.tickIntervalMs ?? config.calendar?.tickIntervalMs ?? DEFAULT_TICK_MS;
@@ -325,7 +325,14 @@ export function startScheduler(opts: {
       });
 
       item.lastRunAt = new Date().toISOString();
-      onItemRun?.(item, { status: 'ran', result: result.result });
+      onItemRun?.(item, {
+        status: 'ran',
+        result: result.result,
+        sessionId: result.sessionId,
+        usage: result.usage,
+        durationMs: result.durationMs,
+        messaged: result.usedMessageTool,
+      });
 
       if (item.deleteAfterRun) {
         items = items.filter(i => i.id !== item.id);
@@ -432,7 +439,14 @@ export function startScheduler(opts: {
         item.nextRunAt = next?.toISOString();
         updateCalendarItemDb(item);
 
-        return { status: 'ran', result: result.result };
+        return {
+          status: 'ran',
+          result: result.result,
+          sessionId: result.sessionId,
+          usage: result.usage,
+          durationMs: result.durationMs,
+          messaged: result.usedMessageTool,
+        };
       } catch (err) {
         return { status: 'failed', result: String(err) };
       }

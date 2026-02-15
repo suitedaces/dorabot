@@ -669,7 +669,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       if (!existing) {
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
         scheduler.addItem({ ...buildAutonomousCalendarItem(tz), id: AUTONOMOUS_SCHEDULE_ID });
-        console.log('[gateway] created autonomous check-in schedule on startup');
+        console.log('[gateway] created autonomy pulse schedule on startup');
       }
     }
   }
@@ -2048,10 +2048,10 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
                 const item = buildAutonomousCalendarItem(tz);
                 scheduler.addItem({ ...item, id: AUTONOMOUS_SCHEDULE_ID });
-                console.log('[gateway] created autonomous check-in schedule');
+                console.log('[gateway] created autonomy pulse schedule');
               } else if (value === 'supervised' && existing) {
                 scheduler.removeItem(AUTONOMOUS_SCHEDULE_ID);
-                console.log('[gateway] removed autonomous check-in schedule');
+                console.log('[gateway] removed autonomy pulse schedule');
               }
             }
 
