@@ -59,10 +59,6 @@ export function buildWorkspaceSection(files: WorkspaceFiles): string | null {
     parts.push(`### User Profile (USER.md)\n\n${files['USER.md']}`);
   }
 
-  if (files['AGENTS.md']) {
-    parts.push(`### Agent Instructions (AGENTS.md)\n\n${files['AGENTS.md']}`);
-  }
-
   if (files['MEMORY.md']) {
     parts.push(`### Memory (MEMORY.md)\n\n${files['MEMORY.md']}`);
   }
