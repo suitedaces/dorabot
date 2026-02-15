@@ -41,3 +41,8 @@ npm-debug.log*
 
 # scratch/ideas
 ideas/
+
+# site
+site/.next/
+site/out/
+site/node_modules/

@@ -1,0 +1,114 @@
+@import "tailwindcss";
+
+@theme {
+  /* OKLch color system - matches desktop app dark mode */
+  --color-bg: oklch(0.14 0.005 270);
+  --color-bg-secondary: oklch(0.18 0.005 270);
+  --color-bg-card: oklch(0.18 0.005 270 / 0.7);
+  --color-border: oklch(0.28 0.008 270 / 0.5);
+  --color-border-hover: oklch(0.35 0.008 270 / 0.6);
+  --color-text: oklch(0.90 0 0);
+  --color-text-secondary: oklch(0.60 0 0);
+  --color-text-muted: oklch(0.45 0 0);
+  --color-primary: oklch(0.72 0.18 250);
+  --color-primary-hover: oklch(0.65 0.20 250);
+  --color-accent: oklch(0.72 0.18 250);
+  --color-accent-hover: oklch(0.65 0.20 250);
+  --color-green: oklch(0.70 0.24 145);
+  --color-purple: oklch(0.68 0.19 310);
+  --color-orange: oklch(0.74 0.19 80);
+  --color-destructive: oklch(0.65 0.24 27);
+  --color-ring: oklch(0.72 0.18 250);
+
+  /* Surface layers - matches desktop stream hierarchy */
+  --color-surface-deep: oklch(0.10 0.005 280);
+  --color-surface-base: oklch(0.12 0.005 280);
+  --color-surface-mid: oklch(0.14 0.005 280);
+  --color-surface-raised: oklch(0.16 0.005 280);
+  --color-surface-elevated: oklch(0.18 0.005 280);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+::selection {
+  background-color: oklch(0.72 0.18 250 / 0.3);
+  color: white;
+}
+
+/* Gradient text animation */
+@keyframes gradient {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.animate-gradient {
+  animation: gradient 6s ease infinite;
+}
+
+/* Scrollbar - matches desktop */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: oklch(0.45 0 0);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.60 0 0);
+}
+
+/* Frosted glass - matches desktop .glass */
+.glass {
+  backdrop-filter: blur(20px) saturate(1.8);
+  -webkit-backdrop-filter: blur(20px) saturate(1.8);
+}
+
+/* dorabot float animation - matches desktop */
+@keyframes dorabot-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+@keyframes dorabot-glow {
+  0%, 100% { filter: brightness(1) drop-shadow(0 0 0px transparent); }
+  50% { filter: brightness(1.15) drop-shadow(0 0 8px oklch(0.72 0.22 250 / 0.4)); }
+}
+
+.dorabot-alive {
+  animation: dorabot-float 3s ease-in-out infinite, dorabot-glow 2s ease-in-out infinite;
+}
+
+/* Streaming cursor - matches desktop */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.streaming-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  background: var(--color-green);
+  animation: blink 1s infinite;
+  margin-left: 2px;
+  vertical-align: middle;
+  border-radius: 1px;
+}
