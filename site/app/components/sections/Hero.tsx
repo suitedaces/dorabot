@@ -118,9 +118,9 @@ export function Hero() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6 }}
         >
-          <div className="mb-8 inline-flex items-center gap-2.5 rounded-full border border-border bg-bg-card/40 glass px-5 py-2.5 text-sm text-text-secondary">
-            <span className="inline-block h-2.5 w-2.5 rounded-full bg-green animate-pulse" />
-            100% private &middot; open source &middot; runs on your machine
+          <div className="mb-6 sm:mb-8 inline-flex items-center gap-2 sm:gap-2.5 rounded-full border border-border bg-bg-card/40 glass px-3.5 sm:px-5 py-2 sm:py-2.5 text-xs sm:text-sm text-text-secondary">
+            <span className="inline-block h-2 w-2 sm:h-2.5 sm:w-2.5 rounded-full bg-green animate-pulse flex-shrink-0" />
+            <span>100% private &middot; open source &middot; runs on your machine</span>
           </div>
         </motion.div>
 
@@ -147,7 +147,7 @@ export function Hero() {
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.25 }}
-          className="mx-auto mt-7 max-w-2xl text-base sm:text-lg leading-[1.8] sm:leading-[1.9]"
+          className="mx-auto mt-5 sm:mt-7 max-w-2xl text-sm sm:text-base md:text-lg leading-[1.7] sm:leading-[1.8] md:leading-[1.9]"
         >
           <p className="text-text-secondary">
             Compatible with{" "}
@@ -161,36 +161,31 @@ export function Hero() {
               Codex
             </span>.
           </p>
-          <ul className="mt-4 flex flex-col items-center gap-2.5 text-text-secondary">
-            <li className="flex items-center gap-2">
-              <span className="flex items-center gap-1.5">
-                <span className="inline-flex items-center gap-1 text-text font-medium">
-                  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-accent"><rect x="2" y="3" width="20" height="18" rx="2" stroke="currentColor" strokeWidth={2} /><path d="M2 9h20" stroke="currentColor" strokeWidth={2} /><path d="M10 13l3.5 4.5 1-2.5 2.5 0-3.5-4.5-1 2.5z" fill="currentColor" /></svg>
-                  Browser use
-                </span>,{" "}
-                <span className="inline-flex items-center gap-1 text-text font-medium">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4 text-accent"><rect x="2" y="4" width="20" height="16" rx="2" /><path d="M22 7l-8.97 5.7a1.94 1.94 0 01-2.06 0L2 7" /></svg>
-                  emails
-                </span>,{" "}
-                <span className="inline-flex items-center gap-1 text-text font-medium">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4 text-accent"><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></svg>
-                  scheduled tasks
-                </span>.
-                {" "}All built in.
-              </span>
-            </li>
-            <li className="flex items-center gap-2">
+          <ul className="mt-4 flex flex-col items-center gap-2 sm:gap-2.5 text-sm sm:text-base text-text-secondary">
+            <li className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1">
               <span className="inline-flex items-center gap-1 text-text font-medium">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4 text-accent"><path d="M12 2a3 3 0 00-3 3v1a3 3 0 006 0V5a3 3 0 00-3-3z" /><path d="M19 9H5a2 2 0 00-2 2v1a2 2 0 002 2h14a2 2 0 002-2v-1a2 2 0 00-2-2z" /><path d="M12 14v4M7 22h10M12 18v4" /></svg>
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-accent flex-shrink-0"><rect x="2" y="3" width="20" height="18" rx="2" stroke="currentColor" strokeWidth={2} /><path d="M2 9h20" stroke="currentColor" strokeWidth={2} /><path d="M10 13l3.5 4.5 1-2.5 2.5 0-3.5-4.5-1 2.5z" fill="currentColor" /></svg>
+                Browser use</span>,
+              <span className="inline-flex items-center gap-1 text-text font-medium">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4 text-accent flex-shrink-0"><rect x="2" y="4" width="20" height="16" rx="2" /><path d="M22 7l-8.97 5.7a1.94 1.94 0 01-2.06 0L2 7" /></svg>
+                emails</span>,
+              <span className="inline-flex items-center gap-1 text-text font-medium">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4 text-accent flex-shrink-0"><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></svg>
+                scheduled tasks</span>.
+              All built in.
+            </li>
+            <li className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1">
+              <span className="inline-flex items-center gap-1 text-text font-medium">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4 text-accent flex-shrink-0"><path d="M12 2a3 3 0 00-3 3v1a3 3 0 006 0V5a3 3 0 00-3-3z" /><path d="M19 9H5a2 2 0 00-2 2v1a2 2 0 002 2h14a2 2 0 002-2v-1a2 2 0 00-2-2z" /><path d="M12 14v4M7 22h10M12 18v4" /></svg>
                 Persistent memory
-              </span>{" "}
+              </span>
               that compounds over time.
             </li>
-            <li className="flex items-center gap-2">
+            <li className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1">
               <span className="inline-flex items-center gap-1 text-text font-medium">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4 text-accent"><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /></svg>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4 text-accent flex-shrink-0"><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /></svg>
                 Native desktop app.
-              </span>{" "}
+              </span>
               Fully local. Open source.
             </li>
           </ul>
@@ -201,7 +196,7 @@ export function Hero() {
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.4 }}
-          className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center"
+          className="mt-8 sm:mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center"
         >
           <a href="https://github.com/suitedaces/dorabot/releases/latest">
             <HoverBorderGradient
