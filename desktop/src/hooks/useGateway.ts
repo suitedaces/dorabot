@@ -1014,6 +1014,10 @@ export function useGateway(url = 'wss://localhost:18789') {
               const arr = res as SessionInfo[];
               if (Array.isArray(arr)) setSessions(arr);
             }).catch(() => {});
+            rpc('channels.status').then((res) => {
+              const arr = res as ChannelStatusInfo[];
+              if (Array.isArray(arr)) setChannelStatuses(arr);
+            }).catch(() => {});
             // Tab system handles session restoration — no auto-restore here
           },
           reject: (err) => {

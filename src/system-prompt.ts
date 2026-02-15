@@ -100,7 +100,7 @@ ${skillList}
 </available_skills>`);
   }
 
-  // workspace context (SOUL.md, USER.md, AGENTS.md, MEMORY.md)
+  // workspace context (SOUL.md, USER.md, MEMORY.md)
   if (opts.workspaceFiles) {
     const wsSection = buildWorkspaceSection(opts.workspaceFiles);
     if (wsSection) {

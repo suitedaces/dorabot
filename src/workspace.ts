@@ -6,7 +6,7 @@ export const WORKSPACE_DIR = join(homedir(), '.dorabot', 'workspace');
 export const MEMORIES_DIR = join(WORKSPACE_DIR, 'memories');
 
 // files loaded into system prompt (order matters)
-const WORKSPACE_FILES = ['SOUL.md', 'USER.md', 'AGENTS.md', 'MEMORY.md'] as const;
+const WORKSPACE_FILES = ['SOUL.md', 'USER.md', 'MEMORY.md'] as const;
 
 // strip yaml frontmatter (--- ... ---) from markdown
 function stripFrontmatter(content: string): string {

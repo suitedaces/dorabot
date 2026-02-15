@@ -91,7 +91,7 @@ const browserActions = [
 
 export const browserTool = tool(
   'browser',
-  'Browser automation tool. Supports input, navigation, snapshots, screenshots, script evaluation, console/network inspection. Recommended flow: open/new_page -> take_snapshot -> interact with includeSnapshot=true (click/fill/select/press_key/hover/scroll return updated snapshot in same response, saving a round-trip). Only call take_snapshot separately for initial page load or after open/navigate/navigate_page. Use wait_for(text) instead of wait(timeMs) when possible.',
+  'Browser automation tool. Supports input, navigation, snapshots, screenshots, script evaluation, console/network inspection. Recommended flow: open/new_page -> take_snapshot -> interact with includeSnapshot=true (click/fill/select/press_key/hover/scroll return updated snapshot in same response, saving a round-trip). Only call take_snapshot separately for initial page load or after open/navigate/navigate_page. Use wait_for(text) instead of wait(timeMs) when possible. To download files, extract the URL from the page and use curl — be cautious about what and where you download.',
   {
     action: z.enum(browserActions),
 
