@@ -171,6 +171,19 @@ export type BackgroundRun = {
   error?: string;
 };
 
+export type CalendarRun = {
+  item: string;
+  summary: string;
+  status: string;
+  result?: string;
+  sessionId?: string;
+  usage?: { inputTokens: number; outputTokens: number; totalCostUsd: number };
+  durationMs?: number;
+  messaged?: boolean;
+  timestamp: number;
+  seen?: boolean;
+};
+
 export type SessionState = {
   chatItems: ChatItem[];
   agentStatus: string;
@@ -422,6 +435,7 @@ export function useGateway(url = 'wss://localhost:18789') {
   const [providerInfo, setProviderInfo] = useState<{ name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } } | null>(null);
   const [goalsVersion, setGoalsVersion] = useState(0);
   const [backgroundRuns, setBackgroundRuns] = useState<BackgroundRun[]>([]);
+  const [calendarRuns, setCalendarRuns] = useState<CalendarRun[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const rpcIdRef = useRef(0);
@@ -907,8 +921,9 @@ export function useGateway(url = 'wss://localhost:18789') {
       }
 
       case 'calendar.result': {
-        const d = data as { item: string; summary: string; timestamp: number };
+        const d = data as CalendarRun;
         onNotifiableEventRef.current?.({ type: 'calendar', summary: d.summary || d.item });
+        setCalendarRuns(prev => [{ ...d, seen: false }, ...prev].slice(0, 50));
         break;
       }
 
@@ -1509,6 +1524,10 @@ export function useGateway(url = 'wss://localhost:18789') {
     providerInfo,
     goalsVersion,
     backgroundRuns,
+    calendarRuns,
+    markCalendarRunsSeen: useCallback(() => {
+      setCalendarRuns(prev => prev.map(r => ({ ...r, seen: true })));
+    }, []),
     runBackground,
     getBackgroundRuns,
     getProviderStatus,

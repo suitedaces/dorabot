@@ -22,7 +22,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import {
   MessageSquare, Radio, Zap, Brain, Settings2,
   Sparkles, LayoutGrid, Loader2, Star,
-  Sun, Moon
+  Sun, Moon, Clock
 } from 'lucide-react';
 
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
@@ -728,6 +728,30 @@ export default function App() {
                     );
                   })}
                 </ScrollArea>
+              </>
+            )}
+
+            {/* pulse / scheduled runs indicator */}
+            {gw.calendarRuns.length > 0 && (
+              <>
+                <Separator className="shrink-0" />
+                <button
+                  className="shrink-0 flex items-center gap-2 px-3 py-1.5 w-full text-left hover:bg-secondary/50 transition-colors"
+                  onClick={() => { gw.markCalendarRunsSeen(); handleNavClick('automation'); }}
+                >
+                  <Clock className="w-3.5 h-3.5 text-muted-foreground" />
+                  <span className="text-[10px] text-muted-foreground truncate flex-1">
+                    {gw.calendarRuns[0].summary}
+                  </span>
+                  {(() => {
+                    const unseen = gw.calendarRuns.filter(r => !r.seen).length;
+                    return unseen > 0 ? (
+                      <span className="text-[9px] bg-primary text-primary-foreground rounded-full px-1.5 min-w-[16px] text-center">
+                        {unseen}
+                      </span>
+                    ) : null;
+                  })()}
+                </button>
               </>
             )}
 
