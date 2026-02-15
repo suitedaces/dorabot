@@ -304,10 +304,15 @@ export function startScheduler(opts: {
   const running = new Set<string>();
 
   // compute nextRunAt for all enabled items on startup
+  // items that never ran fire immediately
   for (const item of items) {
     if (item.enabled !== false) {
-      const next = computeNextRun(item);
-      item.nextRunAt = next?.toISOString();
+      if (!item.lastRunAt) {
+        item.nextRunAt = new Date().toISOString();
+      } else {
+        const next = computeNextRun(item);
+        item.nextRunAt = next?.toISOString();
+      }
       updateCalendarItemDb(item);
     }
   }

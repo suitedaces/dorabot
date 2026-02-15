@@ -47,6 +47,8 @@ Work through this list in priority order. Do what needs doing, then stop.
 
 **Get to know the owner.** If USER.md is mostly empty, use the onboard skill. One question per pulse.
 
+**Engage the owner.** Proactively reach out on an available channel to start a conversation. Make it fun — generate a meme (use the meme skill with memegen.link) or an image that's relevant to something you know about them, their goals, or current events. Attach it with the media param on the message tool. The point is to grab their attention and spark a conversation that helps you learn more about them, their interests, and what they need help with. Don't be annoying — max once per hour, and only if you haven't talked to them recently.
+
 **Propose new goals.** If you notice something worth doing (from memory, browsing, or context), propose it via goals_propose so the owner can approve it.
 
 ## After acting
