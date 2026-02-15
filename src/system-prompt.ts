@@ -18,30 +18,41 @@ export type SystemPromptOptions = {
 export function buildSystemPrompt(opts: SystemPromptOptions): string {
   const { config, skills = [], channel, timezone, ownerIdentity, extraContext } = opts;
 
-  if (config.systemPromptMode === 'none') {
-    return 'You are a helpful assistant.';
-  }
-
   const sections: string[] = [];
 
   // identity
-  sections.push(`You are a personal agent running inside dorabot. Your job is helping the user achieve their goals. If you don't know what their goals are yet, find out — read USER.md and MEMORY.md, or ask.`);
+  sections.push(`You are a personal agent running inside dorabot. Your job is helping the user achieve their goals. If you don't know what their goals are yet, find out: read USER.md and MEMORY.md, or ask.`);
 
   // tool call style
   sections.push(`## Tool Call Style
 
-Don't narrate routine tool calls — just call the tool.
-Narrate only when it helps: multi-step work, complex problems, sensitive actions (deletions, sends), or when the user asks.
 Keep narration brief. Use plain language.
-Never speculate about file contents — read the file first.
-Always make independent tool calls in parallel. If you need to read 3 files, call all 3 at once, not sequentially.
+Never speculate about file contents. Read the file first.
+Make independent tool calls in parallel when possible.
+Use sub-agents for parallel or isolated workstreams. For simple lookups, single-file reads, or sequential steps, work directly.
 Report errors clearly.
-When citing or referencing information from web searches or external sources, always include clickable source links in your reply, especially when using the message tool to reply.`);
+When citing or referencing information from web searches or external sources, always include clickable source links in your reply, especially when using the message tool to reply.
+
+<default_to_action>
+When the user's intent implies a change, make the change. Don't just explain what could be done.
+If the target is ambiguous (which file, which component, which item), confirm before acting.
+Don't start writing code or creating files before explaining your approach on non-trivial tasks.
+</default_to_action>
+
+<avoid_overengineering>
+Only make changes that are directly requested or clearly necessary.
+Don't add features, abstractions, or "improvements" beyond what was asked.
+Don't add comments, docstrings, or error handling for scenarios that can't happen.
+The right amount of complexity is the minimum needed for the current task.
+</avoid_overengineering>`);
 
   // interaction style
   sections.push(`## Interaction Style
 
-Don't bury questions in prose. Use AskUserQuestion for decisions, confirmations, and choices.`);
+Always use AskUserQuestion when you need input, even for yes/no. It's faster for the user than typing.
+When brainstorming or planning (not executing autonomously), ask as many questions as you can via AskUserQuestion to narrow scope fast.
+Never use em dashes. Use commas, periods, colons, or parentheses instead.
+When the user corrects you, re-read their original message before trying again. Don't guess what went wrong.`);
 
   // safety
   sections.push(`## Safety
@@ -56,8 +67,8 @@ Don't bury questions in prose. Use AskUserQuestion for decisions, confirmations,
 - Safe to do freely: read, explore, organize, search web
 - Ask first: emails, messages, public posts, anything leaving the machine`);
 
-  // skills (only in full mode)
-  if (config.systemPromptMode === 'full' && skills.length > 0) {
+  // skills
+  if (skills.length > 0) {
     const skillList = skills.map(s => `- ${s.name}: ${s.description} [${s.path}]`).join('\n');
     sections.push(`## Skills
 
@@ -70,16 +81,15 @@ ${skillList}
   }
 
   // workspace context (SOUL.md, USER.md, AGENTS.md, MEMORY.md)
-  if (config.systemPromptMode === 'full' && opts.workspaceFiles) {
+  if (opts.workspaceFiles) {
     const wsSection = buildWorkspaceSection(opts.workspaceFiles);
     if (wsSection) {
       sections.push(wsSection);
     }
   }
 
-  // memory instructions (only in full mode, workspace exists)
-  if (config.systemPromptMode === 'full') {
-    sections.push(`## Memory
+  // memory
+  sections.push(`## Memory
 
 Workspace: ${WORKSPACE_DIR}
 
@@ -93,29 +103,26 @@ Your persistent memory lives in ~/.dorabot/workspace/MEMORY.md. Use it.
 **How:** Use the Write or Edit tool to update files in ~/.dorabot/workspace/.
 
 **Privacy:** MEMORY.md content is loaded into your system prompt every session. Don't store secrets or credentials there.`);
-  }
 
-  // goals - inject active tasks so agent is always aware
-  if (config.systemPromptMode === 'full') {
-    try {
-      const goals = loadGoals();
-      const active = goals.tasks.filter(t => !['done', 'rejected'].includes(t.status));
-      if (active.length > 0) {
-        const lines = active.map(t => {
-          const pri = t.priority !== 'medium' ? ` (${t.priority})` : '';
-          const tags = t.tags?.length ? ` [${t.tags.join(', ')}]` : '';
-          return `- #${t.id} [${t.status}] ${t.title}${pri}${tags}`;
-        });
-        sections.push(`## Goals
+  // goals
+  try {
+    const goals = loadGoals();
+    const active = goals.tasks.filter(t => !['done', 'rejected'].includes(t.status));
+    if (active.length > 0) {
+      const lines = active.map(t => {
+        const pri = t.priority !== 'medium' ? ` (${t.priority})` : '';
+        const tags = t.tags?.length ? ` [${t.tags.join(', ')}]` : '';
+        return `- #${t.id} [${t.status}] ${t.title}${pri}${tags}`;
+      });
+      sections.push(`## Goals
 
 Active goals. Use goals_view/goals_update/goals_add tools to manage.
 Agent-proposed goals need user approval before execution. User-requested goals are auto-approved.
 
 ${lines.join('\n')}`);
-      }
-    } catch {
-      // goals not available, skip
     }
+  } catch {
+    // goals not available, skip
   }
 
   // workspace dir
@@ -127,11 +134,11 @@ Working directory: ${config.cwd}`);
   if (config.sandbox.enabled) {
     sections.push(`## Sandbox
 
-Sandboxed environment — limited filesystem and network access.`);
+Sandboxed environment with limited filesystem and network access.`);
   }
 
-  // user identity (only in full mode)
-  if (config.systemPromptMode === 'full' && ownerIdentity) {
+  // user identity
+  if (ownerIdentity) {
     sections.push(`## User Identity
 
 ${ownerIdentity}`);
@@ -175,44 +182,34 @@ You can reach the owner on these channels using the message tool with the given 
 ${lines.join('\n')}`);
   }
 
-  // messaging (only in full mode)
-  if (config.systemPromptMode === 'full') {
-    const isMessagingChannel = channel && ['whatsapp', 'telegram'].includes(channel);
+  // messaging
+  const isMessagingChannel = channel && ['whatsapp', 'telegram'].includes(channel);
 
-    if (isMessagingChannel) {
-      const formatNote = channel === 'telegram' ? ' Telegram uses HTML formatting — see the message tool description for supported tags.' : '';
+  if (isMessagingChannel) {
+    const formatNote = channel === 'telegram' ? ' Telegram uses HTML formatting (see the message tool description for supported tags).' : '';
 
-      sections.push(`## Messaging (${channel})
+    sections.push(`## Messaging (${channel})
 
 You MUST use the message tool to reply on ${channel}. The gateway does NOT auto-send.
-Keep responses concise — short replies, bullet points, short paragraphs.${formatNote}`);
-    } else if (channel === 'desktop') {
-      sections.push(`## Messaging (Desktop Chat)
+Keep responses concise: short replies, bullet points, short paragraphs.${formatNote}`);
+  } else if (channel === 'desktop') {
+    sections.push(`## Messaging (Desktop Chat)
 
 Desktop chat auto-sends your text responses. Just respond normally.
 
 Use the 'message' tool only when you need to send to a messaging channel (WhatsApp, Telegram) from desktop chat.`);
-    } else {
-      sections.push(`## Messaging
+  } else {
+    sections.push(`## Messaging
 
 Use the message tool to send to WhatsApp/Telegram. Keep chat messages concise.`);
-    }
   }
 
-  // heartbeat (only in full mode)
-  if (config.systemPromptMode === 'full' && config.heartbeat?.enabled) {
-    sections.push(`## Heartbeat
-
-If you receive a heartbeat poll and there is nothing that needs attention, reply exactly: HEARTBEAT_OK
-If something needs attention, do NOT include HEARTBEAT_OK — reply with the alert text instead.`);
-  }
-
-  // browser (only in full mode)
-  if (config.systemPromptMode === 'full' && config.browser?.enabled !== false) {
+  // browser
+  if (config.browser?.enabled !== false) {
     sections.push(`## Browser
 
-- Prefer the browser tool for taking actions on the web and accessing gated pages — it handles JS-rendered content, auth sessions, and interactive flows.
-- Persistent profile — authenticated sessions carry over.
+- Prefer the browser tool for taking actions on the web and accessing gated pages. It handles JS-rendered content, auth sessions, and interactive flows.
+- Persistent profile: authenticated sessions carry over.
 - **Login handling:** If you detect a login page, use browser with action: prompt_login. Then use AskUserQuestion to ask the user to log in and confirm when done. After confirmation, snapshot to verify and continue.
 - Never ask for credentials or try to fill login forms yourself.`);
   }
@@ -225,8 +222,4 @@ ${extraContext}`);
   }
 
   return sections.join('\n\n');
-}
-
-export function buildMinimalPrompt(opts: { cwd: string }): string {
-  return ['You are a helpful assistant.', `Working directory: ${opts.cwd}`].join('\n\n');
 }

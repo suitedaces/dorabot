@@ -36,7 +36,7 @@ npm run dev:cli                      # interactive CLI mode
 ### Core
 - `src/agent.ts` — `runAgent()` and `streamAgent()`, orchestrates SDK `query()` with config, skills, workspace, hooks
 - `src/db.ts` — SQLite database singleton (`getDb()`), schema creation, WAL mode, foreign keys
-- `src/system-prompt.ts` — dynamic system prompt builder, 21 sections, 3 modes (full/minimal/none)
+- `src/system-prompt.ts` — dynamic system prompt builder
 - `src/config.ts` — config loading, merging, path allowlisting via `isPathAllowed()`
 - `src/workspace.ts` — loads SOUL.md, USER.md, AGENTS.md, MEMORY.md from `~/.dorabot/workspace/`
 - `src/index.ts` — CLI entry point
@@ -145,7 +145,6 @@ Loaded from (first found): explicit path → `./dorabot.config.json` → `~/.dor
 
 Key settings:
 - `model` — default `claude-sonnet-4-5-20250929`
-- `systemPromptMode` — full | minimal | none
 - `permissionMode` — default | acceptEdits | bypassPermissions | plan | dontAsk
 - `sandbox.enabled` — false by default
 - `sandbox.mode` — off | non-main | all

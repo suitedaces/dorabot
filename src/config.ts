@@ -142,7 +142,6 @@ export type Config = {
   provider: ProviderConfig;
   model: string;
   reasoningEffort?: ReasoningEffort;
-  systemPromptMode: 'full' | 'minimal' | 'none';
   permissionMode: PermissionMode;
   skills: {
     enabled: string[];
@@ -166,7 +165,6 @@ export type Config = {
 const DEFAULT_CONFIG: Config = {
   provider: { name: 'claude' },
   model: 'claude-sonnet-4-5-20250929',
-  systemPromptMode: 'full',
   permissionMode: 'default',
   skills: {
     enabled: [],

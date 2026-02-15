@@ -2042,15 +2042,6 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             return { id, result: { key, value } };
           }
 
-          if (key === 'systemPromptMode' && typeof value === 'string') {
-            const valid = ['full', 'minimal', 'none'];
-            if (!valid.includes(value)) return { id, error: `systemPromptMode must be one of: ${valid.join(', ')}` };
-            config.systemPromptMode = value as any;
-            saveConfig(config);
-            broadcast({ event: 'config.update', data: { key, value } });
-            return { id, result: { key, value } };
-          }
-
           if (key === 'security.approvalMode' && typeof value === 'string') {
             const valid = ['approve-sensitive', 'autonomous', 'lockdown'];
             if (!valid.includes(value)) return { id, error: `approvalMode must be one of: ${valid.join(', ')}` };

@@ -31,7 +31,6 @@ export function SettingsView({ gateway }: Props) {
     }
   }, [gateway]);
 
-  const systemPromptMode = cfg?.systemPromptMode || 'full';
   const approvalMode = cfg?.security?.approvalMode || 'approve-sensitive';
   const browserEnabled = cfg?.browser?.enabled ?? false;
   const browserHeadless = cfg?.browser?.headless ?? false;
@@ -200,18 +199,6 @@ export function SettingsView({ gateway }: Props) {
               </div>
 
               <div className="space-y-4">
-                <SettingRow label="system prompt" description="how much system prompt context to include">
-                  <Select value={systemPromptMode} onValueChange={v => set('systemPromptMode', v)} disabled={disabled}>
-                    <SelectTrigger className="h-7 w-40 text-[11px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="full" className="text-[11px]">full</SelectItem>
-                      <SelectItem value="minimal" className="text-[11px]">minimal</SelectItem>
-                      <SelectItem value="none" className="text-[11px]">none</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </SettingRow>
               </div>
             </CardContent>
           </Card>
