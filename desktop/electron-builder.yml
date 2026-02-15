@@ -37,8 +37,7 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   gatekeeperAssess: false
-  # ad-hoc sign so macOS persists TCC decisions across rebuilds
-  identity: null
+  notarize: true
   extendInfo:
     NSDesktopFolderUsageDescription: "dorabot needs access to your Desktop to read and manage files."
     NSDocumentsFolderUsageDescription: "dorabot needs access to Documents to read and manage files."
