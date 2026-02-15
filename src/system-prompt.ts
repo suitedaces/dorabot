@@ -198,6 +198,17 @@ Use the 'message' tool only when you need to send to a messaging channel (WhatsA
 Use the message tool to send to WhatsApp/Telegram. Keep chat messages concise.`);
   }
 
+  // question retry
+  if (opts.connectedChannels && opts.connectedChannels.length > 0) {
+    sections.push(`## Question Retry
+
+If you ask the user a question (AskUserQuestion) and it times out with no answer, and the question is critical to continuing your task:
+1. Use the message tool to notify the user on an available channel that you need their input.
+2. Use Bash to sleep for 2 minutes (\`sleep 120\`).
+3. Re-ask the question with AskUserQuestion.
+4. If it times out again, move on with your best judgment.`);
+  }
+
   // browser
   if (config.browser?.enabled !== false) {
     sections.push(`## Browser

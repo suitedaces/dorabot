@@ -834,8 +834,8 @@ export function useGateway(url = 'wss://localhost:18789') {
             const state = prev[sk];
             if (!state) return prev;
             const newStatus = d.activeRun ? `running (${d.source || 'agent'})` : 'idle';
-            if (state.agentStatus === newStatus) return prev;
-            return { ...prev, [sk]: { ...state, agentStatus: newStatus } };
+            if (state.agentStatus === newStatus && !(newStatus === 'idle' && state.pendingQuestion)) return prev;
+            return { ...prev, [sk]: { ...state, agentStatus: newStatus, ...(newStatus === 'idle' ? { pendingQuestion: null } : {}) } };
           });
         }
         break;
