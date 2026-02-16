@@ -9,6 +9,15 @@ let tray: Tray | null = null;
 let isQuitting = false;
 let gatewayManager: GatewayManager | null = null;
 
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    showWindow();
+  });
+}
+
 // --- Auto-updater setup ---
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = true;
@@ -104,6 +113,7 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      backgroundThrottling: false,
     },
   });
 

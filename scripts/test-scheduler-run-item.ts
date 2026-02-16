@@ -1,7 +1,19 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import Database from 'better-sqlite3';
+
+function bootstrapLegacyTables(tempHome: string): void {
+  const dorabotDir = join(tempHome, '.dorabot');
+  mkdirSync(dorabotDir, { recursive: true });
+  const db = new Database(join(dorabotDir, 'dorabot.db'));
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS board_tasks (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS board_meta (key TEXT PRIMARY KEY, value TEXT);
+  `);
+  db.close();
+}
 
 async function main(): Promise<void> {
   const tempHome = mkdtempSync(join(tmpdir(), 'dorabot-test-scheduler-'));
@@ -9,6 +21,7 @@ async function main(): Promise<void> {
   process.env.HOME = tempHome;
 
   try {
+    bootstrapLegacyTables(tempHome);
     const { startScheduler } = await import('../src/calendar/scheduler.js');
 
     let runItemCalls = 0;

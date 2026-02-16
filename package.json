@@ -9,16 +9,17 @@
   },
   "scripts": {
     "build": "tsc",
-    "dev": "(lsof -ti :18789 -i :5173 | xargs kill -9 2>/dev/null; mkdir -p ~/.dorabot/logs; trap 'kill 0' SIGINT; tsx watch src/index.ts -g 2>&1 | tee ~/.dorabot/logs/gateway.log & npm -C desktop run dev)",
+    "dev": "(lsof -ti :18789 -i :5173 | xargs kill -9 2>/dev/null; trap 'kill 0' SIGINT; npm run build && tsc --watch --preserveWatchOutput & npm -C desktop run dev)",
     "dev:gateway": "mkdir -p ~/.dorabot/logs && tsx watch src/index.ts -g 2>&1 | tee ~/.dorabot/logs/gateway.log",
     "dev:cli": "tsx src/index.ts -i",
     "dev:desktop": "npm -C desktop run dev",
-    "dev:stable": "(lsof -ti :18789 -i :5173 | xargs kill -9 2>/dev/null; mkdir -p ~/.dorabot/logs; trap 'kill 0' SIGINT; tsc --watch --preserveWatchOutput & sleep 2 && node dist/index.js -g 2>&1 | tee ~/.dorabot/logs/gateway.log & npm -C desktop run dev)",
+    "dev:stable": "npm run dev",
     "start": "node dist/index.js -g",
     "typecheck": "tsc --noEmit",
-    "test:subagent": "tsx scripts/test-subagent-stream.ts",
-    "test:raw-sdk": "tsx scripts/test-raw-sdk-stream.ts",
     "test:event-log": "tsx scripts/test-event-log.ts",
+    "test:reconnect-replay": "tsx scripts/test-reconnect-replay.ts",
+    "test:question-lifecycle": "tsx scripts/test-question-lifecycle.ts",
+    "test:load-7x4": "tsx scripts/test-load-7x4.ts",
     "test:scheduler-run": "tsx scripts/test-scheduler-run-item.ts"
   },
   "dependencies": {

@@ -23,7 +23,7 @@ import { getAllChannelStatuses } from '../channels/index.js';
 import { loginWhatsApp, logoutWhatsApp, isWhatsAppLinked } from '../channels/whatsapp/login.js';
 import { getDefaultAuthDir } from '../channels/whatsapp/session.js';
 import { validateTelegramToken } from '../channels/telegram/bot.js';
-import { insertEvent, queryEvents, cleanupOldEvents } from './event-log.js';
+import { insertEvent, queryEventsBySessionCursor, deleteEventsUpToSeq, cleanupOldEvents } from './event-log.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { setScheduler } from '../tools/index.js';
 import { loadGoals, saveGoals, type GoalTask } from '../tools/goals.js';
@@ -268,12 +268,23 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     console.log(`[gateway] auth token created at ${tokenPath}`);
   }
 
+  const streamV2Enabled = config.gateway?.streamV2 !== false;
+  const STREAM_BACKPRESSURE_CLOSE_BYTES = 2 * 1024 * 1024;
+  const CLIENT_HEARTBEAT_TIMEOUT_MS = 30_000;
+  const CLIENT_HEARTBEAT_SWEEP_MS = 5_000;
+  const REPLAY_BATCH_DEFAULT_LIMIT = 2000;
+  const REPLAY_BATCH_MAX_LIMIT = 10_000;
+
   type ClientState = {
     authenticated: boolean;
     subscriptions: Set<string>;
-    stale: Set<string>;
+    lastSeen: number;
+    connectId: string;
+    bufferedAmountMax: number;
+    disconnectReason: string | null;
   };
   const clients = new Map<WebSocket, ClientState>();
+  let connectCounter = 0;
 
   // live session snapshots for instant hydration on subscribe
   const sessionSnapshots = new Map<string, import('./types.js').SessionSnapshot>();
@@ -291,33 +302,38 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
     if (!batch.timer) {
       batch.timer = setTimeout(() => {
-        if (batch!.events.length === 1) {
-          ws.send(batch!.events[0]);
-        } else {
-          ws.send(JSON.stringify({ event: 'agent.stream_batch', data: batch!.events.map(e => JSON.parse(e)) }));
+        if (ws.readyState !== WebSocket.OPEN) {
+          batch!.events = [];
+          batch!.timer = null;
+          return;
         }
+        if (batch!.events.length === 1) ws.send(batch!.events[0]);
+        else ws.send(JSON.stringify({ event: 'agent.stream_batch', data: batch!.events.map(e => JSON.parse(e)) }));
         batch!.events = [];
         batch!.timer = null;
       }, 16);
     }
   }
 
-  // backpressure recovery: periodically send snapshots to stale clients
-  const backpressureTimer = setInterval(() => {
-    for (const [ws, state] of clients) {
-      if (!state.stale.size) continue;
-      if (ws.bufferedAmount < 16384) {
-        for (const sk of state.stale) {
-          const snap = sessionSnapshots.get(sk);
-          if (snap) ws.send(JSON.stringify({ event: 'session.snapshot', data: snap }));
-        }
-        state.stale.clear();
-      }
+  const closeClient = (ws: WebSocket, reason: string): void => {
+    const state = clients.get(ws);
+    if (state) state.disconnectReason = reason;
+    try {
+      ws.close(4101, reason.slice(0, 123));
+    } catch {
+      // ignore
     }
-  }, 500);
-  backpressureTimer.unref?.();
-  const eventCleanupTimer = setInterval(() => cleanupOldEvents(), 5 * 60 * 1000);
-  eventCleanupTimer.unref?.();
+  };
+
+  const heartbeatSweepTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [ws, state] of clients) {
+      if (!state.authenticated) continue;
+      if (now - state.lastSeen <= CLIENT_HEARTBEAT_TIMEOUT_MS) continue;
+      closeClient(ws, 'heartbeat_timeout');
+    }
+  }, CLIENT_HEARTBEAT_SWEEP_MS);
+  heartbeatSweepTimer.unref?.();
 
   const broadcast = (event: WsEvent): void => {
     const sk = (event.data as any)?.sessionKey as string | undefined;
@@ -327,7 +343,6 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       sk
       && typeof event.event === 'string'
       && event.event.startsWith('agent.')
-      && event.event !== 'agent.error'
       && event.event !== 'agent.user_message'
     ) {
       event.seq = insertEvent(sk, event.event, JSON.stringify(event.data));
@@ -338,11 +353,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       if (ws.readyState !== WebSocket.OPEN || !state.authenticated) continue;
       // session-scoped events only go to subscribers; global events go to all
       if (sk && !state.subscriptions.has(sk)) continue;
-      // backpressure: if client is falling behind on stream deltas, skip
-      if (sk && event.event === 'agent.stream' && ws.bufferedAmount > 65536) {
-        state.stale.add(sk);
+      // streamV2 never drops stream deltas; slow clients are disconnected and must replay.
+      if (streamV2Enabled && ws.bufferedAmount >= STREAM_BACKPRESSURE_CLOSE_BYTES) {
+        closeClient(ws, 'backpressure');
         continue;
       }
+      state.bufferedAmountMax = Math.max(state.bufferedAmountMax, ws.bufferedAmount);
       // batch agent.stream events, send everything else immediately
       if (event.event === 'agent.stream') {
         queueStreamEvent(ws, data);
@@ -498,8 +514,27 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const QUESTION_LINK_WINDOW_MS = 45 * 60 * 1000;
   const activeGoalRuns = new Map<string, { sessionKey: string; startedAt: number }>();
   const goalRunBySession = new Map<string, string>();
-  // clean up stale stream events from previous crashes
-  cleanupOldEvents();
+  const runEventPruneTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const RUN_EVENT_PRUNE_GRACE_MS = 10 * 60 * 1000;
+  // keep replay data for an extended window across crashes; normal pruning is run-end based.
+  cleanupOldEvents(7 * 24 * 60 * 60);
+
+  function scheduleRunEventPrune(sessionKey: string, maxSeqInclusive: number): void {
+    if (!streamV2Enabled) return;
+    const existing = runEventPruneTimers.get(sessionKey);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      try {
+        deleteEventsUpToSeq(sessionKey, maxSeqInclusive);
+      } catch (err) {
+        console.error('[gateway] failed pruning replay events:', err);
+      } finally {
+        runEventPruneTimers.delete(sessionKey);
+      }
+    }, RUN_EVENT_PRUNE_GRACE_MS);
+    timer.unref?.();
+    runEventPruneTimers.set(sessionKey, timer);
+  }
 
   // per-session channel context so the stream loop can manage status messages
   type ChannelRunContext = {
@@ -1165,7 +1200,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       if (pending) {
         pendingChannelQuestions.delete(requestId);
         channelQuestionRefs.delete(requestId);
-        pending.resolve(label);
+        pending.resolve({ label, timedOut: false });
         return;
       }
 
@@ -1179,6 +1214,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       const linkedSessionKey = (ref.sessionKey && sessionRegistry.get(ref.sessionKey))
         ? ref.sessionKey
         : (ref.sessionId ? ensureSessionKeyForSessionId(ref.sessionId) : undefined);
+      updateQuestionState(requestId, 'answered', linkedSessionKey);
       const source = ref.source
         || (linkedSessionKey ? activeRunSources.get(linkedSessionKey) : undefined)
         || `${ref.channel}/${ref.chatId}`;
@@ -1357,11 +1393,86 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     resolve: (answers: Record<string, string>) => void;
     reject: (err: Error) => void;
     sessionKey?: string;
+    timeout: ReturnType<typeof setTimeout>;
   }>();
+  const questionStates = new Map<string, {
+    sessionKey?: string;
+    status: 'pending' | 'answered' | 'timeout' | 'cancelled';
+    timestamp: number;
+    answers?: Record<string, string>;
+  }>();
+  const MAX_QUESTION_STATES = 4000;
+
+  function pruneQuestionStates(): void {
+    if (questionStates.size <= MAX_QUESTION_STATES) return;
+    let oldestId: string | null = null;
+    let oldestTs = Number.POSITIVE_INFINITY;
+    for (const [id, q] of questionStates) {
+      if (q.timestamp < oldestTs) {
+        oldestTs = q.timestamp;
+        oldestId = id;
+      }
+    }
+    if (oldestId) questionStates.delete(oldestId);
+  }
+
+  function updateQuestionState(
+    requestId: string,
+    status: 'pending' | 'answered' | 'timeout' | 'cancelled',
+    sessionKey?: string,
+    answers?: Record<string, string>,
+  ): void {
+    const timestamp = Date.now();
+    const existing = questionStates.get(requestId);
+    const finalSessionKey = sessionKey || existing?.sessionKey;
+    questionStates.set(requestId, {
+      sessionKey: finalSessionKey,
+      status,
+      timestamp,
+      answers: answers ?? existing?.answers,
+    });
+    pruneQuestionStates();
+
+    if (finalSessionKey) {
+      const snap = sessionSnapshots.get(finalSessionKey);
+      if (snap) {
+        snap.pendingQuestionStatus = status;
+        snap.pendingQuestionUpdatedAt = timestamp;
+        if (status !== 'pending') snap.pendingQuestion = null;
+        snap.updatedAt = timestamp;
+      }
+    }
+
+    broadcast({
+      event: 'agent.question_state',
+      data: { requestId, sessionKey: finalSessionKey, status, timestamp },
+    });
+
+    if (status !== 'pending' && finalSessionKey) {
+      broadcast({
+        event: 'agent.question_dismissed',
+        data: { requestId, sessionKey: finalSessionKey, reason: status },
+      });
+    }
+  }
+
+  function cancelPendingQuestionsForSession(sessionKey: string, status: 'cancelled' | 'timeout' = 'cancelled'): void {
+    const toCancel: Array<{ requestId: string; reject: (err: Error) => void; timeout: ReturnType<typeof setTimeout> }> = [];
+    for (const [requestId, pending] of pendingQuestions) {
+      if (pending.sessionKey !== sessionKey) continue;
+      toCancel.push({ requestId, reject: pending.reject, timeout: pending.timeout });
+      pendingQuestions.delete(requestId);
+    }
+    for (const pending of toCancel) {
+      clearTimeout(pending.timeout);
+      updateQuestionState(pending.requestId, status, sessionKey);
+      pending.reject(new Error(`Question ${status}`));
+    }
+  }
 
   // pending AskUserQuestion requests waiting for channel responses (telegram inline keyboard / whatsapp text reply)
   const pendingChannelQuestions = new Map<string, {
-    resolve: (label: string) => void;
+    resolve: (payload: { label: string; timedOut: boolean }) => void;
     options: { label: string }[];
   }>();
 
@@ -1460,21 +1571,25 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               createdAt: Date.now(),
             });
             console.log(`[canUseTool] sent question to ${runChannel}: ${requestId}`);
+            updateQuestionState(requestId, 'pending', runSessionKey);
           } catch (err) {
             console.error(`[canUseTool] failed to send question:`, err);
+            updateQuestionState(requestId, 'cancelled', runSessionKey);
             answers[questionText] = opts[0]?.label || '';
             continue;
           }
 
-          const label = await new Promise<string>((resolve) => {
+          const { label, timedOut } = await new Promise<{ label: string; timedOut: boolean }>((resolve) => {
             pendingChannelQuestions.set(requestId, { resolve, options: opts });
             setTimeout(() => {
               if (pendingChannelQuestions.has(requestId)) {
                 pendingChannelQuestions.delete(requestId);
-                resolve(opts[0]?.label || '');
+                resolve({ label: opts[0]?.label || '', timedOut: true });
               }
             }, 120000);
           });
+          if (timedOut) updateQuestionState(requestId, 'timeout', runSessionKey);
+          else updateQuestionState(requestId, 'answered', runSessionKey);
           // SDK expects question text as key
           answers[questionText] = label;
         }
@@ -1494,31 +1609,35 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       }
 
       const requestId = randomUUID();
+      const askedAt = Date.now();
       broadcast({
         event: 'agent.ask_user',
-        data: { requestId, questions, sessionKey: runSessionKey, timestamp: Date.now() },
+        data: { requestId, questions, sessionKey: runSessionKey, timestamp: askedAt },
       });
       // persist to snapshot
       if (runSessionKey) {
         const snap = sessionSnapshots.get(runSessionKey);
-        if (snap) { snap.pendingQuestion = { requestId, questions, timestamp: Date.now() }; snap.updatedAt = Date.now(); }
+        if (snap) {
+          snap.pendingQuestion = { requestId, questions, timestamp: askedAt };
+          snap.pendingQuestionStatus = 'pending';
+          snap.pendingQuestionUpdatedAt = askedAt;
+          snap.updatedAt = askedAt;
+        }
       }
+      updateQuestionState(requestId, 'pending', runSessionKey);
 
       const answers = await new Promise<Record<string, string>>((resolveQ, rejectQ) => {
-        pendingQuestions.set(requestId, { resolve: resolveQ, reject: rejectQ, sessionKey: runSessionKey });
-        setTimeout(() => {
+        const timeout = setTimeout(() => {
           if (pendingQuestions.has(requestId)) {
+            const pending = pendingQuestions.get(requestId);
             pendingQuestions.delete(requestId);
-            if (runSessionKey) { const snap = sessionSnapshots.get(runSessionKey); if (snap) snap.pendingQuestion = null; }
-            broadcast({
-              event: 'agent.question_dismissed',
-              data: { requestId, sessionKey: runSessionKey, reason: 'timeout' },
-            });
+            if (pending) updateQuestionState(requestId, 'timeout', pending.sessionKey);
             rejectQ(new Error('Question timeout - no answer received'));
           }
         }, 300000);
+        pendingQuestions.set(requestId, { resolve: resolveQ, reject: rejectQ, sessionKey: runSessionKey, timeout });
       });
-      if (runSessionKey) { const snap = sessionSnapshots.get(runSessionKey); if (snap) snap.pendingQuestion = null; }
+      updateQuestionState(requestId, 'answered', runSessionKey, answers);
 
       return {
         behavior: 'allow' as const,
@@ -1657,6 +1776,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         sessionKey, status: 'thinking', text: '',
         currentTool: null, completedTools: [],
         pendingApproval: null, pendingQuestion: null,
+        pendingQuestionStatus: null,
+        pendingQuestionUpdatedAt: null,
         updatedAt: Date.now(),
       });
       broadcastStatus(sessionKey, 'thinking');
@@ -2025,7 +2146,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             };
 
             // per-turn: broadcast agent.result so desktop sets agentStatus to idle
-            broadcast({
+            const resultEvent: WsEvent = {
               event: 'agent.result',
               data: {
                 source,
@@ -2035,7 +2156,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 usage: agentUsage,
                 timestamp: Date.now(),
               },
-            });
+            };
+            broadcast(resultEvent);
+            if (streamV2Enabled && typeof resultEvent.seq === 'number') {
+              scheduleRunEventPrune(sessionKey, resultEvent.seq);
+            }
 
             // per-turn: broadcast goals.update if agent used goals tools
             const tl = toolLogs.get(sessionKey);
@@ -2128,10 +2253,14 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           console.log(`[gateway] auth error for ${source}, starting re-auth flow`);
           await startReauthFlow({ prompt, sessionKey, source, channel, chatId: messageMetadata?.chatId, messageMetadata }).catch(() => {});
         }
-        broadcast({
+        const errorEvent: WsEvent = {
           event: 'agent.error',
           data: { source, sessionKey, error: errMsg, timestamp: Date.now() },
-        });
+        };
+        broadcast(errorEvent);
+        if (streamV2Enabled && typeof errorEvent.seq === 'number') {
+          scheduleRunEventPrune(sessionKey, errorEvent.seq);
+        }
       } finally {
         activeAbortControllers.delete(sessionKey);
         activeRunChannels.delete(sessionKey);
@@ -2149,6 +2278,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         }
         statusMessages.delete(sessionKey);
         toolLogs.delete(sessionKey);
+        cancelPendingQuestionsForSession(sessionKey, 'cancelled');
         sessionSnapshots.delete(sessionKey);
         sessionRegistry.setActiveRun(sessionKey, false);
         broadcastStatus(sessionKey, 'idle');
@@ -2171,6 +2301,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
     try {
       switch (method) {
+        case 'ping': {
+          const state = clientWs ? clients.get(clientWs) : undefined;
+          if (state) state.lastSeen = Date.now();
+          return { id, result: { ok: true, timestamp: Date.now() } };
+        }
+
         case 'status': {
           return {
             id,
@@ -2192,27 +2328,66 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!Array.isArray(keys)) return { id, error: 'sessionKeys required' };
           const lastSeq = typeof params?.lastSeq === 'number' ? params.lastSeq : 0;
           const lastSeqBySession = (params?.lastSeqBySession || {}) as Record<string, number>;
+          const requestedLimit = Number(params?.limit);
+          const replayLimit = Number.isFinite(requestedLimit) && requestedLimit > 0
+            ? Math.min(Math.floor(requestedLimit), REPLAY_BATCH_MAX_LIMIT)
+            : REPLAY_BATCH_DEFAULT_LIMIT;
           const state = clientWs ? clients.get(clientWs) : undefined;
-          if (state) keys.forEach(k => state.subscriptions.add(k));
+          if (state) {
+            keys.forEach(k => state.subscriptions.add(k));
+            state.lastSeen = Date.now();
+          }
           // replay persisted events for exact continuity before snapshot/live stream
+          let replayCount = 0;
           if (clientWs) {
-            const events = keys.flatMap((sk) => {
+            const replayStartedAt = Date.now();
+            const cursorBySession = new Map<string, number>();
+            for (const sk of keys) {
               const perSessionSeq = Number(lastSeqBySession?.[sk]);
-              const afterSeq = Number.isFinite(perSessionSeq) ? perSessionSeq : lastSeq;
-              return queryEvents([sk], afterSeq);
-            }).sort((a, b) => a.seq - b.seq);
-            for (const row of events) {
-              clientWs.send(JSON.stringify({ event: row.event_type, data: JSON.parse(row.data), seq: row.seq }));
+              cursorBySession.set(sk, Number.isFinite(perSessionSeq) ? perSessionSeq : lastSeq);
             }
+
+            while (true) {
+              const rows = queryEventsBySessionCursor(
+                keys.map((sessionKey) => ({
+                  sessionKey,
+                  afterSeq: cursorBySession.get(sessionKey) || 0,
+                })),
+                replayLimit,
+              );
+              if (rows.length === 0) break;
+              for (const row of rows) {
+                clientWs.send(JSON.stringify({ event: row.event_type, data: JSON.parse(row.data), seq: row.seq }));
+                replayCount += 1;
+                cursorBySession.set(row.session_key, row.seq);
+              }
+              if (rows.length < replayLimit) break;
+            }
+
+            const replayMs = Date.now() - replayStartedAt;
+            const telemetry = {
+              connect_id: state?.connectId,
+              session_count: sessionRegistry.list().length,
+              subscribed_count: state?.subscriptions.size || keys.length,
+              replay_count: replayCount,
+              replay_ms: replayMs,
+              buffered_amount_max: state?.bufferedAmountMax || 0,
+              timestamp: Date.now(),
+            };
+            clientWs.send(JSON.stringify({ event: 'gateway.telemetry', data: telemetry }));
+            console.log('[gateway][replay]', telemetry);
           }
           // send snapshots for any active sessions
           for (const sk of keys) {
             const snap = sessionSnapshots.get(sk);
             if (snap && clientWs) {
-              clientWs.send(JSON.stringify({ event: 'session.snapshot', data: snap }));
+              const snapshotData = (snap.pendingQuestionStatus && snap.pendingQuestionStatus !== 'pending')
+                ? { ...snap, pendingQuestion: null }
+                : snap;
+              clientWs.send(JSON.stringify({ event: 'session.snapshot', data: snapshotData }));
             }
           }
-          return { id, result: { subscribed: keys } };
+          return { id, result: { subscribed: keys, replayCount, limit: replayLimit } };
         }
 
         case 'sessions.unsubscribe': {
@@ -2333,21 +2508,21 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!requestId) return { id, error: 'requestId required' };
           if (!answers) return { id, error: 'answers required' };
           const pending = pendingQuestions.get(requestId);
-          if (!pending) return { id, error: 'no pending question with that ID' };
-          pendingQuestions.delete(requestId);
-          if (pending.sessionKey) {
-            const snap = sessionSnapshots.get(pending.sessionKey);
-            if (snap?.pendingQuestion?.requestId === requestId) {
-              snap.pendingQuestion = null;
-              snap.updatedAt = Date.now();
+          if (!pending) {
+            const known = questionStates.get(requestId);
+            if (known?.status === 'answered') {
+              return { id, result: { answered: true, idempotent: true } };
             }
-            broadcast({
-              event: 'agent.question_dismissed',
-              data: { requestId, sessionKey: pending.sessionKey, reason: 'answered' },
-            });
+            if (known?.status === 'timeout' || known?.status === 'cancelled') {
+              return { id, error: `question is already ${known.status}` };
+            }
+            return { id, error: 'no pending question with that ID' };
           }
+          pendingQuestions.delete(requestId);
+          clearTimeout(pending.timeout);
+          updateQuestionState(requestId, 'answered', pending.sessionKey, answers);
           pending.resolve(answers);
-          return { id, result: { answered: true } };
+          return { id, result: { answered: true, idempotent: false } };
         }
 
         case 'chat.history': {
@@ -3735,18 +3910,28 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   });
 
   wss.on('connection', (ws) => {
-    clients.set(ws, { authenticated: false, subscriptions: new Set(), stale: new Set() });
+    const connectId = `conn-${++connectCounter}`;
+    clients.set(ws, {
+      authenticated: false,
+      subscriptions: new Set(),
+      lastSeen: Date.now(),
+      connectId,
+      bufferedAmountMax: 0,
+      disconnectReason: null,
+    });
     watchedPathsByClient.set(ws, new Set());
-    console.log(`[gateway] client connected (${clients.size} total)`);
+    console.log(`[gateway] client connected (${clients.size} total) connect_id=${connectId}`);
 
     // auth timeout
-    setTimeout(() => {
+    const authTimeout = setTimeout(() => {
       const state = clients.get(ws);
       if (state && !state.authenticated) {
-        console.log('[gateway] auth timeout, closing connection');
+        state.disconnectReason = 'auth_timeout';
+        console.log(`[gateway] auth timeout, closing connection connect_id=${state.connectId}`);
         ws.close();
       }
     }, 5000);
+    authTimeout.unref?.();
 
     ws.on('message', async (raw) => {
       let msg: WsMessage;
@@ -3762,16 +3947,33 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         return;
       }
 
-      // auth check
       const clientState = clients.get(ws);
-      if (!clientState?.authenticated) {
+      if (!clientState) {
+        ws.close();
+        return;
+      }
+      clientState.lastSeen = Date.now();
+
+      // auth check
+      if (!clientState.authenticated) {
         if (msg.method === 'auth') {
           const token = (msg.params as any)?.token as string;
           if (token === gatewayToken) {
-            clientState!.authenticated = true;
-            console.log(`[gateway] client authenticated (${Array.from(clients.values()).filter(c => c.authenticated).length} authenticated)`);
+            clientState.authenticated = true;
+            clientState.lastSeen = Date.now();
             const activeRunKeys = sessionRegistry.getActiveRunKeys();
             const hasActiveRun = activeRunKeys.length > 0;
+            const connectTelemetry = {
+              connect_id: clientState.connectId,
+              session_count: sessionRegistry.list().length,
+              subscribed_count: clientState.subscriptions.size,
+              timestamp: Date.now(),
+            };
+            console.log('[gateway][connect]', connectTelemetry);
+            ws.send(JSON.stringify({
+              event: 'gateway.telemetry',
+              data: connectTelemetry,
+            }));
             ws.send(JSON.stringify({
               event: 'status.update',
               data: {
@@ -3784,8 +3986,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 sessions: sessionRegistry.list(),
               },
             }));
-            ws.send(JSON.stringify({ id: msg.id, result: { authenticated: true } }));
+            ws.send(JSON.stringify({ id: msg.id, result: { authenticated: true, connectId: clientState.connectId } }));
           } else {
+            clientState.disconnectReason = 'invalid_token';
             ws.send(JSON.stringify({ id: msg.id, error: 'invalid token' }));
             ws.close();
           }
@@ -3806,40 +4009,96 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       watchedPathsByClient.delete(ws);
     };
 
-    ws.on('close', () => {
+    let finalized = false;
+    const finalizeClient = (disconnectReason: string) => {
+      if (finalized) return;
+      finalized = true;
+      clearTimeout(authTimeout);
       releaseClientWatches();
       const batch = streamBatches.get(ws);
       if (batch?.timer) clearTimeout(batch.timer);
       streamBatches.delete(ws);
+      const state = clients.get(ws);
+      const reason = state?.disconnectReason || disconnectReason;
+      const telemetry = {
+        connect_id: state?.connectId || connectId,
+        session_count: sessionRegistry.list().length,
+        subscribed_count: state?.subscriptions.size || 0,
+        replay_count: 0,
+        replay_ms: 0,
+        buffered_amount_max: state?.bufferedAmountMax || 0,
+        disconnect_reason: reason,
+        timestamp: Date.now(),
+      };
+      console.log('[gateway][disconnect]', telemetry);
       clients.delete(ws);
+      if (streamV2Enabled) {
+        broadcast({ event: 'gateway.telemetry', data: telemetry });
+      }
       console.log(`[gateway] client disconnected (${clients.size} total)`);
+    };
+
+    ws.on('close', (code, reasonBuffer) => {
+      const reason = reasonBuffer?.toString() || `close_code_${code}`;
+      finalizeClient(reason);
     });
 
     ws.on('error', (err) => {
       console.error('[gateway] ws error:', err.message);
-      releaseClientWatches();
-      const batch = streamBatches.get(ws);
-      if (batch?.timer) clearTimeout(batch.timer);
-      streamBatches.delete(ws);
-      clients.delete(ws);
+      const state = clients.get(ws);
+      if (state) state.disconnectReason = `ws_error:${err.message}`;
+      finalizeClient(`ws_error:${err.message}`);
     });
   });
+
+  function reclaimGatewayPort(listenPort: number): boolean {
+    try {
+      const out = execSync(`lsof -nP -iTCP:${listenPort} -sTCP:LISTEN -t`, { encoding: 'utf-8' }).trim();
+      if (!out) return false;
+      const pids = out.split('\n').map((v) => Number(v.trim())).filter((v) => Number.isInteger(v) && v > 1);
+      let killedAny = false;
+      for (const pid of pids) {
+        if (pid === process.pid) continue;
+        let command = '';
+        try {
+          command = execSync(`ps -p ${pid} -o command=`, { encoding: 'utf-8' }).trim();
+        } catch {
+          continue;
+        }
+        const looksLikeDorabotGateway = /dorabot|my-agent|dist\/index\.js|src\/index\.ts/i.test(command);
+        if (!looksLikeDorabotGateway) {
+          console.warn(`[gateway] refusing to kill pid ${pid} on port ${listenPort}; command did not match dorabot gateway`);
+          continue;
+        }
+        try {
+          execSync(`kill -TERM ${pid}`);
+          killedAny = true;
+          console.log(`[gateway] terminated stale gateway pid=${pid}`);
+        } catch (err) {
+          console.warn(`[gateway] failed to terminate stale gateway pid=${pid}:`, err);
+        }
+      }
+      return killedAny;
+    } catch {
+      return false;
+    }
+  }
 
   await new Promise<void>((resolve, reject) => {
     httpServer.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE') {
-        console.log(`[gateway] port ${port} in use, killing stale process...`);
-        import('node:child_process').then(({ execSync }) => {
-          try {
-            execSync(`kill $(netstat -anv -p tcp 2>/dev/null | awk '/:${port} .* LISTEN/{print $9}') 2>/dev/null`);
-          } catch {}
-          setTimeout(() => {
-            httpServer.listen(port, host, () => {
-              console.log(`[gateway] listening on ${useTls ? 'wss' : 'ws'}://${host}:${port}`);
-              resolve();
-            });
-          }, 500);
-        });
+        console.log(`[gateway] port ${port} in use, checking for stale dorabot gateway owner...`);
+        const reclaimed = reclaimGatewayPort(port);
+        if (!reclaimed) {
+          reject(new Error(`port ${port} is already in use by a non-dorabot process`));
+          return;
+        }
+        setTimeout(() => {
+          httpServer.listen(port, host, () => {
+            console.log(`[gateway] listening on ${useTls ? 'wss' : 'ws'}://${host}:${port}`);
+            resolve();
+          });
+        }, 500);
       } else {
         reject(err);
       }
@@ -3855,10 +4114,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
   return {
     close: async () => {
-      clearInterval(backpressureTimer);
-      clearInterval(eventCleanupTimer);
+      clearInterval(heartbeatSweepTimer);
       for (const [, batch] of streamBatches) { if (batch.timer) clearTimeout(batch.timer); }
       streamBatches.clear();
+      for (const [, timer] of runEventPruneTimers) clearTimeout(timer);
+      runEventPruneTimers.clear();
       scheduler?.stop();
       await channelManager.stopAll();
       await disposeAllProviders();

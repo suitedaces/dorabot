@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { jsonrepair } from 'jsonrepair';
+import { getGatewayClient } from '../gateway/client';
 
 /** Deep-set a dotted key path (e.g. "provider.codex.model") in an immutable object */
 function setNestedKey(obj: Record<string, unknown>, key: string, value: unknown): Record<string, unknown> {
@@ -193,6 +194,16 @@ export type GoalExecution = {
   updatedAt: number;
 };
 
+export type GatewayTelemetry = {
+  reconnectCount: number;
+  replayCount: number;
+  replayMs: number;
+  renderFlushLatencyMs: number;
+  maxQueueDepth: number;
+  bufferedAmountMax: number;
+  disconnectReason?: string;
+};
+
 export type SessionState = {
   chatItems: ChatItem[];
   agentStatus: string;
@@ -215,11 +226,6 @@ type RpcResponse = {
 type GatewayEvent = {
   event: string;
   data: unknown;
-};
-
-type PendingRpc = {
-  resolve: (value: unknown) => void;
-  reject: (reason: Error) => void;
 };
 
 type SessionMessage = {
@@ -396,25 +402,6 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
   return items;
 }
 
-// Token consumed once from preload, cached in module scope — not re-extractable
-let cachedToken: string | null = null;
-function getToken(): string {
-  if (!cachedToken) {
-    const consumed = (window as any).electronAPI?.consumeGatewayToken?.() || '';
-    if (consumed) {
-      cachedToken = consumed;
-      try {
-        localStorage.setItem('dorabot:gateway-token', consumed);
-      } catch {
-        // ignore storage errors
-      }
-    } else {
-      cachedToken = localStorage.getItem('dorabot:gateway-token') || '';
-    }
-  }
-  return cachedToken ?? '';
-}
-
 // Helper: update a single session's chatItems in the map
 function updateSessionChatItems(
   prev: Record<string, SessionState>,
@@ -429,7 +416,8 @@ function updateSessionChatItems(
 }
 
 export function useGateway(url = 'wss://localhost:18789') {
-  const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
+  const gatewayClientRef = useRef(getGatewayClient(url));
+  const [connectionState, setConnectionState] = useState<ConnectionState>(() => gatewayClientRef.current.connectionState);
 
   // Multi-session state: all tracked sessions' state keyed by sessionKey
   const [sessionStates, setSessionStates] = useState<Record<string, SessionState>>({});
@@ -455,11 +443,15 @@ export function useGateway(url = 'wss://localhost:18789') {
   const [researchVersion, setResearchVersion] = useState(0);
   const [backgroundRuns, setBackgroundRuns] = useState<BackgroundRun[]>([]);
   const [calendarRuns, setCalendarRuns] = useState<CalendarRun[]>([]);
+  const [gatewayTelemetry, setGatewayTelemetry] = useState<GatewayTelemetry>({
+    reconnectCount: 0,
+    replayCount: 0,
+    replayMs: 0,
+    renderFlushLatencyMs: 0,
+    maxQueueDepth: 0,
+    bufferedAmountMax: 0,
+  });
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const rpcIdRef = useRef(0);
-  const pendingRpcRef = useRef(new Map<number, PendingRpc>());
-  const reconnectTimerRef = useRef<number | null>(null);
   const fsChangeListenersRef = useRef<Set<(path: string) => void>>(new Set());
 
   // Refs for event handler (doesn't close over state)
@@ -500,24 +492,7 @@ export function useGateway(url = 'wss://localhost:18789') {
   }, []);
 
   const rpc = useCallback(async (method: string, params?: Record<string, unknown>, timeoutMs = 30000): Promise<unknown> => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      throw new Error('Not connected to gateway');
-    }
-
-    const id = ++rpcIdRef.current;
-    return new Promise((resolve, reject) => {
-      pendingRpcRef.current.set(id, { resolve, reject });
-      ws.send(JSON.stringify({ method, params, id }));
-
-      // timeout after default 30s unless caller overrides
-      setTimeout(() => {
-        if (pendingRpcRef.current.has(id)) {
-          pendingRpcRef.current.delete(id);
-          reject(new Error(`RPC timeout: ${method}`));
-        }
-      }, timeoutMs);
-    });
+    return gatewayClientRef.current.rpc(method, params, timeoutMs);
   }, []);
 
   // --- Session tracking ---
@@ -534,6 +509,7 @@ export function useGateway(url = 'wss://localhost:18789') {
       sessionKeys: [sessionKey],
       lastSeq: lastSeqRef.current,
       lastSeqBySession: buildLastSeqBySession([sessionKey]),
+      limit: 2000,
     }).catch(() => {});
   }, [buildLastSeqBySession, rpc]);
 
@@ -560,6 +536,7 @@ export function useGateway(url = 'wss://localhost:18789') {
         sessionKeys: [sessionKey],
         lastSeq: lastSeqRef.current,
         lastSeqBySession: buildLastSeqBySession([sessionKey]),
+        limit: 2000,
       }).catch(() => {});
       pendingSubscribeRef.current = null;
     }, 100);
@@ -599,12 +576,20 @@ export function useGateway(url = 'wss://localhost:18789') {
   type QueuedStreamEvent = { sk: string; evt: Record<string, unknown>; parentId?: string | null };
   const streamQueueRef = useRef<QueuedStreamEvent[]>([]);
   const streamFlushTimerRef = useRef<number | null>(null);
+  const streamQueueStartedAtRef = useRef<number>(0);
+  const streamQueueMaxDepthRef = useRef<number>(0);
+  const STREAM_FLUSH_INTERVAL_MS = 16;
+  const STREAM_FLUSH_MAX_DELAY_MS = 50;
+  const STREAM_QUEUE_OVERLOAD = 250;
 
   const flushStreamQueue = useCallback(() => {
     streamFlushTimerRef.current = null;
     const queue = streamQueueRef.current;
     if (!queue.length) return;
     streamQueueRef.current = [];
+    const startedAt = streamQueueStartedAtRef.current || Date.now();
+    streamQueueStartedAtRef.current = 0;
+    const flushLatencyMs = Math.max(0, Date.now() - startedAt);
 
     setSessionStates(prev => {
       let next = prev;
@@ -627,14 +612,21 @@ export function useGateway(url = 'wss://localhost:18789') {
       }
       return next;
     });
+    setGatewayTelemetry(prev => ({
+      ...prev,
+      renderFlushLatencyMs: flushLatencyMs,
+      maxQueueDepth: Math.max(prev.maxQueueDepth, streamQueueMaxDepthRef.current),
+    }));
   }, []);
 
   const scheduleStreamFlush = useCallback(() => {
     if (streamFlushTimerRef.current !== null) return;
+    const age = streamQueueStartedAtRef.current ? Date.now() - streamQueueStartedAtRef.current : 0;
+    const delay = Math.max(0, Math.min(STREAM_FLUSH_INTERVAL_MS, STREAM_FLUSH_MAX_DELAY_MS - age));
     streamFlushTimerRef.current = window.setTimeout(() => {
       streamFlushTimerRef.current = null;
       flushStreamQueue();
-    }, 16);
+    }, delay);
   }, [flushStreamQueue]);
 
   // --- Event handling (routes to all tracked sessions) ---
@@ -689,9 +681,20 @@ export function useGateway(url = 'wss://localhost:18789') {
         const evt = d.event;
         if (!evt) break;
 
-        // batch stream events, flush shortly after arrival
+        // batch stream events with adaptive flush: frame cadence by default,
+        // immediate flush when queue pressure is high.
+        if (streamQueueRef.current.length === 0) streamQueueStartedAtRef.current = Date.now();
         streamQueueRef.current.push({ sk, evt, parentId: d.parentToolUseId });
-        scheduleStreamFlush();
+        streamQueueMaxDepthRef.current = Math.max(streamQueueMaxDepthRef.current, streamQueueRef.current.length);
+        if (streamQueueRef.current.length >= STREAM_QUEUE_OVERLOAD) {
+          if (streamFlushTimerRef.current !== null) {
+            clearTimeout(streamFlushTimerRef.current);
+            streamFlushTimerRef.current = null;
+          }
+          flushStreamQueue();
+        } else {
+          scheduleStreamFlush();
+        }
         break;
       }
 
@@ -771,6 +774,27 @@ export function useGateway(url = 'wss://localhost:18789') {
             };
           });
         }
+        break;
+      }
+
+      case 'agent.question_state': {
+        const d = data as { requestId: string; sessionKey?: string; status: 'pending' | 'answered' | 'timeout' | 'cancelled'; timestamp: number };
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk)) break;
+        if (d.status === 'pending') break;
+        setSessionStates(prev => {
+          const state = prev[sk];
+          if (!state) return prev;
+          if (state.pendingQuestion?.requestId !== d.requestId && !state.pendingQuestion) return prev;
+          return {
+            ...prev,
+            [sk]: {
+              ...state,
+              pendingQuestion: null,
+              agentStatus: d.status === 'answered' ? 'thinking...' : state.agentStatus,
+            },
+          };
+        });
         break;
       }
 
@@ -913,6 +937,8 @@ export function useGateway(url = 'wss://localhost:18789') {
           completedTools: { name: string; detail: string }[];
           pendingApproval: { requestId: string; toolName: string; input: Record<string, unknown>; timestamp: number } | null;
           pendingQuestion: { requestId: string; questions: any[] } | null;
+          pendingQuestionStatus?: 'pending' | 'answered' | 'timeout' | 'cancelled' | null;
+          pendingQuestionUpdatedAt?: number | null;
           updatedAt: number;
         };
         const sk = snap.sessionKey;
@@ -939,7 +965,9 @@ export function useGateway(url = 'wss://localhost:18789') {
               ...state,
               chatItems: [...base, ...items],
               agentStatus: snap.status,
-              pendingQuestion: snap.pendingQuestion ? { requestId: snap.pendingQuestion.requestId, questions: snap.pendingQuestion.questions } : null,
+              pendingQuestion: snap.pendingQuestion && (snap.pendingQuestionStatus ?? 'pending') === 'pending'
+                ? { requestId: snap.pendingQuestion.requestId, questions: snap.pendingQuestion.questions }
+                : null,
             },
           };
         });
@@ -997,6 +1025,25 @@ export function useGateway(url = 'wss://localhost:18789') {
             handleEvent({ event: 'agent.stream', data: evt });
           }
         }
+        break;
+      }
+
+      case 'gateway.telemetry': {
+        const d = data as {
+          replay_count?: number;
+          replay_ms?: number;
+          buffered_amount_max?: number;
+          disconnect_reason?: string;
+          reconnect_count?: number;
+        };
+        setGatewayTelemetry(prev => ({
+          ...prev,
+          replayCount: typeof d.replay_count === 'number' ? d.replay_count : prev.replayCount,
+          replayMs: typeof d.replay_ms === 'number' ? d.replay_ms : prev.replayMs,
+          bufferedAmountMax: typeof d.buffered_amount_max === 'number' ? Math.max(prev.bufferedAmountMax, d.buffered_amount_max) : prev.bufferedAmountMax,
+          reconnectCount: typeof d.reconnect_count === 'number' ? d.reconnect_count : prev.reconnectCount,
+          disconnectReason: typeof d.disconnect_reason === 'string' ? d.disconnect_reason : prev.disconnectReason,
+        }));
         break;
       }
 
@@ -1180,143 +1227,87 @@ export function useGateway(url = 'wss://localhost:18789') {
     }
   }, [flushStreamQueue, markSeqIfNew, scheduleStreamFlush]);
 
-  const connect = useCallback(() => {
-    // close any existing connection first
-    if (wsRef.current) {
-      wsRef.current.onclose = null;
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-
-    setConnectionState('connecting');
-    const ws = new WebSocket(url);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      if (wsRef.current !== ws) return;
-
-      const token = getToken();
-      console.log('[gateway] auth token:', token ? `${token.slice(0, 8)}...` : 'MISSING');
-      if (token) {
-        const authId = ++rpcIdRef.current;
-        ws.send(JSON.stringify({ method: 'auth', params: { token, lastSeq: lastSeqRef.current }, id: authId }));
-        pendingRpcRef.current.set(authId, {
-          resolve: () => {
-            setConnectionState('connected');
-            // re-subscribe all tracked sessions
-            const tracked = Array.from(trackedSessionsRef.current);
-            if (tracked.length > 0) {
-              rpc('sessions.subscribe', {
-                sessionKeys: tracked,
-                lastSeq: lastSeqRef.current,
-                lastSeqBySession: buildLastSeqBySession(tracked),
-              }).catch(() => {});
+  useEffect(() => {
+    const client = getGatewayClient(url);
+    gatewayClientRef.current = client;
+    const unsubscribe = client.subscribe((notification) => {
+      if (notification.type === 'connection') {
+        setConnectionState(notification.state);
+        setGatewayTelemetry(prev => ({
+          ...prev,
+          reconnectCount: notification.reconnectCount,
+          disconnectReason: notification.reason ?? prev.disconnectReason,
+        }));
+        if (notification.state === 'disconnected') {
+          // clear stale pending questions — server-side promises are dead
+          setSessionStates(prev => {
+            let changed = false;
+            const next = { ...prev };
+            for (const sk of Object.keys(next)) {
+              if (next[sk].pendingQuestion) {
+                next[sk] = { ...next[sk], pendingQuestion: null };
+                changed = true;
+              }
             }
-            rpc('config.get').then((res) => {
-              const c = res as Record<string, unknown>;
-              setConfigData(c);
-              if (c.model) setModel(c.model as string);
-            }).catch(() => {});
-            rpc('provider.get').then((res) => {
-              const p = res as { name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } };
-              setProviderInfo(p);
-            }).catch(() => {});
-            rpc('sessions.list').then((res) => {
-              const arr = res as SessionInfo[];
-              if (Array.isArray(arr)) setSessions(arr);
-            }).catch(() => {});
-            rpc('channels.status').then((res) => {
-              const arr = res as ChannelStatusInfo[];
-              if (Array.isArray(arr)) setChannelStatuses(arr);
-            }).catch(() => {});
-            // Tab system handles session restoration — no auto-restore here
-          },
-          reject: (err) => {
-            console.error('auth failed:', err);
-            setConnectionState('disconnected');
-          },
-        });
-      } else {
-        console.error('[gateway] no auth token available, closing connection');
-        ws.close();
-        setConnectionState('disconnected');
+            return changed ? next : prev;
+          });
+        }
+        return;
       }
+
+      const msg = notification.payload;
+      if (typeof msg.seq === 'number') {
+        const sk = (msg as { data?: { sessionKey?: string } }).data?.sessionKey;
+        if (!markSeqIfNew(msg.seq, typeof sk === 'string' ? sk : undefined)) return;
+      }
+      handleEvent(msg as GatewayEvent);
+    });
+
+    client.connect(url);
+    return () => {
+      unsubscribe();
     };
-
-    ws.onmessage = (event) => {
-      if (wsRef.current !== ws) return; // stale connection
-      try {
-        const msg = JSON.parse(event.data as string);
-
-        // rpc response
-        if ('id' in msg && msg.id != null) {
-          const pending = pendingRpcRef.current.get(msg.id);
-          if (pending) {
-            pendingRpcRef.current.delete(msg.id);
-            if (msg.error) {
-              pending.reject(new Error(msg.error));
-            } else {
-              pending.resolve(msg.result);
-            }
-          }
-          return;
-        }
-
-        // event
-        if ('event' in msg) {
-          if (typeof msg.seq === 'number') {
-            // de-dup exact seqs, but allow out-of-order arrival
-            const sk = (msg as { data?: { sessionKey?: string } }).data?.sessionKey;
-            if (!markSeqIfNew(msg.seq, typeof sk === 'string' ? sk : undefined)) return;
-          }
-          handleEvent(msg as GatewayEvent);
-        }
-      } catch {}
-    };
-
-    ws.onclose = () => {
-      if (wsRef.current !== ws) return; // stale connection
-      setConnectionState('disconnected');
-      wsRef.current = null;
-      pendingRpcRef.current.forEach(p => p.reject(new Error('Connection closed')));
-      pendingRpcRef.current.clear();
-      // clear stale pending questions — server-side promises are dead
-      setSessionStates(prev => {
-        let changed = false;
-        const next = { ...prev };
-        for (const sk of Object.keys(next)) {
-          if (next[sk].pendingQuestion) {
-            next[sk] = { ...next[sk], pendingQuestion: null };
-            changed = true;
-          }
-        }
-        return changed ? next : prev;
-      });
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = window.setTimeout(connect, 3000);
-    };
-
-    ws.onerror = () => {
-      ws.close();
-    };
-  }, [url, rpc, handleEvent, markSeqIfNew, buildLastSeqBySession]);
+  }, [url, handleEvent, markSeqIfNew]);
 
   useEffect(() => {
-    connect();
+    if (connectionState !== 'connected') return;
+    const tracked = Array.from(trackedSessionsRef.current);
+    if (tracked.length > 0) {
+      rpc('sessions.subscribe', {
+        sessionKeys: tracked,
+        lastSeq: lastSeqRef.current,
+        lastSeqBySession: buildLastSeqBySession(tracked),
+        limit: 2000,
+      }).catch(() => {});
+    }
+    rpc('config.get').then((res) => {
+      const c = res as Record<string, unknown>;
+      setConfigData(c);
+      if (c.model) setModel(c.model as string);
+    }).catch(() => {});
+    rpc('provider.get').then((res) => {
+      const p = res as { name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } };
+      setProviderInfo(p);
+    }).catch(() => {});
+    rpc('sessions.list').then((res) => {
+      const arr = res as SessionInfo[];
+      if (Array.isArray(arr)) setSessions(arr);
+    }).catch(() => {});
+    rpc('channels.status').then((res) => {
+      const arr = res as ChannelStatusInfo[];
+      if (Array.isArray(arr)) setChannelStatuses(arr);
+    }).catch(() => {});
+  }, [connectionState, rpc, buildLastSeqBySession]);
+
+  useEffect(() => {
     return () => {
       if (pendingSubscribeRef.current) {
         clearTimeout(pendingSubscribeRef.current);
         pendingSubscribeRef.current = null;
       }
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       if (streamFlushTimerRef.current !== null) clearTimeout(streamFlushTimerRef.current);
-      if (wsRef.current) {
-        wsRef.current.onclose = null;
-        wsRef.current.close();
-        wsRef.current = null;
-      }
     };
-  }, [connect]);
+  }, []);
 
   const sendMessage = useCallback(async (prompt: string, sessionKey?: string, chatId?: string) => {
     const sk = sessionKey || activeSessionKeyRef.current;
@@ -1703,7 +1694,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     channelMessages,
     channelStatuses,
     sessions,
-    ws: wsRef.current,
+    ws: gatewayClientRef.current.socket,
     rpc,
     sendMessage,
     abortAgent,
@@ -1756,6 +1747,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     researchVersion,
     backgroundRuns,
     calendarRuns,
+    gatewayTelemetry,
     markCalendarRunsSeen: useCallback(() => {
       setCalendarRuns(prev => prev.map(r => ({ ...r, seen: true })));
     }, []),

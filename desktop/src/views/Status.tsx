@@ -70,6 +70,13 @@ export function StatusView({ gateway }: Props) {
                     <div>connection: <span className="text-foreground">{gateway.connectionState}</span></div>
                     <div>agent: <span className="text-foreground">{gateway.agentStatus}</span></div>
                     <div>session: <span className="text-foreground font-mono text-[10px]">{gateway.currentSessionId || 'none'}</span></div>
+                    <div>reconnects: <span className="text-foreground">{gateway.gatewayTelemetry.reconnectCount}</span></div>
+                    <div>replay: <span className="text-foreground">{gateway.gatewayTelemetry.replayCount}</span> events in <span className="text-foreground">{gateway.gatewayTelemetry.replayMs}ms</span></div>
+                    <div>flush latency: <span className="text-foreground">{gateway.gatewayTelemetry.renderFlushLatencyMs}ms</span></div>
+                    <div>max queue depth: <span className="text-foreground">{gateway.gatewayTelemetry.maxQueueDepth}</span></div>
+                    {gateway.gatewayTelemetry.disconnectReason && (
+                      <div>last disconnect: <span className="text-foreground">{gateway.gatewayTelemetry.disconnectReason}</span></div>
+                    )}
                   </div>
                 </CardContent>
               </Card>

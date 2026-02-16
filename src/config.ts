@@ -92,6 +92,7 @@ export type GatewayConfig = {
   host?: string;
   enabled?: boolean;
   tls?: boolean;
+  streamV2?: boolean;
   allowedOrigins?: string[];
   allowedPaths?: string[];
   deniedPaths?: string[];

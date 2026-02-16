@@ -75,7 +75,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
 
   const initializedRef = useRef(false);
   const migratedRef = useRef(false);
-  const visibleTrackedRef = useRef<Set<string>>(new Set());
+  const subscribedSessionKeysRef = useRef<Set<string>>(new Set());
   const streamCountRef = useRef<Record<string, number>>({});
   const [unreadBySession, setUnreadBySession] = useState<Record<string, number>>({});
 
@@ -104,48 +104,47 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     if (gw.connectionState !== 'connected' || initializedRef.current) return;
     initializedRef.current = true;
 
-    for (const group of layout.visibleGroups) {
-      if (!group.activeTabId) continue;
-      const tab = tabs.find(t => t.id === group.activeTabId);
-      if (tab && isChatTab(tab)) {
-        gw.trackSession(tab.sessionKey);
-        if (tab.sessionId) gw.loadSessionIntoMap(tab.sessionId, tab.sessionKey, tab.chatId);
-      }
+    const openSessionKeys = new Set<string>();
+    for (const tab of tabs) {
+      if (!isChatTab(tab)) continue;
+      openSessionKeys.add(tab.sessionKey);
+      gw.trackSession(tab.sessionKey);
+      if (tab.sessionId) gw.loadSessionIntoMap(tab.sessionId, tab.sessionKey, tab.chatId);
     }
+    subscribedSessionKeysRef.current = openSessionKeys;
 
     const activeTab = tabs.find(t => t.id === activeTabId);
     if (activeTab && isChatTab(activeTab)) {
       gw.setActiveSession(activeTab.sessionKey, activeTab.chatId);
     }
-  }, [gw.connectionState, tabs, layout.visibleGroups, gw, activeTabId]);
+  }, [gw.connectionState, tabs, gw, activeTabId]);
 
   useEffect(() => {
     if (gw.connectionState === 'disconnected') {
       initializedRef.current = false;
-      visibleTrackedRef.current.clear();
+      subscribedSessionKeysRef.current.clear();
     }
   }, [gw.connectionState]);
 
-  // Keep subscriptions aligned with currently visible pane sessions only.
+  // Keep subscriptions aligned with all currently open chat tabs.
   useEffect(() => {
     if (gw.connectionState !== 'connected') return;
 
-    const visibleSessionKeys = new Set<string>();
-    for (const group of layout.visibleGroups) {
-      if (!group.activeTabId) continue;
-      const tab = tabs.find(t => t.id === group.activeTabId);
-      if (tab && isChatTab(tab)) visibleSessionKeys.add(tab.sessionKey);
+    const openSessionKeys = new Set<string>();
+    for (const tab of tabs) {
+      if (!isChatTab(tab)) continue;
+      openSessionKeys.add(tab.sessionKey);
     }
 
-    const prev = visibleTrackedRef.current;
-    for (const sk of visibleSessionKeys) {
+    const prev = subscribedSessionKeysRef.current;
+    for (const sk of openSessionKeys) {
       if (!prev.has(sk)) gw.trackSession(sk);
     }
     for (const sk of prev) {
-      if (!visibleSessionKeys.has(sk)) gw.untrackSession(sk);
+      if (!openSessionKeys.has(sk)) gw.untrackSession(sk);
     }
-    visibleTrackedRef.current = visibleSessionKeys;
-  }, [gw.connectionState, layout.visibleGroups, tabs, gw]);
+    subscribedSessionKeysRef.current = openSessionKeys;
+  }, [gw.connectionState, tabs, gw]);
 
   // Recover chat tabs that were persisted without sessionId (e.g. refresh mid-run).
   // Once sessions.list arrives, map by sessionKey/chatId and hydrate history.
@@ -203,6 +202,37 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
   useEffect(() => {
     localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTabId);
   }, [activeTabId]);
+
+  // Invariant: visible groups should always have something renderable.
+  // Guards against blank panes if tab/layout updates race.
+  useEffect(() => {
+    if (tabs.length === 0) {
+      const fallback = makeDefaultChatTab();
+      setTabs([fallback]);
+      setActiveTabId(fallback.id);
+      gw.trackSession(fallback.sessionKey);
+      gw.setActiveSession(fallback.sessionKey, fallback.chatId);
+      if (layout.isMultiPane) layout.resetToSingle();
+      layout.addTabToGroup(fallback.id, 'g0');
+      return;
+    }
+
+    const visibleGroup = layout.visibleGroups.find(g => g.id === layout.activeGroupId) || layout.visibleGroups[0];
+    if (!visibleGroup) return;
+
+    const tabIds = new Set(tabs.map(t => t.id));
+    const hasRenderableTab = visibleGroup.tabIds.some(id => tabIds.has(id));
+    if (hasRenderableTab) return;
+
+    const fallback = tabs[0];
+    if (!fallback) return;
+    layout.addTabToGroup(fallback.id, visibleGroup.id);
+    layout.setGroupActiveTab(visibleGroup.id, fallback.id);
+    setActiveTabId(fallback.id);
+    if (isChatTab(fallback)) {
+      gw.setActiveSession(fallback.sessionKey, fallback.chatId);
+    }
+  }, [tabs, layout, gw]);
 
   // Reactively fill empty visible groups with new tabs (handles splits)
   // Runs after render with fresh state — no stale closure issues
@@ -287,20 +317,21 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
       });
     }
 
-    // Remove from tabs array
-    setTabs(prev => {
-      const next = prev.filter(t => t.id !== tabId);
-      if (next.length === 0) {
-        // Always keep at least one tab
-        const newTab = makeDefaultChatTab();
-        gw.trackSession(newTab.sessionKey);
-        gw.setActiveSession(newTab.sessionKey, newTab.chatId);
-        setActiveTabId(newTab.id);
-        layout.addTabToGroup(newTab.id, 'g0');
-        return [newTab];
-      }
-      return next;
-    });
+    const remainingTabs = tabs.filter(t => t.id !== tabId);
+
+    // Always keep at least one tab and avoid side effects inside setState updaters.
+    if (remainingTabs.length === 0) {
+      const fallback = makeDefaultChatTab();
+      gw.trackSession(fallback.sessionKey);
+      gw.setActiveSession(fallback.sessionKey, fallback.chatId);
+      setTabs([fallback]);
+      setActiveTabId(fallback.id);
+      if (layout.isMultiPane) layout.resetToSingle();
+      layout.addTabToGroup(fallback.id, 'g0');
+      return;
+    }
+
+    setTabs(remainingTabs);
 
     // Handle focus and layout after close
     if (!neighborTabId) {
@@ -324,17 +355,19 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
           }
         }
       } else {
-        // Single pane: create a new default tab in the same group
-        const newTab = makeDefaultChatTab();
-        gw.trackSession(newTab.sessionKey);
-        gw.setActiveSession(newTab.sessionKey, newTab.chatId);
-        setActiveTabId(newTab.id);
-        layout.addTabToGroup(newTab.id, groupId);
-        setTabs(prev => [...prev, newTab]);
+        // Single pane fallback: re-anchor the first remaining tab into this group.
+        const fallback = remainingTabs[0];
+        if (fallback) {
+          layout.addTabToGroup(fallback.id, groupId);
+          setActiveTabId(fallback.id);
+          if (isChatTab(fallback)) {
+            gw.setActiveSession(fallback.sessionKey, fallback.chatId);
+          }
+        }
       }
     } else if (tabId === activeTabId) {
       // Focus neighbor tab
-      const neighbor = tabs.find(t => t.id === neighborTabId);
+      const neighbor = remainingTabs.find(t => t.id === neighborTabId);
       if (neighbor) {
         setActiveTabId(neighbor.id);
         if (isChatTab(neighbor)) {

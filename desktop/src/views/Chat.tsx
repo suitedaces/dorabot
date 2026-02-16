@@ -8,11 +8,11 @@ import { ToolUI } from '@/components/tool-ui';
 import { ToolStreamCard, hasStreamCard } from '@/components/tool-stream';
 import { InlineErrorBoundary } from '@/components/ErrorBoundary';
 import { AuroraBackground } from '@/components/aceternity/aurora-background';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
+import { VirtualChatList } from '@/components/VirtualChatList';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
 import { safeParse } from '@/lib/safe-parse';
@@ -472,7 +472,7 @@ function getGreeting(): string {
 export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, sessionKey, onNavigateSettings }: Props) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const nextAutoScrollBehaviorRef = useRef<ScrollBehavior>('auto');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const landingInputRef = useRef<HTMLTextAreaElement>(null);
   const isRunning = agentStatus !== 'idle';
@@ -500,10 +500,6 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   }, [gateway.pendingApprovals, sessionKey]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatItems]);
-
-  useEffect(() => {
     if (isEmpty) {
       landingInputRef.current?.focus();
     } else {
@@ -515,6 +511,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     const prompt = overridePrompt || input.trim();
     if (!prompt || sending || pendingQuestion) return;
 
+    nextAutoScrollBehaviorRef.current = 'smooth';
     if (!overridePrompt) setInput('');
     setSending(true);
     try {
@@ -681,12 +678,16 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   return (
     <div className="flex flex-col h-full min-h-0 min-w-0">
       {/* messages */}
-      <ScrollArea className="flex-1 min-h-0 min-w-0">
-        <div className="px-4 py-3 min-w-0 overflow-hidden">
-          {chatItems.map((item, i) => renderItem(item, i))}
-          <div ref={messagesEndRef} />
-        </div>
-      </ScrollArea>
+      <VirtualChatList
+        items={chatItems}
+        renderItem={renderItem}
+        className="flex-1 min-h-0 min-w-0 overflow-auto"
+        itemClassName="px-4 min-w-0 overflow-hidden"
+        scrollBehavior={nextAutoScrollBehaviorRef.current}
+        onScrollBehaviorConsumed={() => {
+          nextAutoScrollBehaviorRef.current = 'auto';
+        }}
+      />
 
       {/* question panel — show during streaming or when pending */}
       {pendingQuestion ? (

@@ -40,6 +40,14 @@ export type WsMessage = {
   params?: Record<string, unknown>;
 };
 
+export type SessionsSubscribeParams = {
+  sessionKeys: string[];
+  lastSeq?: number;
+  lastSeqBySession?: Record<string, number>;
+  /** Max events per replay batch. Defaults to 2000. */
+  limit?: number;
+};
+
 export type WsResponse = {
   id?: string;
   result?: unknown;
@@ -52,7 +60,29 @@ export type WsEvent = {
   seq?: number;
 };
 
+export type AgentQuestionStateEvent = {
+  requestId: string;
+  sessionKey?: string;
+  status: 'pending' | 'answered' | 'timeout' | 'cancelled';
+  timestamp: number;
+};
+
+export type GatewayTelemetryEvent = {
+  connect_id?: string;
+  session_count?: number;
+  subscribed_count?: number;
+  replay_count?: number;
+  replay_ms?: number;
+  buffered_amount_max?: number;
+  disconnect_reason?: string;
+  reconnect_count?: number;
+  queue_depth_max?: number;
+  flush_latency_ms?: number;
+  timestamp: number;
+};
+
 export type RpcMethod =
+  | 'ping'
   | 'status'
   | 'chat.send'
   | 'chat.history'
@@ -107,6 +137,7 @@ export type GatewayEventName =
   | 'agent.result'
   | 'agent.error'
   | 'agent.ask_user'
+  | 'agent.question_state'
   | 'agent.user_message'
   | 'channel.message'
   | 'channel.status'
@@ -122,7 +153,8 @@ export type GatewayEventName =
   | 'fs.change'
   | 'agent.status'
   | 'agent.stream_batch'
-  | 'session.snapshot';
+  | 'session.snapshot'
+  | 'gateway.telemetry';
 
 export type SessionSnapshot = {
   sessionKey: string;
@@ -136,6 +168,8 @@ export type SessionSnapshot = {
   completedTools: { name: string; detail: string }[];
   pendingApproval: { requestId: string; toolName: string; input: Record<string, unknown>; timestamp: number } | null;
   pendingQuestion: { requestId: string; questions: unknown[]; timestamp: number } | null;
+  pendingQuestionStatus: 'pending' | 'answered' | 'timeout' | 'cancelled' | null;
+  pendingQuestionUpdatedAt: number | null;
   updatedAt: number;
 };
 

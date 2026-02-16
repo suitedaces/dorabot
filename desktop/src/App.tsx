@@ -313,13 +313,16 @@ export default function App() {
 
   const handleNavClick = useCallback((navId: TabType) => {
     if (navId === 'chat') {
-      // if already on a chat tab, stay there
-      if (tabState.activeTab && isChatTab(tabState.activeTab)) {
-        return;
-      }
-      const existingChat = tabState.tabs.find(t => isChatTab(t));
-      if (existingChat) {
-        tabState.focusTab(existingChat.id);
+      // Task nav should open a fresh chat unless a blank draft chat already exists.
+      const existingDraftChat = tabState.tabs.find((t) => {
+        if (!isChatTab(t)) return false;
+        if (t.label !== 'new task') return false;
+        if (t.sessionId) return false;
+        const itemCount = gw.sessionStates[t.sessionKey]?.chatItems.length ?? 0;
+        return itemCount === 0;
+      });
+      if (existingDraftChat) {
+        tabState.focusTab(existingDraftChat.id);
       } else {
         tabState.newChatTab();
       }
@@ -327,7 +330,7 @@ export default function App() {
       tabState.openViewTab(navId, NAV_ITEMS.find(n => n.id === navId)?.label || navId);
     }
     setSelectedFile(null);
-  }, [tabState]);
+  }, [tabState, gw.sessionStates]);
 
   // --- Keyboard shortcuts ---
   const shortcutActions = useMemo(() => ({
