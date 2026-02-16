@@ -137,6 +137,15 @@ export type ProviderConfig = {
   codex?: CodexProviderConfig;
 };
 
+export type McpServerEntry = {
+  type?: 'stdio' | 'sse' | 'http';
+  url?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+};
+
 export type Config = {
   provider: ProviderConfig;
   model: string;
@@ -158,6 +167,7 @@ export type Config = {
   gateway?: GatewayConfig;
   browser?: BrowserConfig;
   security?: SecurityConfig;
+  mcpServers?: Record<string, McpServerEntry>;
   maxTurns?: number;
   sessionDir: string;
   cwd: string;

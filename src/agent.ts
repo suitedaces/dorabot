@@ -129,6 +129,14 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
   // create MCP server for custom tools
   const mcpServer = createAgentMcpServer();
 
+  // merge built-in MCP server with user-configured external MCP servers
+  const allMcpServers: Record<string, unknown> = { 'dorabot-tools': mcpServer };
+  if (config.mcpServers) {
+    for (const [name, entry] of Object.entries(config.mcpServers)) {
+      allMcpServers[name] = entry;
+    }
+  }
+
   // get agent definitions
   const agents = getAllAgents(config);
 
@@ -141,7 +149,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
   // run query via provider
   const effectiveSandbox = resolveSandbox(config.sandbox, channel);
   const provider = await getProvider(config);
-  console.log(`[agent] runAgent starting: provider=${provider.name} model=${config.model} permissionMode=${config.permissionMode} sessionId=${sessionId} resumeId=${resumeId || 'none'} sandbox=${effectiveSandbox.enabled ? 'on' : 'off'}`);
+  console.log(`[agent] runAgent starting: provider=${provider.name} model=${config.model} permissionMode=${config.permissionMode} sessionId=${sessionId} resumeId=${resumeId || 'none'} sandbox=${effectiveSandbox.enabled ? 'on' : 'off'} mcpServers=${Object.keys(allMcpServers).join(',')}`);
   const q = provider.query({
     prompt: enhancedPrompt,
     systemPrompt,
@@ -155,7 +163,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     canUseTool: opts.canUseTool,
     agents: agents as any,
     hooks: hooks as any,
-    mcpServer: { 'dorabot-tools': mcpServer },
+    mcpServer: allMcpServers,
     sandbox: effectiveSandbox,
   });
 
@@ -297,6 +305,15 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
   });
 
   const mcpServer = createAgentMcpServer();
+
+  // merge built-in MCP server with user-configured external MCP servers
+  const allMcpServers: Record<string, unknown> = { 'dorabot-tools': mcpServer };
+  if (config.mcpServers) {
+    for (const [name, entry] of Object.entries(config.mcpServers)) {
+      allMcpServers[name] = entry;
+    }
+  }
+
   const agents = getAllAgents(config);
 
   const defaultHooks = createDefaultHooks(config);
@@ -306,7 +323,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
 
   const effectiveSandbox = resolveSandbox(config.sandbox, channel);
   const provider = await getProvider(config);
-  console.log(`[agent] streamAgent starting: provider=${provider.name} model=${config.model} permissionMode=${config.permissionMode} sessionId=${sessionId} resumeId=${resumeId || 'none'} sandbox=${effectiveSandbox.enabled ? 'on' : 'off'} channel=${channel || 'desktop'}`);
+  console.log(`[agent] streamAgent starting: provider=${provider.name} model=${config.model} permissionMode=${config.permissionMode} sessionId=${sessionId} resumeId=${resumeId || 'none'} sandbox=${effectiveSandbox.enabled ? 'on' : 'off'} channel=${channel || 'desktop'} mcpServers=${Object.keys(allMcpServers).join(',')}`);
   const q = provider.query({
     prompt: enhancedPrompt,
     systemPrompt,
@@ -321,7 +338,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
     abortController: opts.abortController,
     agents: agents as any,
     hooks: hooks as any,
-    mcpServer: { 'dorabot-tools': mcpServer },
+    mcpServer: allMcpServers,
     sandbox: effectiveSandbox,
     onRunReady: opts.onRunReady,
   });

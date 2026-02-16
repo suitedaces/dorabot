@@ -22,7 +22,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import {
   MessageSquare, Radio, Zap, Brain, Settings2,
   Sparkles, LayoutGrid, Loader2, Star,
-  Sun, Moon, Clock, FileSearch
+  Sun, Moon, Clock, FileSearch, Plug
 } from 'lucide-react';
 
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
@@ -70,7 +70,7 @@ const NAV_ITEMS: { id: TabType; label: string; icon: React.ReactNode }[] = [
   { id: 'channels', label: 'Channels', icon: <Radio className="w-3.5 h-3.5" /> },
   { id: 'goals', label: 'Goals', icon: <LayoutGrid className="w-3.5 h-3.5" /> },
   { id: 'automation', label: 'Automations', icon: <Zap className="w-3.5 h-3.5" /> },
-  { id: 'skills', label: 'Skills', icon: <Sparkles className="w-3.5 h-3.5" /> },
+  { id: 'extensions', label: 'Extensions', icon: <Sparkles className="w-3.5 h-3.5" /> },
   { id: 'research', label: 'Research', icon: <FileSearch className="w-3.5 h-3.5" /> },
   { id: 'memory', label: 'Memory', icon: <Brain className="w-3.5 h-3.5" /> },
   { id: 'settings', label: 'Settings', icon: <Settings2 className="w-3.5 h-3.5" /> },

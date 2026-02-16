@@ -10,7 +10,7 @@ import { ChannelView } from '../views/Channel';
 import { Automations } from './Automations';
 import { SettingsView } from '../views/Settings';
 import { SoulView } from '../views/Soul';
-import { SkillsView } from '../views/Skills';
+import { ExtensionsView } from '../views/Extensions';
 import { GoalsView } from '../views/Goals';
 import { ResearchView } from '../views/Research';
 import { FileViewer } from './FileViewer';
@@ -128,8 +128,8 @@ export function EditorGroupPanel({
         return <Automations gateway={gateway} />;
       case 'research':
         return <ResearchView gateway={gateway} />;
-      case 'skills':
-        return <SkillsView gateway={gateway} />;
+      case 'extensions':
+        return <ExtensionsView gateway={gateway} />;
       case 'memory':
         return (
           <SoulView

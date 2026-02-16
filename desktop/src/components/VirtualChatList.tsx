@@ -26,19 +26,29 @@ export function VirtualChatList<T>({
   const viewportRef = useRef<HTMLDivElement>(null);
   const heightsRef = useRef<Map<number, number>>(new Map());
   const nearBottomRef = useRef(true);
+  const measureRafRef = useRef<number | null>(null);
   const observerRef = useRef<ResizeObserver | null>(null);
   const observedRef = useRef<Map<number, HTMLDivElement>>(new Map());
+  const totalHeightRef = useRef(0);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [measureVersion, setMeasureVersion] = useState(0);
+
+  const queueMeasureRecalc = useCallback(() => {
+    if (measureRafRef.current !== null) return;
+    measureRafRef.current = requestAnimationFrame(() => {
+      measureRafRef.current = null;
+      setMeasureVersion(v => v + 1);
+    });
+  }, []);
 
   const updateHeight = useCallback((index: number, element: HTMLDivElement) => {
     const height = Math.ceil(element.getBoundingClientRect().height);
     const prev = heightsRef.current.get(index);
     if (prev === height) return;
     heightsRef.current.set(index, Math.max(20, height));
-    setMeasureVersion(v => v + 1);
-  }, []);
+    queueMeasureRecalc();
+  }, [queueMeasureRecalc]);
 
   // Single ResizeObserver for all row elements
   useEffect(() => {
@@ -51,14 +61,20 @@ export function VirtualChatList<T>({
           const prev = heightsRef.current.get(idx);
           if (prev !== height && height > 0) {
             heightsRef.current.set(idx, Math.max(20, height));
-            setMeasureVersion(v => v + 1);
+            queueMeasureRecalc();
           }
         }
       }
     });
     observerRef.current = ro;
-    return () => ro.disconnect();
-  }, []);
+    return () => {
+      ro.disconnect();
+      if (measureRafRef.current !== null) {
+        cancelAnimationFrame(measureRafRef.current);
+        measureRafRef.current = null;
+      }
+    };
+  }, [queueMeasureRecalc]);
 
   const layout = useMemo(() => {
     const heights: number[] = new Array(items.length);
@@ -72,6 +88,7 @@ export function VirtualChatList<T>({
     }
     return { heights, offsets, total };
   }, [items.length, estimateItemHeight, measureVersion]);
+  totalHeightRef.current = layout.total;
 
   const visibleRange = useMemo(() => {
     if (items.length === 0) return { start: 0, end: 0 };
@@ -98,16 +115,18 @@ export function VirtualChatList<T>({
   const onScroll = useCallback(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
-    setScrollTop(viewport.scrollTop);
-    const distanceFromBottom = layout.total - (viewport.scrollTop + viewport.clientHeight);
+    const nextScrollTop = viewport.scrollTop;
+    setScrollTop(prev => (prev === nextScrollTop ? prev : nextScrollTop));
+    const distanceFromBottom = totalHeightRef.current - (nextScrollTop + viewport.clientHeight);
     nearBottomRef.current = distanceFromBottom <= bottomThresholdPx;
-  }, [bottomThresholdPx, layout.total]);
+  }, [bottomThresholdPx]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
     const update = () => {
-      setViewportHeight(viewport.clientHeight);
+      const nextHeight = viewport.clientHeight;
+      setViewportHeight(prev => (prev === nextHeight ? prev : nextHeight));
       onScroll();
     };
     update();
@@ -121,7 +140,7 @@ export function VirtualChatList<T>({
     if (!viewport || !nearBottomRef.current) return;
     viewport.scrollTo({ top: viewport.scrollHeight, behavior: scrollBehavior });
     onScrollBehaviorConsumed?.();
-  }, [items.length, layout.total, onScrollBehaviorConsumed, scrollBehavior]);
+  }, [items, onScrollBehaviorConsumed, scrollBehavior]);
 
   const attachRow = useCallback((index: number, el: HTMLDivElement | null) => {
     const ro = observerRef.current;

@@ -2506,6 +2506,95 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           return { id, result: status };
         }
 
+        // ── MCP server management RPCs ────────────────────────────
+        case 'mcp.list': {
+          const entries = Object.entries(config.mcpServers || {}).map(([name, cfg]) => ({
+            name,
+            config: cfg,
+          }));
+          return { id, result: entries };
+        }
+
+        case 'mcp.add': {
+          const name = params?.name as string;
+          const serverConfig = params?.config as Record<string, unknown>;
+          if (!name) return { id, error: 'name required' };
+          if (!serverConfig) return { id, error: 'config required' };
+          if (!config.mcpServers) config.mcpServers = {};
+          if (config.mcpServers[name]) return { id, error: `server "${name}" already exists` };
+          config.mcpServers[name] = serverConfig as any;
+          saveConfig(config);
+          broadcast({ event: 'mcp.update', data: {} });
+          return { id, result: { added: name } };
+        }
+
+        case 'mcp.update': {
+          const name = params?.name as string;
+          const serverConfig = params?.config as Record<string, unknown>;
+          if (!name) return { id, error: 'name required' };
+          if (!serverConfig) return { id, error: 'config required' };
+          if (!config.mcpServers?.[name]) return { id, error: `server "${name}" not found` };
+          config.mcpServers[name] = serverConfig as any;
+          saveConfig(config);
+          broadcast({ event: 'mcp.update', data: {} });
+          return { id, result: { updated: name } };
+        }
+
+        case 'mcp.remove': {
+          const name = params?.name as string;
+          if (!name) return { id, error: 'name required' };
+          if (!config.mcpServers?.[name]) return { id, error: `server "${name}" not found` };
+          delete config.mcpServers[name];
+          if (Object.keys(config.mcpServers).length === 0) delete config.mcpServers;
+          saveConfig(config);
+          broadcast({ event: 'mcp.update', data: {} });
+          return { id, result: { removed: name } };
+        }
+
+        case 'mcp.status': {
+          // Try to get live status from any active run handle
+          for (const [, h] of runHandles) {
+            if (h.active && h.mcpServerStatus) {
+              try {
+                const status = await h.mcpServerStatus();
+                return { id, result: status };
+              } catch { /* fall through */ }
+            }
+          }
+          // No active run, return config-based entries with unknown status
+          const entries = Object.entries(config.mcpServers || {}).map(([name]) => ({
+            name,
+            status: 'pending',
+          }));
+          return { id, result: entries };
+        }
+
+        case 'mcp.reconnect': {
+          const name = params?.name as string;
+          if (!name) return { id, error: 'name required' };
+          for (const [, h] of runHandles) {
+            if (h.active && h.reconnectMcpServer) {
+              await h.reconnectMcpServer(name);
+              return { id, result: { reconnected: name } };
+            }
+          }
+          return { id, error: 'no active run to reconnect MCP server' };
+        }
+
+        case 'mcp.toggle': {
+          const name = params?.name as string;
+          const enabled = params?.enabled as boolean;
+          if (!name) return { id, error: 'name required' };
+          if (typeof enabled !== 'boolean') return { id, error: 'enabled (boolean) required' };
+          for (const [, h] of runHandles) {
+            if (h.active && h.toggleMcpServer) {
+              await h.toggleMcpServer(name, enabled);
+              return { id, result: { toggled: name, enabled } };
+            }
+          }
+          return { id, error: 'no active run to toggle MCP server' };
+        }
+
         case 'chat.answerQuestion': {
           const requestId = params?.requestId as string;
           const answers = params?.answers as Record<string, string>;
