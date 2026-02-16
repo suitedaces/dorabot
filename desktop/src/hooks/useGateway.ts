@@ -785,7 +785,7 @@ export function useGateway(url = 'wss://localhost:18789') {
         setSessionStates(prev => {
           const state = prev[sk];
           if (!state) return prev;
-          if (state.pendingQuestion?.requestId !== d.requestId && !state.pendingQuestion) return prev;
+          if (!state.pendingQuestion || state.pendingQuestion.requestId !== d.requestId) return prev;
           return {
             ...prev,
             [sk]: {
