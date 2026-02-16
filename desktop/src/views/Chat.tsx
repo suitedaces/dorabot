@@ -545,7 +545,9 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
       case 'text':
         return (
           <div key={i} className="prose-chat py-1.5">
-            <Markdown remarkPlugins={[remarkGfm]}>{item.content}</Markdown>
+            <InlineErrorBoundary>
+              <Markdown remarkPlugins={[remarkGfm]}>{item.content}</Markdown>
+            </InlineErrorBoundary>
             {item.streaming && <span className="streaming-cursor" />}
           </div>
         );
