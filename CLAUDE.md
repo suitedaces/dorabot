@@ -2,6 +2,16 @@
 
 Personal AI agent with multi-channel messaging, browser automation, and persistent memory.
 
+## Workflow Principles
+
+When asked to plan or design, STOP and plan from the user's perspective BEFORE writing or analyzing code. Do not start coding autonomously when the user wants a plan, task list, or discussion first.
+
+## Debugging & Investigation
+
+When asked to investigate or debug something, run tests and scripts FIRST to observe actual behavior before reading/analyzing code extensively. Prefer empirical testing over code tracing.
+
+For SDK/API questions, check official SDK documentation and API docs via claude-agent-sdk skill FIRST, not the local codebase. Only grep local code after understanding the external API surface.
+
 ## Architecture
 
 - **Backend**: Node.js + TypeScript, Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`)

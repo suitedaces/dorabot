@@ -1,5 +1,5 @@
 import type { Config } from '../config.js';
-import { getDb } from '../db.js';
+import { getDb, indexMessageForSearch } from '../db.js';
 
 export type SessionMetadata = {
   channel?: string;
@@ -19,6 +19,7 @@ export type SessionInfo = {
   chatId?: string;
   chatType?: string;
   senderName?: string;
+  preview?: string;
 };
 
 export type MessageMetadata = {
@@ -135,31 +136,35 @@ export class SessionManager {
   append(sessionId: string, message: SessionMessage): void {
     const db = getDb();
     const now = new Date().toISOString();
+    const contentStr = JSON.stringify(message.content);
 
-    (this._appendTx ??= db.transaction((sid: string, msg: SessionMessage, ts: string) => {
+    (this._appendTx ??= db.transaction((sid: string, msg: SessionMessage, ts: string, content: string) => {
       db.prepare(`
         INSERT INTO sessions (id, created_at, updated_at, message_count)
         VALUES (?, ?, ?, 0)
         ON CONFLICT(id) DO NOTHING
       `).run(sid, ts, ts);
 
-      db.prepare(`
+      const result = db.prepare(`
         INSERT INTO messages (session_id, uuid, type, content, metadata, timestamp)
         VALUES (?, ?, ?, ?, ?, ?)
       `).run(
         sid,
         msg.uuid || null,
         msg.type,
-        JSON.stringify(msg.content),
+        content,
         msg.metadata ? JSON.stringify(msg.metadata) : null,
         msg.timestamp,
       );
+
+      // index for FTS search
+      indexMessageForSearch(Number(result.lastInsertRowid), content, msg.type);
 
       db.prepare(`
         UPDATE sessions SET updated_at = ?, last_message_at = ?
         WHERE id = ?
       `).run(ts, Date.now(), sid);
-    }))(sessionId, message, now);
+    }))(sessionId, message, now, contentStr);
   }
 
   private _appendTx: ReturnType<ReturnType<typeof getDb>['transaction']> | null = null;
@@ -198,8 +203,24 @@ export class SessionManager {
   list(): SessionInfo[] {
     const db = getDb();
     const rows = db.prepare(`
-      SELECT id, channel, chat_id, chat_type, sender_name, message_count, created_at, updated_at
-      FROM sessions ORDER BY updated_at DESC
+      SELECT
+        s.id,
+        s.channel,
+        s.chat_id,
+        s.chat_type,
+        s.sender_name,
+        s.message_count,
+        s.created_at,
+        s.updated_at,
+        (
+          SELECT m.content
+          FROM messages m
+          WHERE m.session_id = s.id AND m.type = 'user'
+          ORDER BY m.id ASC
+          LIMIT 1
+        ) AS first_user_content
+      FROM sessions s
+      ORDER BY s.updated_at DESC
     `).all() as {
       id: string;
       channel: string | null;
@@ -209,6 +230,7 @@ export class SessionManager {
       message_count: number;
       created_at: string | null;
       updated_at: string | null;
+      first_user_content: string | null;
     }[];
 
     return rows.map(row => ({
@@ -221,6 +243,7 @@ export class SessionManager {
       chatId: row.chat_id || undefined,
       chatType: row.chat_type || undefined,
       senderName: row.sender_name || undefined,
+      preview: extractFirstUserPreview(row.first_user_content),
     }));
   }
 
@@ -245,6 +268,28 @@ export class SessionManager {
     }
     return undefined;
   }
+}
+
+function extractFirstUserPreview(content: string | null): string | undefined {
+  if (!content) return undefined;
+  try {
+    const parsed = JSON.parse(content) as any;
+    const blocks = parsed?.message?.content;
+    if (typeof blocks === 'string') {
+      return blocks.slice(0, 140);
+    }
+    if (Array.isArray(blocks)) {
+      const text = blocks
+        .filter((b: any) => b?.type === 'text' && typeof b.text === 'string')
+        .map((b: any) => b.text)
+        .join(' ')
+        .trim();
+      return text ? text.slice(0, 140) : undefined;
+    }
+  } catch {
+    // ignore parse errors and fallback to undefined
+  }
+  return undefined;
 }
 
 // helper to convert SDK messages to our session format

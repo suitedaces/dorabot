@@ -3,7 +3,7 @@ import type { useGateway } from './useGateway';
 import type { useLayout } from './useLayout';
 import type { GroupId } from './useLayout';
 
-export type TabType = 'chat' | 'channels' | 'goals' | 'automation' | 'skills' | 'memory' | 'settings';
+export type TabType = 'chat' | 'channels' | 'goals' | 'automation' | 'skills' | 'memory' | 'research' | 'settings';
 
 export type ChatTab = {
   id: string;
@@ -75,6 +75,9 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
 
   const initializedRef = useRef(false);
   const migratedRef = useRef(false);
+  const visibleTrackedRef = useRef<Set<string>>(new Set());
+  const streamCountRef = useRef<Record<string, number>>({});
+  const [unreadBySession, setUnreadBySession] = useState<Record<string, number>>({});
 
   // Migrate: if layout groups are empty but we have tabs, put them all in g0
   useEffect(() => {
@@ -101,12 +104,12 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     if (gw.connectionState !== 'connected' || initializedRef.current) return;
     initializedRef.current = true;
 
-    for (const tab of tabs) {
-      if (isChatTab(tab)) {
+    for (const group of layout.visibleGroups) {
+      if (!group.activeTabId) continue;
+      const tab = tabs.find(t => t.id === group.activeTabId);
+      if (tab && isChatTab(tab)) {
         gw.trackSession(tab.sessionKey);
-        if (tab.sessionId) {
-          gw.loadSessionIntoMap(tab.sessionId, tab.sessionKey, tab.chatId);
-        }
+        if (tab.sessionId) gw.loadSessionIntoMap(tab.sessionId, tab.sessionKey, tab.chatId);
       }
     }
 
@@ -114,13 +117,68 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     if (activeTab && isChatTab(activeTab)) {
       gw.setActiveSession(activeTab.sessionKey, activeTab.chatId);
     }
-  }, [gw.connectionState]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [gw.connectionState, tabs, layout.visibleGroups, gw, activeTabId]);
 
   useEffect(() => {
     if (gw.connectionState === 'disconnected') {
       initializedRef.current = false;
+      visibleTrackedRef.current.clear();
     }
   }, [gw.connectionState]);
+
+  // Keep subscriptions aligned with currently visible pane sessions only.
+  useEffect(() => {
+    if (gw.connectionState !== 'connected') return;
+
+    const visibleSessionKeys = new Set<string>();
+    for (const group of layout.visibleGroups) {
+      if (!group.activeTabId) continue;
+      const tab = tabs.find(t => t.id === group.activeTabId);
+      if (tab && isChatTab(tab)) visibleSessionKeys.add(tab.sessionKey);
+    }
+
+    const prev = visibleTrackedRef.current;
+    for (const sk of visibleSessionKeys) {
+      if (!prev.has(sk)) gw.trackSession(sk);
+    }
+    for (const sk of prev) {
+      if (!visibleSessionKeys.has(sk)) gw.untrackSession(sk);
+    }
+    visibleTrackedRef.current = visibleSessionKeys;
+  }, [gw.connectionState, layout.visibleGroups, tabs, gw]);
+
+  // Recover chat tabs that were persisted without sessionId (e.g. refresh mid-run).
+  // Once sessions.list arrives, map by sessionKey/chatId and hydrate history.
+  useEffect(() => {
+    if (gw.connectionState !== 'connected' || gw.sessions.length === 0) return;
+
+    const recoveries: Array<{ tabId: string; sessionId: string; sessionKey: string; chatId: string }> = [];
+    for (const tab of tabs) {
+      if (!isChatTab(tab) || tab.sessionId) continue;
+      const [channel = 'desktop', chatType = 'dm', ...rest] = tab.sessionKey.split(':');
+      const chatId = rest.join(':') || tab.chatId;
+      const match = gw.sessions.find(s =>
+        (s.channel || 'desktop') === channel &&
+        (s.chatType || 'dm') === chatType &&
+        s.chatId === chatId
+      );
+      if (match?.id) {
+        recoveries.push({ tabId: tab.id, sessionId: match.id, sessionKey: tab.sessionKey, chatId: tab.chatId });
+      }
+    }
+
+    if (recoveries.length === 0) return;
+
+    setTabs(prev => prev.map(tab => {
+      if (!isChatTab(tab) || tab.sessionId) return tab;
+      const found = recoveries.find(r => r.tabId === tab.id);
+      return found ? { ...tab, sessionId: found.sessionId } : tab;
+    }));
+
+    for (const r of recoveries) {
+      gw.loadSessionIntoMap(r.sessionId, r.sessionKey, r.chatId);
+    }
+  }, [gw.connectionState, gw.sessions, gw, tabs]);
 
   // Listen for sessionId changes from gateway
   useEffect(() => {
@@ -165,6 +223,8 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
         chatId,
       };
       newTabs.push(tab);
+      // Ensure streams/events for auto-created split panes are subscribed immediately.
+      gw.trackSession(tab.sessionKey);
       layout.addTabToGroup(tab.id, group.id);
     }
     setTabs(prev => [...prev, ...newTabs]);
@@ -204,6 +264,11 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
 
     if (isChatTab(tab)) {
       gw.setActiveSession(tab.sessionKey, tab.chatId);
+      setUnreadBySession(prev => {
+        if (!prev[tab.sessionKey]) return prev;
+        const { [tab.sessionKey]: _, ...rest } = prev;
+        return rest;
+      });
     }
   }, [tabs, gw, layout]);
 
@@ -215,6 +280,11 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     const closing = tabs.find(t => t.id === tabId);
     if (closing && isChatTab(closing)) {
       gw.untrackSession(closing.sessionKey);
+      setUnreadBySession(prev => {
+        if (!prev[closing.sessionKey]) return prev;
+        const { [closing.sessionKey]: _, ...rest } = prev;
+        return rest;
+      });
     }
 
     // Remove from tabs array
@@ -328,7 +398,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     layout.addTabToGroup(id, groupId);
   }, [tabs, focusTab, layout]);
 
-  const newChatTab = useCallback((groupId?: GroupId): string => {
+  const newChatTab = useCallback((groupId?: GroupId): { tabId: string; sessionKey: string; chatId: string } => {
     const { sessionKey, chatId } = gw.newSession();
     const tab: ChatTab = {
       id: `chat:${chatId}`,
@@ -341,8 +411,9 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
 
     setTabs(prev => [...prev, tab]);
     setActiveTabId(tab.id);
+    gw.trackSession(tab.sessionKey);
     layout.addTabToGroup(tab.id, groupId);
-    return tab.id;
+    return { tabId: tab.id, sessionKey, chatId };
   }, [gw, layout]);
 
   const updateTabLabel = useCallback((tabId: string, label: string) => {
@@ -376,6 +447,46 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     if (target) focusTab(target.id, group.id);
   }, [tabs, layout, focusTab]);
 
+  // Track unread counts for chat tabs not currently visible as active pane tabs.
+  useEffect(() => {
+    const visibleActiveTabIds = new Set(
+      layout.visibleGroups.map(g => g.activeTabId).filter((id): id is string => Boolean(id)),
+    );
+    const nextCounts = { ...streamCountRef.current };
+    const deltas: Record<string, number> = {};
+
+    for (const tab of tabs) {
+      if (!isChatTab(tab)) continue;
+      const sk = tab.sessionKey;
+      const current = gw.sessionStates[sk]?.chatItems.length || 0;
+      const previous = nextCounts[sk];
+      if (previous == null) {
+        nextCounts[sk] = current;
+        continue;
+      }
+      if (current > previous && !visibleActiveTabIds.has(tab.id)) {
+        deltas[sk] = (deltas[sk] || 0) + (current - previous);
+      }
+      nextCounts[sk] = current;
+    }
+
+    // remove sessions for tabs that no longer exist
+    const liveSessionKeys = new Set(tabs.filter(isChatTab).map(t => t.sessionKey));
+    for (const sk of Object.keys(nextCounts)) {
+      if (!liveSessionKeys.has(sk)) delete nextCounts[sk];
+    }
+    streamCountRef.current = nextCounts;
+
+    if (Object.keys(deltas).length === 0) return;
+    setUnreadBySession(prev => {
+      const next = { ...prev };
+      for (const [sk, add] of Object.entries(deltas)) {
+        next[sk] = (next[sk] || 0) + add;
+      }
+      return next;
+    });
+  }, [gw.sessionStates, tabs, layout.visibleGroups]);
+
   return {
     tabs,
     activeTabId,
@@ -386,6 +497,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     openChatTab,
     openViewTab,
     newChatTab,
+    unreadBySession,
     updateTabLabel,
     nextTab,
     prevTab,

@@ -37,6 +37,7 @@ import {
   browserGetNetworkRequest,
   browserPdf,
   browserScroll,
+  acquireBrowserMutex,
 } from '../browser/actions.js';
 
 // browser config loaded at runtime, set by gateway/startup
@@ -90,7 +91,7 @@ const browserActions = [
 
 export const browserTool = tool(
   'browser',
-  'Unified browser automation tool (single action spec) inspired by Chrome DevTools MCP. Supports input automation, page navigation, snapshots/screenshots, script evaluation, console/network inspection, and legacy aliases. Recommended flow: open/new_page -> take_snapshot -> interact (click/fill/drag/upload_file) -> re-snapshot after navigation.',
+  'Browser automation tool. Supports input, navigation, snapshots, screenshots, script evaluation, console/network inspection. Recommended flow: open/new_page -> take_snapshot -> interact with includeSnapshot=true (click/fill/select/press_key/hover/scroll return updated snapshot in same response, saving a round-trip). Only call take_snapshot separately for initial page load or after open/navigate/navigate_page. Use wait_for(text) instead of wait(timeMs) when possible. To download files, extract the URL from the page and use curl — be cautious about what and where you download.',
   {
     action: z.enum(browserActions),
 
@@ -202,6 +203,7 @@ export const browserTool = tool(
     const fromUid = args.from_uid || args.from_ref;
     const toUid = args.to_uid || args.to_ref;
 
+    const releaseMutex = await acquireBrowserMutex();
     try {
       let result;
 
@@ -220,12 +222,12 @@ export const browserTool = tool(
 
         case 'open':
           if (!args.url) return fail('url required');
-          result = await browserOpen(browserConfig, args.url, args.timeout);
+          result = await browserOpen(browserConfig, args.url, args.timeout, args.includeSnapshot);
           break;
 
         case 'navigate':
           if (!args.url) return fail('url required');
-          result = await browserOpen(browserConfig, args.url, args.timeout);
+          result = await browserOpen(browserConfig, args.url, args.timeout, args.includeSnapshot);
           break;
 
         case 'navigate_page':
@@ -236,6 +238,7 @@ export const browserTool = tool(
             ignoreCache: args.ignoreCache,
             handleBeforeUnload: args.handleBeforeUnload,
             initScript: args.initScript,
+            includeSnapshot: args.includeSnapshot,
           });
           break;
 
@@ -479,6 +482,8 @@ export const browserTool = tool(
         content: [{ type: 'text' as const, text: `Browser error: ${e.message}` }],
         isError: true,
       };
+    } finally {
+      releaseMutex();
     }
   },
 );

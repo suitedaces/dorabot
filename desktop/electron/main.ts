@@ -195,7 +195,9 @@ app.on('ready', async () => {
     },
     onError: (error) => {
       console.error('[main] Gateway error:', error);
-      updateTrayTitle('error');
+      // Keep tray status actionable without getting stuck in a hard "error" state
+      // for transient startup issues. onReady/onExit will update it again.
+      updateTrayTitle('offline');
     },
     onExit: (code) => {
       console.log('[main] Gateway exited:', code);
@@ -211,7 +213,7 @@ app.on('ready', async () => {
   // Start gateway (non-blocking - UI will show and connect when ready)
   gatewayManager.start().catch((err) => {
     console.error('[main] Gateway start failed:', err);
-    updateTrayTitle('error');
+    updateTrayTitle('offline');
   });
 
   createWindow();

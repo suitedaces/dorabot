@@ -49,6 +49,7 @@ export type WsResponse = {
 export type WsEvent = {
   event: string;
   data: unknown;
+  seq?: number;
 };
 
 export type RpcMethod =
@@ -93,7 +94,9 @@ export type RpcMethod =
   | 'fs.watch.start'
   | 'fs.watch.stop'
   | 'agent.run_background'
-  | 'agent.background_runs';
+  | 'agent.background_runs'
+  | 'sessions.subscribe'
+  | 'sessions.unsubscribe';
 
 export type GatewayEventName =
   | 'agent.stream'
@@ -112,8 +115,27 @@ export type GatewayEventName =
   | 'session.update'
   | 'status.update'
   | 'goals.update'
+  | 'research.update'
   | 'background.status'
-  | 'fs.change';
+  | 'fs.change'
+  | 'agent.status'
+  | 'agent.stream_batch'
+  | 'session.snapshot';
+
+export type SessionSnapshot = {
+  sessionKey: string;
+  status: 'idle' | 'thinking' | 'tool_use' | 'responding';
+  text: string;
+  currentTool: {
+    name: string;
+    inputJson: string;
+    detail: string;
+  } | null;
+  completedTools: { name: string; detail: string }[];
+  pendingApproval: { requestId: string; toolName: string; input: Record<string, unknown>; timestamp: number } | null;
+  pendingQuestion: { requestId: string; questions: unknown[]; timestamp: number } | null;
+  updatedAt: number;
+};
 
 export type GatewayContext = {
   config: import('../config.js').Config;

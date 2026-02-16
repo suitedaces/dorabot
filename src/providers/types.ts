@@ -7,6 +7,20 @@ export type RunHandle = {
   close(): void;
   /** Whether the generator is still alive */
   readonly active: boolean;
+  /** Interrupt current processing (Claude SDK only) */
+  interrupt?(): Promise<void>;
+  /** Change model mid-conversation (Claude SDK only) */
+  setModel?(model: string): Promise<void>;
+  /** Change permission mode mid-run (Claude SDK only) */
+  setPermissionMode?(mode: string): Promise<void>;
+  /** Stop a running subagent task (Claude SDK only) */
+  stopTask?(taskId: string): Promise<void>;
+  /** Get MCP server status (Claude SDK only) */
+  mcpServerStatus?(): Promise<unknown[]>;
+  /** Reconnect an MCP server (Claude SDK only) */
+  reconnectMcpServer?(name: string): Promise<void>;
+  /** Toggle MCP server enabled state (Claude SDK only) */
+  toggleMcpServer?(name: string, enabled: boolean): Promise<void>;
 };
 
 export type ProviderRunOptions = {

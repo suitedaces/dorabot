@@ -11,18 +11,10 @@ export function AuroraBackground({ children, className }: { children: React.Reac
               radial-gradient(at 97% 21%, oklch(0.6 0.19 145 / 0.1) 0px, transparent 50%),
               radial-gradient(at 52% 99%, oklch(0.6 0.15 310 / 0.1) 0px, transparent 50%)`,
             filter: "blur(60px)",
-            animation: "aurora 8s ease-in-out infinite alternate",
           }}
         />
       </div>
       <div className="relative z-10">{children}</div>
-      <style>{`
-        @keyframes aurora {
-          0% { transform: translate(0, 0) rotate(0deg) scale(1); }
-          50% { transform: translate(10px, -10px) rotate(1deg) scale(1.02); }
-          100% { transform: translate(-5px, 5px) rotate(-1deg) scale(0.98); }
-        }
-      `}</style>
     </div>
   )
 }

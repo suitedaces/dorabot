@@ -278,12 +278,13 @@
 }
 
 @keyframes dorabot-glow {
-  0%, 100% { filter: brightness(1) drop-shadow(0 0 0px transparent); }
-  50% { filter: brightness(1.15) drop-shadow(0 0 8px oklch(0.72 0.22 250 / 0.4)); }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.85; }
 }
 
 .dorabot-alive {
   animation: dorabot-float 3s ease-in-out infinite, dorabot-glow 2s ease-in-out infinite;
+  will-change: transform, opacity;
 }
 
 /* markdown viewer (file viewer) */

@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'node:http';
 import { createServer as createTlsServer } from 'node:https';
-import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, chmodSync, watch, type FSWatcher } from 'node:fs';
+import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, chmodSync, unlinkSync, watch, type FSWatcher } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { resolve as pathResolve, join } from 'node:path';
@@ -23,18 +23,29 @@ import { getAllChannelStatuses } from '../channels/index.js';
 import { loginWhatsApp, logoutWhatsApp, isWhatsAppLinked } from '../channels/whatsapp/login.js';
 import { getDefaultAuthDir } from '../channels/whatsapp/session.js';
 import { validateTelegramToken } from '../channels/telegram/bot.js';
+import { insertEvent, queryEvents, cleanupOldEvents } from './event-log.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { setScheduler } from '../tools/index.js';
 import { loadGoals, saveGoals, type GoalTask } from '../tools/goals.js';
+import { loadResearch, saveResearch, readResearchContent, type ResearchItem } from '../tools/research.js';
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
-import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey } from '../providers/claude.js';
+import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, getActiveAuthMethod, isOAuthTokenExpired } from '../providers/claude.js';
 import { isCodexInstalled, hasCodexAuth } from '../providers/codex.js';
 import type { ProviderName } from '../config.js';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { classifyToolCall, cleanToolName, isToolAllowed, type Tier } from './tool-policy.js';
+import { AUTONOMOUS_SCHEDULE_ID, buildAutonomousCalendarItem, PULSE_INTERVALS, DEFAULT_PULSE_INTERVAL, pulseIntervalToRrule, rruleToPulseInterval } from '../autonomous.js';
 
 const DEFAULT_PORT = 18789;
 const DEFAULT_HOST = '127.0.0.1';
+
+function macNotify(title: string, body: string) {
+  try {
+    const t = title.replace(/"/g, '\\"');
+    const b = body.replace(/"/g, '\\"');
+    execSync(`osascript -e 'display notification "${b}" with title "${t}"'`, { stdio: 'ignore' });
+  } catch { /* ignore */ }
+}
 
 // ── Tool status display maps ──────────────────────────────────────────
 // Used to build the live status message shown on Telegram/WhatsApp while the agent works.
@@ -244,26 +255,115 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     console.log(`[gateway] auth token created at ${tokenPath}`);
   }
 
-  const clients = new Map<WebSocket, { authenticated: boolean }>();
+  type ClientState = {
+    authenticated: boolean;
+    subscriptions: Set<string>;
+    stale: Set<string>;
+  };
+  const clients = new Map<WebSocket, ClientState>();
+
+  // live session snapshots for instant hydration on subscribe
+  const sessionSnapshots = new Map<string, import('./types.js').SessionSnapshot>();
+
+  // stream event batching: accumulate agent.stream per client, flush every 16ms
+  const streamBatches = new Map<WebSocket, { events: string[]; timer: ReturnType<typeof setTimeout> | null }>();
+
+  function queueStreamEvent(ws: WebSocket, serialized: string): void {
+    let batch = streamBatches.get(ws);
+    if (!batch) {
+      batch = { events: [], timer: null };
+      streamBatches.set(ws, batch);
+    }
+    batch.events.push(serialized);
+
+    if (!batch.timer) {
+      batch.timer = setTimeout(() => {
+        if (batch!.events.length === 1) {
+          ws.send(batch!.events[0]);
+        } else {
+          ws.send(JSON.stringify({ event: 'agent.stream_batch', data: batch!.events.map(e => JSON.parse(e)) }));
+        }
+        batch!.events = [];
+        batch!.timer = null;
+      }, 16);
+    }
+  }
+
+  // backpressure recovery: periodically send snapshots to stale clients
+  const backpressureTimer = setInterval(() => {
+    for (const [ws, state] of clients) {
+      if (!state.stale.size) continue;
+      if (ws.bufferedAmount < 16384) {
+        for (const sk of state.stale) {
+          const snap = sessionSnapshots.get(sk);
+          if (snap) ws.send(JSON.stringify({ event: 'session.snapshot', data: snap }));
+        }
+        state.stale.clear();
+      }
+    }
+  }, 500);
+  backpressureTimer.unref?.();
+  const eventCleanupTimer = setInterval(() => cleanupOldEvents(), 5 * 60 * 1000);
+  eventCleanupTimer.unref?.();
 
   const broadcast = (event: WsEvent): void => {
+    const sk = (event.data as any)?.sessionKey as string | undefined;
+
+    // persist agent events to SQLite for cursor-based replay on reconnect
+    if (sk && typeof event.event === 'string' && event.event.startsWith('agent.') && event.event !== 'agent.error') {
+      event.seq = insertEvent(sk, event.event, JSON.stringify(event.data));
+    }
+
     const data = JSON.stringify(event);
     for (const [ws, state] of clients) {
-      if (ws.readyState === WebSocket.OPEN && state.authenticated) {
+      if (ws.readyState !== WebSocket.OPEN || !state.authenticated) continue;
+      // session-scoped events only go to subscribers; global events go to all
+      if (sk && !state.subscriptions.has(sk)) continue;
+      // backpressure: if client is falling behind on stream deltas, skip
+      if (sk && event.event === 'agent.stream' && ws.bufferedAmount > 65536) {
+        state.stale.add(sk);
+        continue;
+      }
+      // batch agent.stream events, send everything else immediately
+      if (event.event === 'agent.stream') {
+        queueStreamEvent(ws, data);
+      } else {
         ws.send(data);
       }
     }
-    // buffer agent events for replay on reconnect (cap at 5000 to bound memory)
-    const sk = (event.data as any)?.sessionKey as string | undefined;
-    if (sk && typeof event.event === 'string' && event.event.startsWith('agent.') && event.event !== 'agent.error') {
-      let buf = streamBuffers.get(sk);
-      if (!buf) { buf = []; streamBuffers.set(sk, buf); }
-      if (buf.length < 5000) buf.push(data);
-    }
   };
 
+  function broadcastStatus(sessionKey: string, status: string, toolName?: string, toolDetail?: string) {
+    broadcast({
+      event: 'agent.status',
+      data: { sessionKey, status, toolName, toolDetail, timestamp: Date.now() },
+    });
+  }
+
   // file system watcher manager
-  const fileWatchers = new Map<string, { watcher: FSWatcher; refCount: number }>();
+  type FileWatchEntry = {
+    watcher: FSWatcher;
+    refCount: number;
+    debounceTimer?: ReturnType<typeof setTimeout>;
+    pendingEvent?: { eventType: string; filename: string | null };
+  };
+  const fileWatchers = new Map<string, FileWatchEntry>();
+  const watchedPathsByClient = new Map<WebSocket, Set<string>>();
+  const FS_WATCH_DEBOUNCE_MS = 250;
+  const DEBUG_FS_WATCH = process.env.DORABOT_DEBUG_FS_WATCH === '1';
+
+  const emitFsWatchEvent = (resolved: string) => {
+    const entry = fileWatchers.get(resolved);
+    if (!entry) return;
+    entry.debounceTimer = undefined;
+    const pending = entry.pendingEvent;
+    entry.pendingEvent = undefined;
+    if (!pending) return;
+    broadcast({
+      event: 'fs.change',
+      data: { path: resolved, eventType: pending.eventType, filename: pending.filename, timestamp: Date.now() },
+    });
+  };
 
   const startWatching = (path: string) => {
     const resolved = resolve(path);
@@ -276,11 +376,16 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
     try {
       const watcher = watch(resolved, { recursive: false }, (eventType, filename) => {
-        console.log(`[gateway] fs.watch: ${eventType} in ${resolved}${filename ? '/' + filename : ''}`);
-        broadcast({
-          event: 'fs.change',
-          data: { path: resolved, eventType, filename: filename || null, timestamp: Date.now() },
-        });
+        const entry = fileWatchers.get(resolved);
+        if (!entry) return;
+        const filenameStr = filename ? String(filename) : null;
+        if (DEBUG_FS_WATCH) {
+          console.log(`[gateway] fs.watch: ${eventType} in ${resolved}${filenameStr ? '/' + filenameStr : ''}`);
+        }
+        entry.pendingEvent = { eventType, filename: filenameStr };
+        if (entry.debounceTimer) return;
+        entry.debounceTimer = setTimeout(() => emitFsWatchEvent(resolved), FS_WATCH_DEBOUNCE_MS);
+        entry.debounceTimer.unref?.();
       });
 
       fileWatchers.set(resolved, { watcher, refCount: 1 });
@@ -299,6 +404,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     existing.refCount--;
 
     if (existing.refCount <= 0) {
+      if (existing.debounceTimer) clearTimeout(existing.debounceTimer);
       existing.watcher.close();
       fileWatchers.delete(resolved);
       console.log(`[gateway] stopped watching: ${resolved}`);
@@ -350,8 +456,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const toolLogs = new Map<string, { completed: ToolEntry[]; current: { name: string; inputJson: string; detail: string } | null; lastEditAt: number }>();
   // active RunHandles for message injection into running agent sessions
   const runHandles = new Map<string, RunHandle>();
-  // buffered events per session for replay on reconnect (cleared each turn)
-  const streamBuffers = new Map<string, string[]>();
+  // clean up stale stream events from previous crashes
+  cleanupOldEvents();
 
   // per-session channel context so the stream loop can manage status messages
   type ChannelRunContext = {
@@ -372,6 +478,18 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
   // guard against overlapping WhatsApp login attempts
   let whatsappLoginInProgress = false;
+
+  // pending OAuth re-auth: when a 401 hits mid-run, we send the OAuth URL to the
+  // user's channel and wait for them to paste the code back
+  type PendingReauth = {
+    prompt: string;
+    sessionKey: string;
+    source: string;
+    channel: string;
+    chatId: string;
+    messageMetadata?: import('../session/manager.js').MessageMetadata;
+  };
+  const pendingReauths = new Map<string, PendingReauth>(); // keyed by chatId
 
   // broadcast session.update so sidebar can show new/updated sessions + running state
   function broadcastSessionUpdate(sessionKey: string) {
@@ -420,6 +538,56 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     })();
   }
 
+  function isAuthError(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err);
+    return /authentication_error|401|OAuth token has expired|Invalid bearer token/i.test(msg);
+  }
+
+  // OAuth codes are long base64/hex strings, optionally with #state suffix
+  function looksLikeOAuthCode(text: string): boolean {
+    return /^[A-Za-z0-9_\-+=/.]{20,}(#[A-Za-z0-9_\-+=/.]+)?$/.test(text.trim());
+  }
+
+  async function startReauthFlow(params: {
+    prompt: string; sessionKey: string; source: string;
+    channel?: string; chatId?: string;
+    messageMetadata?: import('../session/manager.js').MessageMetadata;
+  }): Promise<void> {
+    const provider = await getProviderByName('claude');
+    if (!provider.loginWithOAuth) return;
+
+    const { authUrl } = await provider.loginWithOAuth();
+
+    // broadcast to desktop regardless — it can show an inline re-auth UI
+    broadcast({ event: 'auth.reauth_required', data: {
+      channel: params.channel, chatId: params.chatId, authUrl,
+    } });
+
+    // if this came from a channel, send the link there and save context for replay
+    const channel = params.channel;
+    const chatId = params.chatId || params.messageMetadata?.chatId;
+    if (channel && chatId) {
+      const handler = getChannelHandler(channel);
+      if (handler) {
+        pendingReauths.set(chatId, {
+          prompt: params.prompt,
+          sessionKey: params.sessionKey,
+          source: params.source,
+          channel,
+          chatId,
+          messageMetadata: params.messageMetadata,
+        });
+        await handler.send(chatId, [
+          'Auth token expired. Please re-authenticate:',
+          '',
+          authUrl,
+          '',
+          'Open the link, click Authorize, then paste the code here.',
+        ].join('\n'));
+      }
+    }
+  }
+
   function clearTypingInterval(ctx: ChannelRunContext) {
     if (ctx.typingInterval) {
       clearInterval(ctx.typingInterval);
@@ -431,6 +599,48 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   async function processChannelMessage(msg: InboundMessage, batchedBodies?: string[]) {
     ownerChatIds.set(msg.channel, msg.chatId);
     persistOwnerChatIds();
+
+    // intercept OAuth re-auth code if we're waiting for one
+    const pendingReauth = pendingReauths.get(msg.chatId);
+    if (pendingReauth) {
+      const code = (msg.body || '').trim();
+      // if it doesn't look like an OAuth code, treat as a normal message
+      // (user might be chatting while re-auth is pending)
+      if (code && looksLikeOAuthCode(code)) {
+        const handler = getChannelHandler(msg.channel);
+        try {
+          const provider = await getProviderByName('claude');
+          if (!provider.completeOAuthLogin) throw new Error('provider missing completeOAuthLogin');
+          const status = await provider.completeOAuthLogin(code);
+          if (!status.authenticated) {
+            // keep pendingReauth so user can retry
+            if (handler) await handler.send(msg.chatId, `re-auth failed: ${status.error || 'unknown'}. paste the code again or send /cancel to skip.`);
+            return;
+          }
+          pendingReauths.delete(msg.chatId);
+          broadcast({ event: 'provider.auth_complete', data: { provider: 'claude', status } });
+          if (handler) await handler.send(msg.chatId, 'authenticated, retrying your message...');
+          await processChannelMessage({
+            ...msg,
+            body: pendingReauth.messageMetadata?.body || msg.body,
+            channel: pendingReauth.channel,
+            chatId: pendingReauth.chatId,
+          });
+        } catch (err) {
+          console.error('[gateway] re-auth completion failed:', err);
+          if (handler) await handler.send(msg.chatId, `re-auth failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        return;
+      }
+      // "/cancel" clears the pending re-auth
+      if (code.toLowerCase() === '/cancel') {
+        pendingReauths.delete(msg.chatId);
+        const handler = getChannelHandler(msg.channel);
+        if (handler) await handler.send(msg.chatId, 'Re-auth cancelled.');
+        return;
+      }
+      // otherwise fall through to normal message processing
+    }
     const session = sessionRegistry.getOrCreate({
       channel: msg.channel,
       chatType: msg.chatType,
@@ -644,17 +854,101 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     },
   });
 
+  // backfill FTS search index for memory_search tool (runs once, skips if already done)
+  try {
+    const { backfillFtsIndex } = await import('../db.js');
+    backfillFtsIndex();
+  } catch (err) {
+    console.error('[gateway] FTS backfill failed:', err);
+  }
+
   // calendar scheduler
   let scheduler: SchedulerRunner | null = null;
   if (config.calendar?.enabled !== false && config.cron?.enabled !== false) {
     migrateCronToCalendar();
     scheduler = startScheduler({
       config,
+      getContext: () => ({
+        connectedChannels: getAllChannelStatuses()
+          .filter(s => s.connected && ownerChatIds.has(s.channel))
+          .map(s => ({ channel: s.channel, chatId: ownerChatIds.get(s.channel)! })),
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      }),
+      onItemStart: (item) => {
+        if (item.id === AUTONOMOUS_SCHEDULE_ID) {
+          macNotify('Dora', 'Checking in... 👀');
+          broadcast({ event: 'pulse:started', data: { timestamp: Date.now() } });
+        } else {
+          macNotify('Dora', `Working on "${item.summary}"`);
+        }
+      },
       onItemRun: (item, result) => {
+        if (item.id === AUTONOMOUS_SCHEDULE_ID) {
+          if (result.messaged) {
+            macNotify('Dora', 'Sent you a message 👀');
+          } else {
+            macNotify('Dora', result.status === 'ran' ? 'All caught up ✓' : 'Something went wrong, check logs');
+          }
+        } else {
+          macNotify('Dora', result.status === 'ran' ? `Done with "${item.summary}" ✓` : `"${item.summary}" failed`);
+        }
         broadcast({ event: 'calendar.result', data: { item: item.id, summary: item.summary, ...result, timestamp: Date.now() } });
+        if (item.id === AUTONOMOUS_SCHEDULE_ID) {
+          broadcast({ event: 'pulse:completed', data: { timestamp: Date.now(), ...result } });
+        }
+      },
+      runItem: async (item, _cfg, ctx) => {
+        const connectedOwners = ctx.connectedChannels || [];
+        const preferredOwner = connectedOwners.find(c => c.channel === 'telegram')
+          || connectedOwners.find(c => c.channel === 'whatsapp')
+          || connectedOwners[0];
+
+        const useOwnerChannel = item.session !== 'isolated' && !!preferredOwner;
+        const runChannel = useOwnerChannel ? preferredOwner!.channel : undefined;
+        const runChatId = useOwnerChannel ? preferredOwner!.chatId : undefined;
+
+        const session = sessionRegistry.getOrCreate({
+          channel: 'calendar',
+          chatId: item.id,
+          chatType: 'dm',
+        });
+        fileSessionManager.setMetadata(session.sessionId, {
+          channel: 'calendar',
+          chatId: item.id,
+          chatType: 'dm',
+          senderName: item.summary,
+        });
+        sessionRegistry.incrementMessages(session.key);
+        broadcastSessionUpdate(session.key);
+
+        const result = await handleAgentRun({
+          prompt: item.message,
+          sessionKey: session.key,
+          source: `calendar/${item.id}`,
+          channel: runChannel,
+          messageMetadata: runChannel && runChatId ? {
+            channel: runChannel,
+            chatId: runChatId,
+            chatType: 'dm',
+            senderName: item.summary,
+            body: item.message,
+          } : undefined,
+          extraContext: ctx.timezone ? `User timezone: ${ctx.timezone}` : undefined,
+        });
+        return result || { sessionId: '', result: '', messages: [], usage: { inputTokens: 0, outputTokens: 0, totalCostUsd: 0 }, durationMs: 0, usedMessageTool: false };
       },
     });
     setScheduler(scheduler);
+
+    // auto-create autonomous schedule if mode is autonomous
+    if (config.autonomy === 'autonomous') {
+      const existing = scheduler.listItems().find(i => i.id === AUTONOMOUS_SCHEDULE_ID);
+      if (!existing) {
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        scheduler.addItem({ ...buildAutonomousCalendarItem(tz), id: AUTONOMOUS_SCHEDULE_ID });
+        console.log('[gateway] created autonomy pulse schedule on startup');
+      }
+    }
   }
 
   const context: GatewayContext = {
@@ -685,15 +979,24 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     timeout: NodeJS.Timeout | null;
   }>();
 
-  async function waitForApproval(requestId: string, toolName: string, input: Record<string, unknown>, timeoutMs?: number): Promise<{ approved: boolean; reason?: string; modifiedInput?: Record<string, unknown> }> {
+  async function waitForApproval(requestId: string, toolName: string, input: Record<string, unknown>, timeoutMs?: number, sessionKey?: string): Promise<{ approved: boolean; reason?: string; modifiedInput?: Record<string, unknown> }> {
+    // persist to snapshot
+    if (sessionKey) {
+      const snap = sessionSnapshots.get(sessionKey);
+      if (snap) { snap.pendingApproval = { requestId, toolName, input, timestamp: Date.now() }; snap.updatedAt = Date.now(); }
+    }
     return new Promise((resolve) => {
       const timer = timeoutMs ? setTimeout(() => {
         pendingApprovals.delete(requestId);
+        if (sessionKey) { const snap = sessionSnapshots.get(sessionKey); if (snap) snap.pendingApproval = null; }
         resolve({ approved: false, reason: 'approval timeout' });
       }, timeoutMs) : null;
 
       pendingApprovals.set(requestId, { resolve, toolName, input, timeout: timer });
-    });
+    }).then((decision) => {
+      if (sessionKey) { const snap = sessionSnapshots.get(sessionKey); if (snap) snap.pendingApproval = null; }
+      return decision;
+    }) as Promise<{ approved: boolean; reason?: string; modifiedInput?: Record<string, unknown> }>;
   }
 
   function getChannelToolPolicy(channel?: string): ToolPolicyConfig | undefined {
@@ -786,12 +1089,18 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         event: 'agent.ask_user',
         data: { requestId, questions, sessionKey: runSessionKey, timestamp: Date.now() },
       });
+      // persist to snapshot
+      if (runSessionKey) {
+        const snap = sessionSnapshots.get(runSessionKey);
+        if (snap) { snap.pendingQuestion = { requestId, questions, timestamp: Date.now() }; snap.updatedAt = Date.now(); }
+      }
 
       const answers = await new Promise<Record<string, string>>((resolveQ, rejectQ) => {
         pendingQuestions.set(requestId, { resolve: resolveQ, reject: rejectQ });
         setTimeout(() => {
           if (pendingQuestions.has(requestId)) {
             pendingQuestions.delete(requestId);
+            if (runSessionKey) { const snap = sessionSnapshots.get(runSessionKey); if (snap) snap.pendingQuestion = null; }
             broadcast({
               event: 'agent.question_dismissed',
               data: { requestId, sessionKey: runSessionKey, reason: 'timeout' },
@@ -800,6 +1109,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
         }, 300000);
       });
+      if (runSessionKey) { const snap = sessionSnapshots.get(runSessionKey); if (snap) snap.pendingQuestion = null; }
 
       return {
         behavior: 'allow' as const,
@@ -847,7 +1157,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         data: { requestId, toolName: cleanName, input, tier: 'require-approval', timestamp: Date.now() },
       });
       channelManager.sendApprovalRequest({ requestId, toolName: cleanName, input, chatId: runChatId }, runChannel).catch(() => {});
-      const decision = await waitForApproval(requestId, cleanName, input);
+      const decision = await waitForApproval(requestId, cleanName, input, undefined, runSessionKey);
       if (decision.approved) {
         return { behavior: 'allow' as const, updatedInput: decision.modifiedInput || input };
       }
@@ -871,7 +1181,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       });
       channelManager.sendApprovalRequest({ requestId, toolName: cleanName, input, chatId: runChatId }, runChannel).catch(() => {});
 
-      const decision = await waitForApproval(requestId, cleanName, input);
+      const decision = await waitForApproval(requestId, cleanName, input, undefined, runSessionKey);
 
       if (decision.approved) {
         return { behavior: 'allow' as const, updatedInput: decision.modifiedInput || input };
@@ -900,6 +1210,19 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     const { prompt, sessionKey, source, channel, extraContext, messageMetadata } = params;
     console.log(`[gateway] agent run: source=${source} sessionKey=${sessionKey} prompt="${prompt.slice(0, 80)}..."`);
 
+    // pre-run auth check: if dorabot_oauth token is expired, don't waste a run
+    const authMethod = getActiveAuthMethod();
+    if (authMethod === 'dorabot_oauth' && isOAuthTokenExpired()) {
+      console.log(`[gateway] token expired pre-run, triggering re-auth for ${source}`);
+      await startReauthFlow({ prompt, sessionKey, source, channel, chatId: messageMetadata?.chatId, messageMetadata }).catch(() => {});
+      return null;
+    }
+    if (authMethod === 'none') {
+      console.log(`[gateway] no auth configured, skipping run for ${source}`);
+      broadcast({ event: 'agent.error', data: { source, sessionKey, error: 'Not authenticated', timestamp: Date.now() } });
+      return null;
+    }
+
     const prev = runQueues.get(sessionKey) || Promise.resolve();
     const hasPrev = runQueues.has(sessionKey);
     console.log(`[handleAgentRun] sessionKey=${sessionKey} hasPrevInQueue=${hasPrev}`);
@@ -909,6 +1232,14 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       console.log(`[handleAgentRun] prev resolved, starting run for ${sessionKey}`);
       sessionRegistry.setActiveRun(sessionKey, true);
       if (channel) activeRunChannels.set(sessionKey, channel);
+      // init snapshot
+      sessionSnapshots.set(sessionKey, {
+        sessionKey, status: 'thinking', text: '',
+        currentTool: null, completedTools: [],
+        pendingApproval: null, pendingQuestion: null,
+        updatedAt: Date.now(),
+      });
+      broadcastStatus(sessionKey, 'thinking');
       broadcast({ event: 'status.update', data: { activeRun: true, source, sessionKey } });
       broadcastSessionUpdate(sessionKey);
       broadcast({ event: 'agent.user_message', data: { source, sessionKey, prompt, timestamp: Date.now() } });
@@ -991,6 +1322,25 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               data: { source, sessionKey, event, parentToolUseId: parentId, timestamp: Date.now() },
             });
 
+            // update snapshot on stream events
+            const snap = sessionSnapshots.get(sessionKey);
+            if (snap && !parentId) {
+              if (evtType === 'content_block_start') {
+                const cb2 = event.content_block as Record<string, unknown>;
+                if (cb2?.type === 'text') {
+                  snap.status = 'responding';
+                  snap.updatedAt = Date.now();
+                  broadcastStatus(sessionKey, 'responding');
+                }
+              } else if (evtType === 'content_block_delta') {
+                const delta = event.delta as Record<string, unknown>;
+                if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
+                  snap.text += delta.text as string;
+                  snap.updatedAt = Date.now();
+                }
+              }
+            }
+
             if (event.type === 'content_block_start') {
               const cb = event.content_block as Record<string, unknown>;
               if (cb?.type === 'tool_use') {
@@ -1002,6 +1352,14 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                   event: 'agent.tool_use',
                   data: { source, sessionKey, tool: toolName, timestamp: Date.now() },
                 });
+                // snapshot: tool_use start
+                if (snap) {
+                  if (snap.currentTool) snap.completedTools.push({ name: snap.currentTool.name, detail: snap.currentTool.detail });
+                  snap.currentTool = { name: toolName, inputJson: '', detail: '' };
+                  snap.status = 'tool_use';
+                  snap.updatedAt = Date.now();
+                  broadcastStatus(sessionKey, 'tool_use', toolName);
+                }
 
                 // new turn on channel — create fresh status message if none exists
                 const ctx = channelRunContexts.get(sessionKey);
@@ -1046,9 +1404,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             if (event.type === 'content_block_delta') {
               const delta = event.delta as Record<string, unknown>;
               if (delta?.type === 'input_json_delta') {
+                const partial = String(delta.partial_json || '');
                 const tl = toolLogs.get(sessionKey);
                 if (tl?.current) {
-                  tl.current.inputJson += String(delta.partial_json || '');
+                  tl.current.inputJson += partial;
+                }
+                if (snap?.currentTool) {
+                  snap.currentTool.inputJson += partial;
                 }
               }
             }
@@ -1059,7 +1421,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               if (tl?.current && tl.current.inputJson) {
                 try {
                   const input = JSON.parse(tl.current.inputJson);
-                  tl.current.detail = extractToolDetail(tl.current.name, input);
+                  const detail = extractToolDetail(tl.current.name, input);
+                  tl.current.detail = detail;
+                  if (snap?.currentTool) {
+                    snap.currentTool.detail = detail;
+                    snap.updatedAt = Date.now();
+                    broadcastStatus(sessionKey, 'tool_use', snap.currentTool.name, detail);
+                  }
                 } catch {}
                 // force edit — detail is worth showing immediately
                 const sm = statusMessages.get(sessionKey);
@@ -1161,6 +1529,15 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                       timestamp: Date.now(),
                     },
                   });
+                  // snapshot: tool_result → thinking
+                  const snap2 = sessionSnapshots.get(sessionKey);
+                  if (snap2 && !parentId) {
+                    if (snap2.currentTool) snap2.completedTools.push({ name: snap2.currentTool.name, detail: snap2.currentTool.detail });
+                    snap2.currentTool = null;
+                    snap2.status = 'thinking';
+                    snap2.updatedAt = Date.now();
+                    broadcastStatus(sessionKey, 'thinking');
+                  }
                 }
               }
             }
@@ -1218,6 +1595,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               const allTools = [...tl.completed.map(t => t.name), tl.current?.name].filter(Boolean);
               if (allTools.some(t => t?.startsWith('goals_') || t?.startsWith('mcp__dorabot-tools__goals_'))) {
                 broadcast({ event: 'goals.update', data: {} });
+                macNotify('Dora', 'Goals updated');
+              }
+              if (allTools.some(t => t?.startsWith('research_') || t?.startsWith('mcp__dorabot-tools__research_'))) {
+                broadcast({ event: 'research.update', data: {} });
+                macNotify('Dora', 'Research updated');
               }
             }
 
@@ -1238,14 +1620,17 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
             // per-turn: mark idle so sidebar spinner stops
             sessionRegistry.setActiveRun(sessionKey, false);
+            broadcastStatus(sessionKey, 'idle');
             broadcast({ event: 'status.update', data: { activeRun: false, source, sessionKey } });
             broadcastSessionUpdate(sessionKey);
+
+            // clear snapshot on turn end
+            sessionSnapshots.delete(sessionKey);
 
             // reset for next turn (persistent sessions get multiple result events)
             usedMessageTool = false;
             agentText = '';
             toolLogs.set(sessionKey, { completed: [], current: null, lastEditAt: 0 });
-            streamBuffers.delete(sessionKey);
           }
         }
 
@@ -1283,6 +1668,10 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         console.log(`[gateway] agent run ended: source=${source} result="${result.result.slice(0, 100)}..." cost=$${result.usage.totalCostUsd?.toFixed(4) || '?'}`);
       } catch (err) {
         console.error(`[gateway] agent error: source=${source}`, err);
+        if (isAuthError(err)) {
+          console.log(`[gateway] auth error for ${source}, starting re-auth flow`);
+          await startReauthFlow({ prompt, sessionKey, source, channel, chatId: messageMetadata?.chatId, messageMetadata }).catch(() => {});
+        }
         broadcast({
           event: 'agent.error',
           data: { source, sessionKey, error: err instanceof Error ? err.message : String(err), timestamp: Date.now() },
@@ -1303,8 +1692,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         }
         statusMessages.delete(sessionKey);
         toolLogs.delete(sessionKey);
-        streamBuffers.delete(sessionKey);
+        sessionSnapshots.delete(sessionKey);
         sessionRegistry.setActiveRun(sessionKey, false);
+        broadcastStatus(sessionKey, 'idle');
         broadcast({ event: 'status.update', data: { activeRun: false, source, sessionKey } });
         broadcastSessionUpdate(sessionKey);
       }
@@ -1316,7 +1706,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   }
 
   // rpc handler
-  async function handleRpc(msg: WsMessage): Promise<WsResponse> {
+  async function handleRpc(msg: WsMessage, clientWs?: WebSocket): Promise<WsResponse> {
     const { method, params, id } = msg;
 
     try {
@@ -1335,6 +1725,37 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               } : null,
             },
           };
+        }
+
+        case 'sessions.subscribe': {
+          const keys = params?.sessionKeys as string[];
+          if (!Array.isArray(keys)) return { id, error: 'sessionKeys required' };
+          const lastSeq = typeof params?.lastSeq === 'number' ? params.lastSeq : 0;
+          const state = clientWs ? clients.get(clientWs) : undefined;
+          if (state) keys.forEach(k => state.subscriptions.add(k));
+          // replay persisted events for exact continuity before snapshot/live stream
+          if (clientWs) {
+            const events = queryEvents(keys, lastSeq);
+            for (const row of events) {
+              clientWs.send(JSON.stringify({ event: row.event_type, data: JSON.parse(row.data), seq: row.seq }));
+            }
+          }
+          // send snapshots for any active sessions
+          for (const sk of keys) {
+            const snap = sessionSnapshots.get(sk);
+            if (snap && clientWs) {
+              clientWs.send(JSON.stringify({ event: 'session.snapshot', data: snap }));
+            }
+          }
+          return { id, result: { subscribed: keys } };
+        }
+
+        case 'sessions.unsubscribe': {
+          const keys = params?.sessionKeys as string[];
+          if (!Array.isArray(keys)) return { id, error: 'sessionKeys required' };
+          const state = clientWs ? clients.get(clientWs) : undefined;
+          if (state) keys.forEach(k => state.subscriptions.delete(k));
+          return { id, result: { unsubscribed: keys } };
         }
 
         case 'chat.send': {
@@ -1395,6 +1816,50 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           ac.abort();
           console.log(`[gateway] agent aborted: sessionKey=${sk}`);
           return { id, result: { aborted: true, sessionKey: sk } };
+        }
+
+        case 'agent.interrupt': {
+          const sk = params?.sessionKey as string;
+          if (!sk) return { id, error: 'sessionKey required' };
+          const h = runHandles.get(sk);
+          if (!h?.active) return { id, error: 'no active run for that session' };
+          if (!h.interrupt) return { id, error: 'interrupt not supported by current provider' };
+          await h.interrupt();
+          return { id, result: { interrupted: true, sessionKey: sk } };
+        }
+
+        case 'agent.setModel': {
+          const sk = params?.sessionKey as string;
+          const model = params?.model as string;
+          if (!sk) return { id, error: 'sessionKey required' };
+          if (!model) return { id, error: 'model required' };
+          const h = runHandles.get(sk);
+          if (!h?.active) return { id, error: 'no active run for that session' };
+          if (!h.setModel) return { id, error: 'setModel not supported by current provider' };
+          await h.setModel(model);
+          return { id, result: { model, sessionKey: sk } };
+        }
+
+        case 'agent.stopTask': {
+          const sk = params?.sessionKey as string;
+          const taskId = params?.taskId as string;
+          if (!sk) return { id, error: 'sessionKey required' };
+          if (!taskId) return { id, error: 'taskId required' };
+          const h = runHandles.get(sk);
+          if (!h?.active) return { id, error: 'no active run for that session' };
+          if (!h.stopTask) return { id, error: 'stopTask not supported by current provider' };
+          await h.stopTask(taskId);
+          return { id, result: { stopped: true, taskId, sessionKey: sk } };
+        }
+
+        case 'agent.mcpStatus': {
+          const sk = params?.sessionKey as string;
+          if (!sk) return { id, error: 'sessionKey required' };
+          const h = runHandles.get(sk);
+          if (!h?.active) return { id, error: 'no active run for that session' };
+          if (!h.mcpServerStatus) return { id, error: 'mcpServerStatus not supported by current provider' };
+          const status = await h.mcpServerStatus();
+          return { id, result: status };
         }
 
         case 'chat.answerQuestion': {
@@ -1461,8 +1926,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const meta = fileSessionManager.getMetadata(sessionId);
           if (!meta) return { id, error: 'session metadata not found' };
 
-          const ch = meta.channel || (params?.channel as string) || 'desktop';
-          const cid = meta.chatId || (params?.chatId as string) || 'default';
+          const ch = (params?.channel as string) || meta.channel || 'desktop';
+          const cid = (params?.chatId as string) || meta.chatId || sessionId;
           const ct = meta.chatType || 'dm';
           const key = sessionRegistry.makeKey({ channel: ch, chatId: cid, chatType: ct });
 
@@ -1470,9 +1935,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (existing?.activeRun) return { id, error: 'cannot resume while agent is running' };
 
           sessionRegistry.remove(key);
-          const entry = sessionRegistry.getOrCreate({ channel: ch, chatId: cid, chatType: ct, sessionId });
+          sessionRegistry.getOrCreate({ channel: ch, chatId: cid, chatType: ct, sessionId });
           if (meta.sdkSessionId) {
             sessionRegistry.setSdkSessionId(key, meta.sdkSessionId);
+          }
+          // backfill chatId into metadata so future resumes don't fallback
+          if (!meta.chatId && cid !== 'default') {
+            fileSessionManager.setMetadata(sessionId, { channel: ch, chatId: cid, chatType: ct });
           }
 
           return { id, result: { resumed: true, key, sessionId, sdkSessionId: meta.sdkSessionId || null } };
@@ -1675,8 +2144,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!scheduler) return { id, error: 'scheduler not enabled' };
           const itemId = params?.id as string;
           if (!itemId) return { id, error: 'id required' };
-          const runResult = await scheduler.runItemNow(itemId);
-          return { id, result: runResult };
+          // fire and forget — agent runs can take minutes, don't block the RPC
+          scheduler.runItemNow(itemId).catch(err => {
+            console.error(`[gateway] calendar run failed for ${itemId}:`, err);
+          });
+          return { id, result: { status: 'started' } };
         }
 
         case 'calendar.update': {
@@ -1693,6 +2165,29 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!scheduler) return { id, error: 'scheduler not enabled' };
           const icsString = scheduler.exportIcs();
           return { id, result: { ics: icsString } };
+        }
+
+        case 'pulse.status': {
+          const pulseItem = scheduler?.listItems().find(i => i.id === AUTONOMOUS_SCHEDULE_ID);
+          return {
+            id,
+            result: {
+              enabled: !!pulseItem?.enabled,
+              interval: pulseItem ? rruleToPulseInterval(pulseItem.rrule || '') : DEFAULT_PULSE_INTERVAL,
+              lastRunAt: pulseItem?.lastRunAt || null,
+              nextRunAt: pulseItem?.nextRunAt || null,
+            },
+          };
+        }
+
+        case 'pulse.setInterval': {
+          if (!scheduler) return { id, error: 'scheduler not enabled' };
+          const interval = params?.interval as string;
+          if (!PULSE_INTERVALS.includes(interval)) return { id, error: `interval must be one of: ${PULSE_INTERVALS.join(', ')}` };
+          const item = scheduler.listItems().find(i => i.id === AUTONOMOUS_SCHEDULE_ID);
+          if (!item) return { id, error: 'pulse not enabled' };
+          const updated = scheduler.updateItem(AUTONOMOUS_SCHEDULE_ID, { rrule: pulseIntervalToRrule(interval) });
+          return { id, result: updated };
         }
 
         case 'goals.list': {
@@ -1722,6 +2217,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           goals.tasks.push(task);
           saveGoals(goals);
           broadcast({ event: 'goals.update', data: {} });
+          macNotify('Dora', `Goal added: ${task.title}`);
           return { id, result: task };
         }
 
@@ -1742,6 +2238,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (task.status === 'done') task.completedAt = now;
           saveGoals(goals);
           broadcast({ event: 'goals.update', data: {} });
+          macNotify('Dora', `Goal updated: ${task.title}`);
           return { id, result: task };
         }
 
@@ -1754,6 +2251,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (goals.tasks.length === before) return { id, error: 'task not found' };
           saveGoals(goals);
           broadcast({ event: 'goals.update', data: {} });
+          macNotify('Dora', `Goal deleted: #${taskId}`);
           return { id, result: { deleted: true } };
         }
 
@@ -1769,7 +2267,58 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (status === 'done') task.completedAt = task.updatedAt;
           saveGoals(goals);
           broadcast({ event: 'goals.update', data: {} });
+          macNotify('Dora', `Goal moved: ${task.title} → ${status}`);
           return { id, result: task };
+        }
+
+        // ── Research ──
+
+        case 'research.list': {
+          const research = loadResearch();
+          return { id, result: research.items };
+        }
+
+        case 'research.read': {
+          const itemId = params?.id as string;
+          if (!itemId) return { id, error: 'id required' };
+          const research = loadResearch();
+          const item = research.items.find(i => i.id === itemId);
+          if (!item) return { id, error: 'item not found' };
+          const content = readResearchContent(item.filePath);
+          return { id, result: { ...item, content } };
+        }
+
+        case 'research.update': {
+          const itemId = params?.id as string;
+          if (!itemId) return { id, error: 'id required' };
+          const research = loadResearch();
+          const item = research.items.find(i => i.id === itemId);
+          if (!item) return { id, error: 'item not found' };
+          if (params?.status !== undefined) item.status = params.status as ResearchItem['status'];
+          if (params?.title !== undefined) item.title = params.title as string;
+          if (params?.topic !== undefined) item.topic = params.topic as string;
+          if (params?.sources !== undefined) item.sources = params.sources as string[];
+          if (params?.tags !== undefined) item.tags = params.tags as string[];
+          item.updatedAt = new Date().toISOString();
+          saveResearch(research);
+          broadcast({ event: 'research.update', data: {} });
+          macNotify('Dora', `Research updated: ${item.title}`);
+          return { id, result: item };
+        }
+
+        case 'research.delete': {
+          const itemId = params?.id as string;
+          if (!itemId) return { id, error: 'id required' };
+          const research = loadResearch();
+          const deleted = research.items.find(i => i.id === itemId);
+          if (!deleted) return { id, error: 'item not found' };
+          research.items = research.items.filter(i => i.id !== itemId);
+          saveResearch(research);
+          // clean up file
+          try { if (existsSync(deleted.filePath)) unlinkSync(deleted.filePath); } catch {}
+          broadcast({ event: 'research.update', data: {} });
+          macNotify('Dora', `Research deleted: ${deleted.title}`);
+          return { id, result: { deleted: true } };
         }
 
         case 'skills.list': {
@@ -1904,6 +2453,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           return { id, result: { provider: name } };
         }
 
+        case 'provider.auth.method': {
+          return { id, result: {
+            method: getActiveAuthMethod(),
+            expired: getActiveAuthMethod() === 'dorabot_oauth' ? isOAuthTokenExpired() : false,
+          } };
+        }
+
         case 'provider.auth.status': {
           try {
             const providerName = (params?.provider as string) || config.provider.name;
@@ -1990,7 +2546,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
 
           if (key === 'permissionMode' && typeof value === 'string') {
-            const valid = ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk'];
+            const valid = ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'delegate'];
             if (!valid.includes(value)) return { id, error: `permissionMode must be one of: ${valid.join(', ')}` };
             config.permissionMode = value as any;
             saveConfig(config);
@@ -2008,10 +2564,45 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             return { id, result: { key, value } };
           }
 
+          if (key === 'autonomy' && typeof value === 'string') {
+            const valid = ['supervised', 'autonomous'];
+            if (!valid.includes(value)) return { id, error: `autonomy must be one of: ${valid.join(', ')}` };
+            config.autonomy = value as any;
+
+            // sync permissionMode to match
+            if (value === 'autonomous') {
+              config.permissionMode = 'bypassPermissions';
+              if (!config.security) config.security = {};
+              config.security.approvalMode = 'autonomous';
+            } else {
+              config.permissionMode = 'default';
+              if (!config.security) config.security = {};
+              config.security.approvalMode = 'approve-sensitive';
+            }
+
+            // manage autonomous schedule
+            if (scheduler) {
+              const existing = scheduler.listItems().find(i => i.id === AUTONOMOUS_SCHEDULE_ID);
+              if (value === 'autonomous' && !existing) {
+                const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                const item = buildAutonomousCalendarItem(tz);
+                scheduler.addItem({ ...item, id: AUTONOMOUS_SCHEDULE_ID });
+                console.log('[gateway] created autonomy pulse schedule');
+              } else if (value === 'supervised' && existing) {
+                scheduler.removeItem(AUTONOMOUS_SCHEDULE_ID);
+                console.log('[gateway] removed autonomy pulse schedule');
+              }
+            }
+
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
           // provider config keys
           if (key === 'provider.name' && typeof value === 'string') {
-            if (!['claude', 'codex'].includes(value)) {
-              return { id, error: 'provider.name must be "claude" or "codex"' };
+            if (!['claude', 'codex', 'minimax'].includes(value)) {
+              return { id, error: 'provider.name must be "claude", "codex", or "minimax"' };
             }
             config.provider.name = value as ProviderName;
             saveConfig(config);
@@ -2025,6 +2616,35 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               return { id, error: `reasoningEffort must be one of: ${valid.filter(Boolean).join(', ')} (or null to clear)` };
             }
             config.reasoningEffort = value as any;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          if (key === 'thinking') {
+            // value: 'adaptive' | 'disabled' | null | { type: 'enabled', budgetTokens: number }
+            if (value === null || value === undefined) {
+              config.thinking = undefined;
+            } else if (value === 'adaptive' || value === 'disabled') {
+              config.thinking = value;
+            } else if (typeof value === 'object' && (value as any).type === 'enabled' && typeof (value as any).budgetTokens === 'number') {
+              config.thinking = value as any;
+            } else {
+              return { id, error: 'thinking must be "adaptive", "disabled", null, or { type: "enabled", budgetTokens: number }' };
+            }
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          if (key === 'maxBudgetUsd') {
+            if (value === null || value === undefined) {
+              config.maxBudgetUsd = undefined;
+            } else if (typeof value === 'number' && value > 0) {
+              config.maxBudgetUsd = value;
+            } else {
+              return { id, error: 'maxBudgetUsd must be a positive number or null to clear' };
+            }
             saveConfig(config);
             broadcast({ event: 'config.update', data: { key, value } });
             return { id, result: { key, value } };
@@ -2271,15 +2891,22 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!isPathAllowed(resolvedWatch, config)) {
             return { id, error: `path not allowed: ${resolvedWatch}` };
           }
-          startWatching(watchPath);
-          return { id, result: { watching: resolve(watchPath) } };
+          const tracked = clientWs ? watchedPathsByClient.get(clientWs) : undefined;
+          if (!tracked?.has(resolvedWatch)) {
+            startWatching(resolvedWatch);
+            tracked?.add(resolvedWatch);
+          }
+          return { id, result: { watching: resolvedWatch } };
         }
 
         case 'fs.watch.stop': {
           const watchPath = params?.path as string;
           if (!watchPath) return { id, error: 'path required' };
-          stopWatching(watchPath);
-          return { id, result: { stopped: resolve(watchPath) } };
+          const resolvedWatch = resolve(watchPath);
+          stopWatching(resolvedWatch);
+          const tracked = clientWs ? watchedPathsByClient.get(clientWs) : undefined;
+          tracked?.delete(resolvedWatch);
+          return { id, result: { stopped: resolvedWatch } };
         }
 
         case 'tool.approve': {
@@ -2549,7 +3176,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   });
 
   wss.on('connection', (ws) => {
-    clients.set(ws, { authenticated: false });
+    clients.set(ws, { authenticated: false, subscriptions: new Set(), stale: new Set() });
+    watchedPathsByClient.set(ws, new Set());
     console.log(`[gateway] client connected (${clients.size} total)`);
 
     // auth timeout
@@ -2592,20 +3220,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 startedAt,
                 activeRun: hasActiveRun,
                 source: hasActiveRun ? activeRunKeys[0] : undefined,
-                sessionKey: activeRunKeys[0] || 'desktop:dm:default',
+                sessionKey: hasActiveRun ? activeRunKeys[0] : undefined,
                 channels: channelManager.getStatuses(),
                 sessions: sessionRegistry.list(),
               },
             }));
             ws.send(JSON.stringify({ id: msg.id, result: { authenticated: true } }));
-
-            // replay buffered stream events for all active runs
-            for (const sk of activeRunKeys) {
-              const buf = streamBuffers.get(sk);
-              if (buf) {
-                for (const bufferedMsg of buf) ws.send(bufferedMsg);
-              }
-            }
           } else {
             ws.send(JSON.stringify({ id: msg.id, error: 'invalid token' }));
             ws.close();
@@ -2616,17 +3236,32 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         return;
       }
 
-      const response = await handleRpc(msg);
+      const response = await handleRpc(msg, ws);
       ws.send(JSON.stringify(response));
     });
 
+    const releaseClientWatches = () => {
+      const watched = watchedPathsByClient.get(ws);
+      if (!watched) return;
+      for (const p of watched) stopWatching(p);
+      watchedPathsByClient.delete(ws);
+    };
+
     ws.on('close', () => {
+      releaseClientWatches();
+      const batch = streamBatches.get(ws);
+      if (batch?.timer) clearTimeout(batch.timer);
+      streamBatches.delete(ws);
       clients.delete(ws);
       console.log(`[gateway] client disconnected (${clients.size} total)`);
     });
 
     ws.on('error', (err) => {
       console.error('[gateway] ws error:', err.message);
+      releaseClientWatches();
+      const batch = streamBatches.get(ws);
+      if (batch?.timer) clearTimeout(batch.timer);
+      streamBatches.delete(ws);
       clients.delete(ws);
     });
   });
@@ -2661,16 +3296,23 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
   return {
     close: async () => {
+      clearInterval(backpressureTimer);
+      clearInterval(eventCleanupTimer);
+      for (const [, batch] of streamBatches) { if (batch.timer) clearTimeout(batch.timer); }
+      streamBatches.clear();
       scheduler?.stop();
       await channelManager.stopAll();
       await disposeAllProviders();
 
       // close all file watchers
-      for (const [path, { watcher }] of fileWatchers) {
+      for (const [path, entry] of fileWatchers) {
+        if (entry.debounceTimer) clearTimeout(entry.debounceTimer);
+        const { watcher } = entry;
         watcher.close();
         console.log(`[gateway] closed watcher: ${path}`);
       }
       fileWatchers.clear();
+      watchedPathsByClient.clear();
 
       for (const [ws] of clients) {
         ws.close();
