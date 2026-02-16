@@ -14,7 +14,7 @@ export function getScheduler(): SchedulerRunner | null {
 
 export const scheduleTool = tool(
   'schedule',
-  'Create a scheduled item using iCal properties. The agent writes dtstart (ISO 8601) and rrule (RFC 5545 RRULE string) directly. Examples: one-shot reminder with dtstart "2026-03-01T09:00:00", daily at 9am with rrule "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", every Mon/Fri with rrule "FREQ=WEEKLY;BYDAY=MO,FR;BYHOUR=10;BYMINUTE=0", every 2nd Tuesday with rrule "FREQ=MONTHLY;BYDAY=2TU".',
+  'Create a scheduled item using iCal properties. The agent writes dtstart (ISO 8601) and rrule (RFC 5545 RRULE string) directly. IMPORTANT: When timezone is set, BYHOUR/BYMINUTE in the rrule are interpreted as wall-clock time in that timezone (e.g., "9" means 9am EST if timezone is America/New_York), NOT UTC. Examples: one-shot reminder with dtstart "2026-03-01T09:00:00", daily at 9am with rrule "FREQ=DAILY;BYHOUR=9;BYMINUTE=0" + timezone "America/New_York", every Mon/Fri at 10am PST with rrule "FREQ=WEEKLY;BYDAY=MO,FR;BYHOUR=10;BYMINUTE=0" + timezone "America/Los_Angeles".',
   {
     summary: z.string().describe('Short name for this item'),
     message: z.string().describe('Agent prompt to execute when triggered'),
@@ -24,7 +24,7 @@ export const scheduleTool = tool(
     description: z.string().optional().describe('Longer description'),
     dtend: z.string().optional().describe('End date/time in ISO 8601 (for time-bound events)'),
     due: z.string().optional().describe('Due date for todo items in ISO 8601'),
-    timezone: z.string().optional().describe('IANA timezone like "America/New_York"'),
+    timezone: z.string().optional().describe('IANA timezone like "America/New_York". When set, BYHOUR/BYMINUTE in rrule are wall-clock time in this timezone. Handles DST automatically.'),
     valarm: z.number().optional().describe('Alarm trigger in seconds relative to dtstart (negative = before, e.g. -900 for 15min before)'),
     deleteAfterRun: z.boolean().optional().describe('If true, delete after first execution (default for reminders)'),
   },

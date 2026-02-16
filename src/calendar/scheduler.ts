@@ -1,5 +1,6 @@
 import rrule from 'rrule';
 const { RRule } = rrule;
+import { DateTime } from 'luxon';
 import type { Config } from '../config.js';
 import { runAgent } from '../agent.js';
 export function parseDurationMs(duration: string): number | null {
@@ -81,20 +82,126 @@ function computeNextRun(item: CalendarItem): Date | null {
 
   if (item.rrule) {
     try {
-      const dtstart = new Date(item.dtstart);
-      const rruleStr = `DTSTART:${formatRRuleDate(dtstart)}\nRRULE:${item.rrule}`;
-      const rule = RRule.fromString(rruleStr);
-      return rule.after(now, false); // strictly after now
+      if (item.timezone) {
+        // timezone-aware: interpret BYHOUR/BYMINUTE as wall-clock time in target timezone
+        return computeNextRunWithTimezone(item, now);
+      } else {
+        // no timezone: interpret BYHOUR/BYMINUTE as UTC (legacy behavior)
+        const dtstart = new Date(item.dtstart);
+        const rruleStr = `DTSTART:${formatRRuleDate(dtstart)}\nRRULE:${item.rrule}`;
+        const rule = RRule.fromString(rruleStr);
+        return rule.after(now, false);
+      }
     } catch {
       return null;
     }
   }
 
   // one-shot: just dtstart
-  const dt = new Date(item.dtstart);
+  let dt: Date;
+  if (item.timezone) {
+    const parsed = DateTime.fromISO(item.dtstart, { zone: item.timezone });
+    if (!parsed.isValid) return null;
+    dt = parsed.toJSDate();
+  } else {
+    dt = new Date(item.dtstart);
+  }
+
   if (dt > now) return dt;
 
   return null;
+}
+
+function computeNextRunWithTimezone(item: CalendarItem, now: Date): Date | null {
+  const tz = item.timezone!;
+
+  // parse dtstart in target timezone to get wall-clock base time
+  const dtStart = DateTime.fromISO(item.dtstart, { zone: tz });
+  if (!dtStart.isValid) return null;
+
+  // parse rrule to extract hour/minute constraints
+  const parsed = parseRRuleString(item.rrule!);
+  const hours = Array.isArray(parsed.byhour) ? parsed.byhour : parsed.byhour != null ? [parsed.byhour] : [dtStart.hour];
+  const minutes = Array.isArray(parsed.byminute) ? parsed.byminute : parsed.byminute != null ? [parsed.byminute] : [dtStart.minute];
+
+  // create rrule without BYHOUR/BYMINUTE (we'll apply those in target timezone)
+  const ruleOpts = { ...parsed };
+  delete ruleOpts.byhour;
+  delete ruleOpts.byminute;
+
+  // use dtstart as-is but strip time (we'll add it back per timezone)
+  const baseDate = dtStart.startOf('day').toJSDate();
+  const rule = new RRule({
+    dtstart: baseDate,
+    ...ruleOpts,
+  });
+
+  // generate up to 100 candidate dates
+  const nowDt = DateTime.now().setZone(tz);
+  const candidates = rule.between(
+    dtStart.toJSDate(),
+    nowDt.plus({ years: 1 }).toJSDate(),
+    true
+  );
+
+  // for each candidate date, try all hour/minute combinations
+  for (const candidate of candidates) {
+    const candidateDt = DateTime.fromJSDate(candidate, { zone: tz });
+
+    for (const hour of hours) {
+      for (const minute of minutes) {
+        const wallClock = candidateDt.set({ hour, minute, second: 0, millisecond: 0 });
+
+        // convert to UTC and check if it's after now
+        if (wallClock.toJSDate() > now) {
+          return wallClock.toJSDate();
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+// parse RRULE string into options object for RRule constructor
+function parseRRuleString(rruleStr: string): Partial<rrule.Options> {
+  const opts: Partial<rrule.Options> = {};
+  const parts = rruleStr.split(';');
+
+  for (const part of parts) {
+    const [key, value] = part.split('=');
+    switch (key) {
+      case 'FREQ':
+        opts.freq = (RRule as any)[value as any];
+        break;
+      case 'INTERVAL':
+        opts.interval = parseInt(value, 10);
+        break;
+      case 'BYDAY':
+        opts.byweekday = value.split(',').map(d => {
+          const dayMap: Record<string, number> = { SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6 };
+          return dayMap[d] ?? 0;
+        });
+        break;
+      case 'BYHOUR':
+        opts.byhour = value.split(',').map(h => parseInt(h, 10));
+        break;
+      case 'BYMINUTE':
+        opts.byminute = value.split(',').map(m => parseInt(m, 10));
+        break;
+      case 'BYMONTHDAY':
+        opts.bymonthday = value.split(',').map(d => parseInt(d, 10));
+        break;
+      case 'COUNT':
+        opts.count = parseInt(value, 10);
+        break;
+      case 'UNTIL':
+        opts.until = new Date(value);
+        break;
+    }
+  }
+
+  return opts;
 }
 
 function formatRRuleDate(d: Date): string {
