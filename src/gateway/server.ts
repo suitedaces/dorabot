@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'node:http';
 import { createServer as createTlsServer } from 'node:https';
-import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, chmodSync, watch, type FSWatcher } from 'node:fs';
+import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, chmodSync, unlinkSync, watch, type FSWatcher } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { resolve as pathResolve, join } from 'node:path';
@@ -23,9 +23,11 @@ import { getAllChannelStatuses } from '../channels/index.js';
 import { loginWhatsApp, logoutWhatsApp, isWhatsAppLinked } from '../channels/whatsapp/login.js';
 import { getDefaultAuthDir } from '../channels/whatsapp/session.js';
 import { validateTelegramToken } from '../channels/telegram/bot.js';
+import { insertEvent, queryEvents, cleanupOldEvents } from './event-log.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { setScheduler } from '../tools/index.js';
 import { loadGoals, saveGoals, type GoalTask } from '../tools/goals.js';
+import { loadResearch, saveResearch, readResearchContent, type ResearchItem } from '../tools/research.js';
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
 import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, getActiveAuthMethod, isOAuthTokenExpired } from '../providers/claude.js';
 import { isCodexInstalled, hasCodexAuth } from '../providers/codex.js';
@@ -253,23 +255,90 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     console.log(`[gateway] auth token created at ${tokenPath}`);
   }
 
-  const clients = new Map<WebSocket, { authenticated: boolean }>();
+  type ClientState = {
+    authenticated: boolean;
+    subscriptions: Set<string>;
+    stale: Set<string>;
+  };
+  const clients = new Map<WebSocket, ClientState>();
+
+  // live session snapshots for instant hydration on subscribe
+  const sessionSnapshots = new Map<string, import('./types.js').SessionSnapshot>();
+
+  // stream event batching: accumulate agent.stream per client, flush every 16ms
+  const streamBatches = new Map<WebSocket, { events: string[]; timer: ReturnType<typeof setTimeout> | null }>();
+
+  function queueStreamEvent(ws: WebSocket, serialized: string): void {
+    let batch = streamBatches.get(ws);
+    if (!batch) {
+      batch = { events: [], timer: null };
+      streamBatches.set(ws, batch);
+    }
+    batch.events.push(serialized);
+
+    if (!batch.timer) {
+      batch.timer = setTimeout(() => {
+        if (batch!.events.length === 1) {
+          ws.send(batch!.events[0]);
+        } else {
+          ws.send(JSON.stringify({ event: 'agent.stream_batch', data: batch!.events.map(e => JSON.parse(e)) }));
+        }
+        batch!.events = [];
+        batch!.timer = null;
+      }, 16);
+    }
+  }
+
+  // backpressure recovery: periodically send snapshots to stale clients
+  const backpressureTimer = setInterval(() => {
+    for (const [ws, state] of clients) {
+      if (!state.stale.size) continue;
+      if (ws.bufferedAmount < 16384) {
+        for (const sk of state.stale) {
+          const snap = sessionSnapshots.get(sk);
+          if (snap) ws.send(JSON.stringify({ event: 'session.snapshot', data: snap }));
+        }
+        state.stale.clear();
+      }
+    }
+  }, 500);
+  backpressureTimer.unref?.();
+  const eventCleanupTimer = setInterval(() => cleanupOldEvents(), 5 * 60 * 1000);
+  eventCleanupTimer.unref?.();
 
   const broadcast = (event: WsEvent): void => {
+    const sk = (event.data as any)?.sessionKey as string | undefined;
+
+    // persist agent events to SQLite for cursor-based replay on reconnect
+    if (sk && typeof event.event === 'string' && event.event.startsWith('agent.') && event.event !== 'agent.error') {
+      event.seq = insertEvent(sk, event.event, JSON.stringify(event.data));
+    }
+
     const data = JSON.stringify(event);
     for (const [ws, state] of clients) {
-      if (ws.readyState === WebSocket.OPEN && state.authenticated) {
+      if (ws.readyState !== WebSocket.OPEN || !state.authenticated) continue;
+      // session-scoped events only go to subscribers; global events go to all
+      if (sk && !state.subscriptions.has(sk)) continue;
+      // backpressure: if client is falling behind on stream deltas, skip
+      if (sk && event.event === 'agent.stream' && ws.bufferedAmount > 65536) {
+        state.stale.add(sk);
+        continue;
+      }
+      // batch agent.stream events, send everything else immediately
+      if (event.event === 'agent.stream') {
+        queueStreamEvent(ws, data);
+      } else {
         ws.send(data);
       }
     }
-    // buffer agent events for replay on reconnect (cap at 5000 to bound memory)
-    const sk = (event.data as any)?.sessionKey as string | undefined;
-    if (sk && typeof event.event === 'string' && event.event.startsWith('agent.') && event.event !== 'agent.error') {
-      let buf = streamBuffers.get(sk);
-      if (!buf) { buf = []; streamBuffers.set(sk, buf); }
-      if (buf.length < 5000) buf.push(data);
-    }
   };
+
+  function broadcastStatus(sessionKey: string, status: string, toolName?: string, toolDetail?: string) {
+    broadcast({
+      event: 'agent.status',
+      data: { sessionKey, status, toolName, toolDetail, timestamp: Date.now() },
+    });
+  }
 
   // file system watcher manager
   type FileWatchEntry = {
@@ -387,8 +456,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const toolLogs = new Map<string, { completed: ToolEntry[]; current: { name: string; inputJson: string; detail: string } | null; lastEditAt: number }>();
   // active RunHandles for message injection into running agent sessions
   const runHandles = new Map<string, RunHandle>();
-  // buffered events per session for replay on reconnect (cleared each turn)
-  const streamBuffers = new Map<string, string[]>();
+  // clean up stale stream events from previous crashes
+  cleanupOldEvents();
 
   // per-session channel context so the stream loop can manage status messages
   type ChannelRunContext = {
@@ -816,7 +885,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       onItemRun: (item, result) => {
         if (item.id === AUTONOMOUS_SCHEDULE_ID) {
           if (result.messaged) {
-            macNotify('Dora', 'Sent you a message 💬');
+            macNotify('Dora', 'Sent you a message 👀');
           } else {
             macNotify('Dora', result.status === 'ran' ? 'All caught up ✓' : 'Something went wrong, check logs');
           }
@@ -827,6 +896,16 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         if (item.id === AUTONOMOUS_SCHEDULE_ID) {
           broadcast({ event: 'pulse:completed', data: { timestamp: Date.now(), ...result } });
         }
+      },
+      runItem: async (item, _cfg, ctx) => {
+        const sessionKey = `calendar:dm:${item.id}`;
+        const result = await handleAgentRun({
+          prompt: item.message,
+          sessionKey,
+          source: `calendar/${item.id}`,
+          extraContext: ctx.timezone ? `User timezone: ${ctx.timezone}` : undefined,
+        });
+        return result || { sessionId: '', result: '', messages: [], usage: { inputTokens: 0, outputTokens: 0, totalCostUsd: 0 }, durationMs: 0, usedMessageTool: false };
       },
     });
     setScheduler(scheduler);
@@ -870,15 +949,24 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     timeout: NodeJS.Timeout | null;
   }>();
 
-  async function waitForApproval(requestId: string, toolName: string, input: Record<string, unknown>, timeoutMs?: number): Promise<{ approved: boolean; reason?: string; modifiedInput?: Record<string, unknown> }> {
+  async function waitForApproval(requestId: string, toolName: string, input: Record<string, unknown>, timeoutMs?: number, sessionKey?: string): Promise<{ approved: boolean; reason?: string; modifiedInput?: Record<string, unknown> }> {
+    // persist to snapshot
+    if (sessionKey) {
+      const snap = sessionSnapshots.get(sessionKey);
+      if (snap) { snap.pendingApproval = { requestId, toolName, input, timestamp: Date.now() }; snap.updatedAt = Date.now(); }
+    }
     return new Promise((resolve) => {
       const timer = timeoutMs ? setTimeout(() => {
         pendingApprovals.delete(requestId);
+        if (sessionKey) { const snap = sessionSnapshots.get(sessionKey); if (snap) snap.pendingApproval = null; }
         resolve({ approved: false, reason: 'approval timeout' });
       }, timeoutMs) : null;
 
       pendingApprovals.set(requestId, { resolve, toolName, input, timeout: timer });
-    });
+    }).then((decision) => {
+      if (sessionKey) { const snap = sessionSnapshots.get(sessionKey); if (snap) snap.pendingApproval = null; }
+      return decision;
+    }) as Promise<{ approved: boolean; reason?: string; modifiedInput?: Record<string, unknown> }>;
   }
 
   function getChannelToolPolicy(channel?: string): ToolPolicyConfig | undefined {
@@ -971,12 +1059,18 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         event: 'agent.ask_user',
         data: { requestId, questions, sessionKey: runSessionKey, timestamp: Date.now() },
       });
+      // persist to snapshot
+      if (runSessionKey) {
+        const snap = sessionSnapshots.get(runSessionKey);
+        if (snap) { snap.pendingQuestion = { requestId, questions, timestamp: Date.now() }; snap.updatedAt = Date.now(); }
+      }
 
       const answers = await new Promise<Record<string, string>>((resolveQ, rejectQ) => {
         pendingQuestions.set(requestId, { resolve: resolveQ, reject: rejectQ });
         setTimeout(() => {
           if (pendingQuestions.has(requestId)) {
             pendingQuestions.delete(requestId);
+            if (runSessionKey) { const snap = sessionSnapshots.get(runSessionKey); if (snap) snap.pendingQuestion = null; }
             broadcast({
               event: 'agent.question_dismissed',
               data: { requestId, sessionKey: runSessionKey, reason: 'timeout' },
@@ -985,6 +1079,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
         }, 300000);
       });
+      if (runSessionKey) { const snap = sessionSnapshots.get(runSessionKey); if (snap) snap.pendingQuestion = null; }
 
       return {
         behavior: 'allow' as const,
@@ -1032,7 +1127,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         data: { requestId, toolName: cleanName, input, tier: 'require-approval', timestamp: Date.now() },
       });
       channelManager.sendApprovalRequest({ requestId, toolName: cleanName, input, chatId: runChatId }, runChannel).catch(() => {});
-      const decision = await waitForApproval(requestId, cleanName, input);
+      const decision = await waitForApproval(requestId, cleanName, input, undefined, runSessionKey);
       if (decision.approved) {
         return { behavior: 'allow' as const, updatedInput: decision.modifiedInput || input };
       }
@@ -1056,7 +1151,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       });
       channelManager.sendApprovalRequest({ requestId, toolName: cleanName, input, chatId: runChatId }, runChannel).catch(() => {});
 
-      const decision = await waitForApproval(requestId, cleanName, input);
+      const decision = await waitForApproval(requestId, cleanName, input, undefined, runSessionKey);
 
       if (decision.approved) {
         return { behavior: 'allow' as const, updatedInput: decision.modifiedInput || input };
@@ -1107,6 +1202,14 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       console.log(`[handleAgentRun] prev resolved, starting run for ${sessionKey}`);
       sessionRegistry.setActiveRun(sessionKey, true);
       if (channel) activeRunChannels.set(sessionKey, channel);
+      // init snapshot
+      sessionSnapshots.set(sessionKey, {
+        sessionKey, status: 'thinking', text: '',
+        currentTool: null, completedTools: [],
+        pendingApproval: null, pendingQuestion: null,
+        updatedAt: Date.now(),
+      });
+      broadcastStatus(sessionKey, 'thinking');
       broadcast({ event: 'status.update', data: { activeRun: true, source, sessionKey } });
       broadcastSessionUpdate(sessionKey);
       broadcast({ event: 'agent.user_message', data: { source, sessionKey, prompt, timestamp: Date.now() } });
@@ -1189,6 +1292,25 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               data: { source, sessionKey, event, parentToolUseId: parentId, timestamp: Date.now() },
             });
 
+            // update snapshot on stream events
+            const snap = sessionSnapshots.get(sessionKey);
+            if (snap && !parentId) {
+              if (evtType === 'content_block_start') {
+                const cb2 = event.content_block as Record<string, unknown>;
+                if (cb2?.type === 'text') {
+                  snap.status = 'responding';
+                  snap.updatedAt = Date.now();
+                  broadcastStatus(sessionKey, 'responding');
+                }
+              } else if (evtType === 'content_block_delta') {
+                const delta = event.delta as Record<string, unknown>;
+                if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
+                  snap.text += delta.text as string;
+                  snap.updatedAt = Date.now();
+                }
+              }
+            }
+
             if (event.type === 'content_block_start') {
               const cb = event.content_block as Record<string, unknown>;
               if (cb?.type === 'tool_use') {
@@ -1200,6 +1322,14 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                   event: 'agent.tool_use',
                   data: { source, sessionKey, tool: toolName, timestamp: Date.now() },
                 });
+                // snapshot: tool_use start
+                if (snap) {
+                  if (snap.currentTool) snap.completedTools.push({ name: snap.currentTool.name, detail: snap.currentTool.detail });
+                  snap.currentTool = { name: toolName, inputJson: '', detail: '' };
+                  snap.status = 'tool_use';
+                  snap.updatedAt = Date.now();
+                  broadcastStatus(sessionKey, 'tool_use', toolName);
+                }
 
                 // new turn on channel — create fresh status message if none exists
                 const ctx = channelRunContexts.get(sessionKey);
@@ -1244,9 +1374,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             if (event.type === 'content_block_delta') {
               const delta = event.delta as Record<string, unknown>;
               if (delta?.type === 'input_json_delta') {
+                const partial = String(delta.partial_json || '');
                 const tl = toolLogs.get(sessionKey);
                 if (tl?.current) {
-                  tl.current.inputJson += String(delta.partial_json || '');
+                  tl.current.inputJson += partial;
+                }
+                if (snap?.currentTool) {
+                  snap.currentTool.inputJson += partial;
                 }
               }
             }
@@ -1257,7 +1391,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               if (tl?.current && tl.current.inputJson) {
                 try {
                   const input = JSON.parse(tl.current.inputJson);
-                  tl.current.detail = extractToolDetail(tl.current.name, input);
+                  const detail = extractToolDetail(tl.current.name, input);
+                  tl.current.detail = detail;
+                  if (snap?.currentTool) {
+                    snap.currentTool.detail = detail;
+                    snap.updatedAt = Date.now();
+                    broadcastStatus(sessionKey, 'tool_use', snap.currentTool.name, detail);
+                  }
                 } catch {}
                 // force edit — detail is worth showing immediately
                 const sm = statusMessages.get(sessionKey);
@@ -1359,6 +1499,15 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                       timestamp: Date.now(),
                     },
                   });
+                  // snapshot: tool_result → thinking
+                  const snap2 = sessionSnapshots.get(sessionKey);
+                  if (snap2 && !parentId) {
+                    if (snap2.currentTool) snap2.completedTools.push({ name: snap2.currentTool.name, detail: snap2.currentTool.detail });
+                    snap2.currentTool = null;
+                    snap2.status = 'thinking';
+                    snap2.updatedAt = Date.now();
+                    broadcastStatus(sessionKey, 'thinking');
+                  }
                 }
               }
             }
@@ -1436,14 +1585,17 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
             // per-turn: mark idle so sidebar spinner stops
             sessionRegistry.setActiveRun(sessionKey, false);
+            broadcastStatus(sessionKey, 'idle');
             broadcast({ event: 'status.update', data: { activeRun: false, source, sessionKey } });
             broadcastSessionUpdate(sessionKey);
+
+            // clear snapshot on turn end
+            sessionSnapshots.delete(sessionKey);
 
             // reset for next turn (persistent sessions get multiple result events)
             usedMessageTool = false;
             agentText = '';
             toolLogs.set(sessionKey, { completed: [], current: null, lastEditAt: 0 });
-            streamBuffers.delete(sessionKey);
           }
         }
 
@@ -1505,8 +1657,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         }
         statusMessages.delete(sessionKey);
         toolLogs.delete(sessionKey);
-        streamBuffers.delete(sessionKey);
+        sessionSnapshots.delete(sessionKey);
         sessionRegistry.setActiveRun(sessionKey, false);
+        broadcastStatus(sessionKey, 'idle');
         broadcast({ event: 'status.update', data: { activeRun: false, source, sessionKey } });
         broadcastSessionUpdate(sessionKey);
       }
@@ -1537,6 +1690,37 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               } : null,
             },
           };
+        }
+
+        case 'sessions.subscribe': {
+          const keys = params?.sessionKeys as string[];
+          if (!Array.isArray(keys)) return { id, error: 'sessionKeys required' };
+          const lastSeq = typeof params?.lastSeq === 'number' ? params.lastSeq : 0;
+          const state = clientWs ? clients.get(clientWs) : undefined;
+          if (state) keys.forEach(k => state.subscriptions.add(k));
+          // replay persisted events for exact continuity before snapshot/live stream
+          if (clientWs) {
+            const events = queryEvents(keys, lastSeq);
+            for (const row of events) {
+              clientWs.send(JSON.stringify({ event: row.event_type, data: JSON.parse(row.data), seq: row.seq }));
+            }
+          }
+          // send snapshots for any active sessions
+          for (const sk of keys) {
+            const snap = sessionSnapshots.get(sk);
+            if (snap && clientWs) {
+              clientWs.send(JSON.stringify({ event: 'session.snapshot', data: snap }));
+            }
+          }
+          return { id, result: { subscribed: keys } };
+        }
+
+        case 'sessions.unsubscribe': {
+          const keys = params?.sessionKeys as string[];
+          if (!Array.isArray(keys)) return { id, error: 'sessionKeys required' };
+          const state = clientWs ? clients.get(clientWs) : undefined;
+          if (state) keys.forEach(k => state.subscriptions.delete(k));
+          return { id, result: { unsubscribed: keys } };
         }
 
         case 'chat.send': {
@@ -1707,8 +1891,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const meta = fileSessionManager.getMetadata(sessionId);
           if (!meta) return { id, error: 'session metadata not found' };
 
-          const ch = meta.channel || (params?.channel as string) || 'desktop';
-          const cid = meta.chatId || (params?.chatId as string) || 'default';
+          const ch = (params?.channel as string) || meta.channel || 'desktop';
+          const cid = (params?.chatId as string) || meta.chatId || sessionId;
           const ct = meta.chatType || 'dm';
           const key = sessionRegistry.makeKey({ channel: ch, chatId: cid, chatType: ct });
 
@@ -1716,9 +1900,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (existing?.activeRun) return { id, error: 'cannot resume while agent is running' };
 
           sessionRegistry.remove(key);
-          const entry = sessionRegistry.getOrCreate({ channel: ch, chatId: cid, chatType: ct, sessionId });
+          sessionRegistry.getOrCreate({ channel: ch, chatId: cid, chatType: ct, sessionId });
           if (meta.sdkSessionId) {
             sessionRegistry.setSdkSessionId(key, meta.sdkSessionId);
+          }
+          // backfill chatId into metadata so future resumes don't fallback
+          if (!meta.chatId && cid !== 'default') {
+            fileSessionManager.setMetadata(sessionId, { channel: ch, chatId: cid, chatType: ct });
           }
 
           return { id, result: { resumed: true, key, sessionId, sdkSessionId: meta.sdkSessionId || null } };
@@ -2042,6 +2230,54 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           saveGoals(goals);
           broadcast({ event: 'goals.update', data: {} });
           return { id, result: task };
+        }
+
+        // ── Research ──
+
+        case 'research.list': {
+          const research = loadResearch();
+          return { id, result: research.items };
+        }
+
+        case 'research.read': {
+          const itemId = params?.id as string;
+          if (!itemId) return { id, error: 'id required' };
+          const research = loadResearch();
+          const item = research.items.find(i => i.id === itemId);
+          if (!item) return { id, error: 'item not found' };
+          const content = readResearchContent(item.filePath);
+          return { id, result: { ...item, content } };
+        }
+
+        case 'research.update': {
+          const itemId = params?.id as string;
+          if (!itemId) return { id, error: 'id required' };
+          const research = loadResearch();
+          const item = research.items.find(i => i.id === itemId);
+          if (!item) return { id, error: 'item not found' };
+          if (params?.status !== undefined) item.status = params.status as ResearchItem['status'];
+          if (params?.title !== undefined) item.title = params.title as string;
+          if (params?.topic !== undefined) item.topic = params.topic as string;
+          if (params?.sources !== undefined) item.sources = params.sources as string[];
+          if (params?.tags !== undefined) item.tags = params.tags as string[];
+          item.updatedAt = new Date().toISOString();
+          saveResearch(research);
+          broadcast({ event: 'research.update', data: {} });
+          return { id, result: item };
+        }
+
+        case 'research.delete': {
+          const itemId = params?.id as string;
+          if (!itemId) return { id, error: 'id required' };
+          const research = loadResearch();
+          const deleted = research.items.find(i => i.id === itemId);
+          if (!deleted) return { id, error: 'item not found' };
+          research.items = research.items.filter(i => i.id !== itemId);
+          saveResearch(research);
+          // clean up file
+          try { if (existsSync(deleted.filePath)) unlinkSync(deleted.filePath); } catch {}
+          broadcast({ event: 'research.update', data: {} });
+          return { id, result: { deleted: true } };
         }
 
         case 'skills.list': {
@@ -2899,7 +3135,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   });
 
   wss.on('connection', (ws) => {
-    clients.set(ws, { authenticated: false });
+    clients.set(ws, { authenticated: false, subscriptions: new Set(), stale: new Set() });
     watchedPathsByClient.set(ws, new Set());
     console.log(`[gateway] client connected (${clients.size} total)`);
 
@@ -2943,20 +3179,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 startedAt,
                 activeRun: hasActiveRun,
                 source: hasActiveRun ? activeRunKeys[0] : undefined,
-                sessionKey: activeRunKeys[0] || 'desktop:dm:default',
+                sessionKey: hasActiveRun ? activeRunKeys[0] : undefined,
                 channels: channelManager.getStatuses(),
                 sessions: sessionRegistry.list(),
               },
             }));
             ws.send(JSON.stringify({ id: msg.id, result: { authenticated: true } }));
-
-            // replay buffered stream events for all active runs
-            for (const sk of activeRunKeys) {
-              const buf = streamBuffers.get(sk);
-              if (buf) {
-                for (const bufferedMsg of buf) ws.send(bufferedMsg);
-              }
-            }
           } else {
             ws.send(JSON.stringify({ id: msg.id, error: 'invalid token' }));
             ws.close();
@@ -2980,6 +3208,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
     ws.on('close', () => {
       releaseClientWatches();
+      const batch = streamBatches.get(ws);
+      if (batch?.timer) clearTimeout(batch.timer);
+      streamBatches.delete(ws);
       clients.delete(ws);
       console.log(`[gateway] client disconnected (${clients.size} total)`);
     });
@@ -2987,6 +3218,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     ws.on('error', (err) => {
       console.error('[gateway] ws error:', err.message);
       releaseClientWatches();
+      const batch = streamBatches.get(ws);
+      if (batch?.timer) clearTimeout(batch.timer);
+      streamBatches.delete(ws);
       clients.delete(ws);
     });
   });
@@ -3021,6 +3255,10 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
   return {
     close: async () => {
+      clearInterval(backpressureTimer);
+      clearInterval(eventCleanupTimer);
+      for (const [, batch] of streamBatches) { if (batch.timer) clearTimeout(batch.timer); }
+      streamBatches.clear();
       scheduler?.stop();
       await channelManager.stopAll();
       await disposeAllProviders();

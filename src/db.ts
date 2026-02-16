@@ -65,6 +65,26 @@ export function getDb(): Database.Database {
     INSERT OR IGNORE INTO goals_tasks SELECT * FROM board_tasks WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='board_tasks');
     INSERT OR IGNORE INTO goals_meta SELECT * FROM board_meta WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='board_meta');
 
+    -- append-only event log for WebSocket stream replay on reconnect
+    CREATE TABLE IF NOT EXISTS stream_events (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_key TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      data TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+    CREATE INDEX IF NOT EXISTS idx_stream_events_session_seq ON stream_events(session_key, seq);
+
+    CREATE TABLE IF NOT EXISTS research_items (
+      id TEXT PRIMARY KEY,
+      data TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS research_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+
     -- FTS5 index for memory search over messages
     CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
       text_content,
