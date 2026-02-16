@@ -290,12 +290,22 @@ export type SchedulerContext = {
   timezone?: string;
 };
 
+export type AgentRunResult = {
+  sessionId: string;
+  result: string;
+  messages: unknown[];
+  usage: { inputTokens: number; outputTokens: number; totalCostUsd: number };
+  durationMs: number;
+  usedMessageTool?: boolean;
+};
+
 export function startScheduler(opts: {
   config: Config;
   tickIntervalMs?: number;
   getContext?: () => SchedulerContext;
   onItemStart?: (item: CalendarItem) => void;
   onItemRun?: (item: CalendarItem, result: { status: string; result?: string; sessionId?: string; usage?: { inputTokens: number; outputTokens: number; totalCostUsd: number }; durationMs?: number; messaged?: boolean }) => void;
+  runItem?: (item: CalendarItem, config: Config, context: SchedulerContext) => Promise<AgentRunResult>;
 }): SchedulerRunner {
   const { config, onItemRun, onItemStart } = opts;
   const tickMs = opts.tickIntervalMs ?? config.calendar?.tickIntervalMs ?? DEFAULT_TICK_MS;
@@ -319,19 +329,23 @@ export function startScheduler(opts: {
     }
   }
 
+  const defaultRunItem = async (item: CalendarItem, cfg: Config, ctx: SchedulerContext): Promise<AgentRunResult> => {
+    const result = await runAgent({
+      prompt: item.message,
+      config: cfg,
+      connectedChannels: ctx.connectedChannels,
+      timezone: ctx.timezone,
+    });
+    return result;
+  };
+  const runFn = opts.runItem || defaultRunItem;
+
   const executeItem = async (item: CalendarItem) => {
     try {
       onItemStart?.(item);
       const ctx = opts.getContext?.() || {};
-      const result = await runAgent({
-        prompt: item.message,
-        config: {
-          ...config,
-          model: item.model || config.model,
-        },
-        connectedChannels: ctx.connectedChannels,
-        timezone: ctx.timezone,
-      });
+      const itemConfig = { ...config, model: item.model || config.model };
+      const result = await runFn(item, itemConfig, ctx);
 
       item.lastRunAt = new Date().toISOString();
       onItemRun?.(item, {
@@ -432,23 +446,17 @@ export function startScheduler(opts: {
       if (!item) return { status: 'not-found' };
 
       try {
+        onItemStart?.(item);
         const ctx = opts.getContext?.() || {};
-        const result = await runAgent({
-          prompt: item.message,
-          config: {
-            ...config,
-            model: item.model || config.model,
-          },
-          connectedChannels: ctx.connectedChannels,
-          timezone: ctx.timezone,
-        });
+        const itemConfig = { ...config, model: item.model || config.model };
+        const result = await runFn(item, itemConfig, ctx);
 
         item.lastRunAt = new Date().toISOString();
         const next = computeNextRun(item);
         item.nextRunAt = next?.toISOString();
         updateCalendarItemDb(item);
 
-        return {
+        const runResult = {
           status: 'ran',
           result: result.result,
           sessionId: result.sessionId,
@@ -456,7 +464,10 @@ export function startScheduler(opts: {
           durationMs: result.durationMs,
           messaged: result.usedMessageTool,
         };
+        onItemRun?.(item, runResult);
+        return runResult;
       } catch (err) {
+        onItemRun?.(item, { status: 'failed', result: String(err) });
         return { status: 'failed', result: String(err) };
       }
     },
