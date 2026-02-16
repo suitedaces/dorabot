@@ -12,6 +12,7 @@ import { SettingsView } from '../views/Settings';
 import { SoulView } from '../views/Soul';
 import { SkillsView } from '../views/Skills';
 import { GoalsView } from '../views/Goals';
+import { ResearchView } from '../views/Research';
 import { FileViewer } from './FileViewer';
 import { ErrorBoundary } from './ErrorBoundary';
 import { cn } from '@/lib/utils';
@@ -125,6 +126,8 @@ export function EditorGroupPanel({
         return <GoalsView gateway={gateway} />;
       case 'automation':
         return <Automations gateway={gateway} />;
+      case 'research':
+        return <ResearchView gateway={gateway} />;
       case 'skills':
         return <SkillsView gateway={gateway} />;
       case 'memory':
@@ -156,6 +159,7 @@ export function EditorGroupPanel({
         tabs={groupTabs}
         activeTabId={group.activeTabId || ''}
         sessionStates={gateway.sessionStates}
+        unreadBySession={tabState.unreadBySession}
         isActiveGroup={isActive}
         isMultiPane={isMultiPane}
         groupId={group.id}

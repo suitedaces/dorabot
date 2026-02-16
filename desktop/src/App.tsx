@@ -22,7 +22,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import {
   MessageSquare, Radio, Zap, Brain, Settings2,
   Sparkles, LayoutGrid, Loader2, Star,
-  Sun, Moon, Clock
+  Sun, Moon, Clock, FileSearch
 } from 'lucide-react';
 
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
@@ -67,6 +67,7 @@ const NAV_ITEMS: { id: TabType; label: string; icon: React.ReactNode }[] = [
   { id: 'goals', label: 'Goals', icon: <LayoutGrid className="w-3.5 h-3.5" /> },
   { id: 'automation', label: 'Automations', icon: <Zap className="w-3.5 h-3.5" /> },
   { id: 'skills', label: 'Skills', icon: <Sparkles className="w-3.5 h-3.5" /> },
+  { id: 'research', label: 'Research', icon: <FileSearch className="w-3.5 h-3.5" /> },
   { id: 'memory', label: 'Memory', icon: <Brain className="w-3.5 h-3.5" /> },
   { id: 'settings', label: 'Settings', icon: <Settings2 className="w-3.5 h-3.5" /> },
 ];
@@ -220,10 +221,33 @@ export default function App() {
     return ids;
   }, [layout.visibleGroups, tabState.tabs]);
 
+  const unreadBySessionId = useMemo(() => {
+    const byId: Record<string, number> = {};
+    for (const tab of tabState.tabs) {
+      if (!isChatTab(tab)) continue;
+      const unread = tabState.unreadBySession[tab.sessionKey] || 0;
+      if (unread <= 0) continue;
+
+      let sid = tab.sessionId;
+      if (!sid) {
+        const [channel = 'desktop', chatType = 'dm', ...rest] = tab.sessionKey.split(':');
+        const chatId = rest.join(':') || tab.chatId;
+        sid = gw.sessions.find(s =>
+          (s.channel || 'desktop') === channel &&
+          (s.chatType || 'dm') === chatType &&
+          s.chatId === chatId,
+        )?.id;
+      }
+      if (!sid) continue;
+      byId[sid] = Math.max(byId[sid] || 0, unread);
+    }
+    return byId;
+  }, [tabState.tabs, tabState.unreadBySession, gw.sessions]);
+
   const handleViewSession = useCallback((sessionId: string, channel?: string, chatId?: string, chatType?: string) => {
     const ch = channel || 'desktop';
     const ct = chatType || 'dm';
-    const cid = chatId || 'default';
+    const cid = chatId || sessionId;
     const sessionKey = `${ch}:${ct}:${cid}`;
     const session = gw.sessions.find(s => s.id === sessionId);
     const label = session?.senderName || session?.chatId || sessionId.slice(8, 16);
@@ -435,13 +459,14 @@ export default function App() {
       const group = layout.groups.find(g => g.id === groupId);
       const existingChat = group?.tabIds
         .map(id => tabState.tabs.find(t => t.id === id))
-        .find(t => t && isChatTab(t));
+        .find((t): t is Extract<Tab, { type: 'chat' }> => Boolean(t && isChatTab(t)));
       if (existingChat) {
         tabState.focusTab(existingChat.id, groupId);
+        setTimeout(() => gw.sendMessage(prompt, existingChat.sessionKey, existingChat.chatId), 0);
       } else {
-        tabState.newChatTab(groupId);
+        const created = tabState.newChatTab(groupId);
+        setTimeout(() => gw.sendMessage(prompt, created.sessionKey, created.chatId), 0);
       }
-      setTimeout(() => gw.sendMessage(prompt), 0);
     },
     onNavClick: (navId: string) => handleNavClick(navId as TabType),
   }), [tabState, gw, selectedFile, selectedChannel, layout, handleNavClick, handleViewSession, draggingTab]);
@@ -700,6 +725,7 @@ export default function App() {
                   {filteredSessions.slice(0, 30).map(s => {
                     const isActive = tabState.activeTab && isChatTab(tabState.activeTab) && tabState.activeTab.sessionId === s.id;
                     const isVisible = !isActive && visibleSessionIds.has(s.id);
+                    const unread = unreadBySessionId[s.id] || 0;
                     return (
                       <button
                         key={s.id}
@@ -715,8 +741,13 @@ export default function App() {
                       >
                         <span className="w-3 h-3 shrink-0 flex items-center justify-center">{channelIcon(s.channel)}</span>
                         <span className="truncate flex-1 text-left">
-                          {s.senderName || s.chatId || s.id.slice(8, 16)}
+                          {s.senderName || s.preview || s.chatId || s.id.slice(8, 16)}
                         </span>
+                        {unread > 0 && !s.activeRun && (
+                          <span className="text-[9px] bg-primary text-primary-foreground rounded-full px-1.5 min-w-[16px] text-center">
+                            {unread > 99 ? '99+' : unread}
+                          </span>
+                        )}
                         {s.activeRun ? (
                           <Loader2 className="w-3 h-3 shrink-0 animate-spin text-primary" />
                         ) : (

@@ -514,7 +514,8 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     if (!overridePrompt) setInput('');
     setSending(true);
     try {
-      await gateway.sendMessage(prompt);
+      const chatId = sessionKey ? sessionKey.split(':').slice(2).join(':') : undefined;
+      await gateway.sendMessage(prompt, sessionKey, chatId);
     } finally {
       setSending(false);
     }

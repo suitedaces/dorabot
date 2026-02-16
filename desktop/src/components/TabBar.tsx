@@ -32,6 +32,7 @@ function DraggableTab({
   tab,
   isActive,
   isRunning,
+  unreadCount,
   groupId,
   onFocusTab,
   onCloseTab,
@@ -39,6 +40,7 @@ function DraggableTab({
   tab: Tab;
   isActive: boolean;
   isRunning: boolean;
+  unreadCount: number;
   groupId?: string;
   onFocusTab: (id: string) => void;
   onCloseTab: (id: string) => void;
@@ -80,6 +82,11 @@ function DraggableTab({
         )}
       </span>
       <span className="truncate flex-1">{tab.label}</span>
+      {!isActive && unreadCount > 0 && (
+        <span className="shrink-0 rounded-full bg-primary text-primary-foreground text-[9px] px-1.5 min-w-[14px] text-center">
+          {unreadCount > 99 ? '99+' : unreadCount}
+        </span>
+      )}
       {tab.closable && (
         <button
           className={cn(
@@ -104,6 +111,7 @@ type TabBarProps = {
   tabs: Tab[];
   activeTabId: string;
   sessionStates: Record<string, SessionState>;
+  unreadBySession?: Record<string, number>;
   isActiveGroup?: boolean;
   isMultiPane?: boolean;
   groupId?: string;
@@ -112,7 +120,7 @@ type TabBarProps = {
   onNewChat: () => void;
 };
 
-export function TabBar({ tabs, activeTabId, sessionStates, isActiveGroup, isMultiPane, groupId, onFocusTab, onCloseTab, onNewChat }: TabBarProps) {
+export function TabBar({ tabs, activeTabId, sessionStates, unreadBySession = {}, isActiveGroup, isMultiPane, groupId, onFocusTab, onCloseTab, onNewChat }: TabBarProps) {
   const { setNodeRef, isOver } = useDroppable({
     id: `group-drop:${groupId || 'default'}`,
     data: { groupId },
@@ -138,6 +146,7 @@ export function TabBar({ tabs, activeTabId, sessionStates, isActiveGroup, isMult
               tab={tab}
               isActive={isActive}
               isRunning={isRunning}
+              unreadCount={isChatTab(tab) ? (unreadBySession[tab.sessionKey] || 0) : 0}
               groupId={groupId}
               onFocusTab={onFocusTab}
               onCloseTab={onCloseTab}

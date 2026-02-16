@@ -123,6 +123,7 @@ export type SessionInfo = {
   chatId?: string;
   chatType?: string;
   senderName?: string;
+  preview?: string;
   activeRun?: boolean;
 };
 
@@ -434,6 +435,7 @@ export function useGateway(url = 'wss://localhost:18789') {
   const [telegramLinkError, setTelegramLinkError] = useState<string | null>(null);
   const [providerInfo, setProviderInfo] = useState<{ name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } } | null>(null);
   const [goalsVersion, setGoalsVersion] = useState(0);
+  const [researchVersion, setResearchVersion] = useState(0);
   const [backgroundRuns, setBackgroundRuns] = useState<BackgroundRun[]>([]);
   const [calendarRuns, setCalendarRuns] = useState<CalendarRun[]>([]);
 
@@ -447,6 +449,7 @@ export function useGateway(url = 'wss://localhost:18789') {
   const activeSessionKeyRef = useRef<string>('');
   const currentChatIdRef = useRef<string>(`task-${Date.now()}`);
   const trackedSessionsRef = useRef<Set<string>>(new Set());
+  const lastSeqRef = useRef<number>(0);
   // Callback ref for tab system to be notified of sessionId changes
   const onSessionIdChangeRef = useRef<((sessionKey: string, sessionId: string) => void) | null>(null);
   const onNotifiableEventRef = useRef<((event: NotifiableEvent) => void) | null>(null);
@@ -474,13 +477,16 @@ export function useGateway(url = 'wss://localhost:18789') {
 
   // --- Session tracking ---
 
+  const pendingSubscribeRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const trackSession = useCallback((sessionKey: string) => {
     trackedSessionsRef.current.add(sessionKey);
     setSessionStates(prev => {
       if (prev[sessionKey]) return prev;
       return { ...prev, [sessionKey]: { ...DEFAULT_SESSION_STATE } };
     });
-  }, []);
+    rpc('sessions.subscribe', { sessionKeys: [sessionKey], lastSeq: lastSeqRef.current }).catch(() => {});
+  }, [rpc]);
 
   const untrackSession = useCallback((sessionKey: string) => {
     trackedSessionsRef.current.delete(sessionKey);
@@ -489,7 +495,22 @@ export function useGateway(url = 'wss://localhost:18789') {
       const { [sessionKey]: _, ...rest } = prev;
       return rest;
     });
-  }, []);
+    rpc('sessions.unsubscribe', { sessionKeys: [sessionKey] }).catch(() => {});
+  }, [rpc]);
+
+  const trackSessionDebounced = useCallback((sessionKey: string, prevKey?: string) => {
+    trackedSessionsRef.current.add(sessionKey);
+    setSessionStates(prev => {
+      if (prev[sessionKey]) return prev;
+      return { ...prev, [sessionKey]: { ...DEFAULT_SESSION_STATE } };
+    });
+    if (pendingSubscribeRef.current) clearTimeout(pendingSubscribeRef.current);
+    pendingSubscribeRef.current = setTimeout(() => {
+      if (prevKey) rpc('sessions.unsubscribe', { sessionKeys: [prevKey] }).catch(() => {});
+      rpc('sessions.subscribe', { sessionKeys: [sessionKey], lastSeq: lastSeqRef.current }).catch(() => {});
+      pendingSubscribeRef.current = null;
+    }, 100);
+  }, [rpc]);
 
   const setActiveSession = useCallback((sessionKey: string, chatId: string) => {
     activeSessionKeyRef.current = sessionKey;
@@ -511,7 +532,7 @@ export function useGateway(url = 'wss://localhost:18789') {
           },
         }));
         // restore registry entry so next chat.send continues this conversation
-        rpc('sessions.resume', { sessionId }).catch((err: unknown) => {
+        rpc('sessions.resume', { sessionId, chatId }).catch((err: unknown) => {
           console.warn('failed to resume session in registry:', err);
         });
       }
@@ -818,6 +839,98 @@ export function useGateway(url = 'wss://localhost:18789') {
         break;
       }
 
+      case 'session.snapshot': {
+        const snap = data as {
+          sessionKey: string;
+          status: string;
+          text: string;
+          currentTool: { name: string; inputJson: string } | null;
+          completedTools: { name: string; detail: string }[];
+          pendingApproval: { requestId: string; toolName: string; input: Record<string, unknown>; timestamp: number } | null;
+          pendingQuestion: { requestId: string; questions: any[] } | null;
+          updatedAt: number;
+        };
+        const sk = snap.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk)) break;
+        setSessionStates(prev => {
+          const state = prev[sk];
+          if (!state) return prev;
+          const items: ChatItem[] = [];
+          for (const tool of snap.completedTools) {
+            items.push({ type: 'tool_use', id: '', name: tool.name, input: '', output: '', streaming: false, timestamp: snap.updatedAt });
+          }
+          if (snap.currentTool) {
+            items.push({ type: 'tool_use', id: '', name: snap.currentTool.name, input: snap.currentTool.inputJson, streaming: true, timestamp: snap.updatedAt });
+          }
+          if (snap.text) {
+            items.push({ type: 'text', content: snap.text, streaming: snap.status === 'responding', timestamp: snap.updatedAt });
+          }
+          const lastResultIdx = state.chatItems.map(i => i.type).lastIndexOf('result');
+          const replaceFrom = state.chatItems.findIndex((it, idx) => idx > lastResultIdx && it.type !== 'user');
+          const base = replaceFrom >= 0 ? state.chatItems.slice(0, replaceFrom) : state.chatItems;
+          return {
+            ...prev,
+            [sk]: {
+              ...state,
+              chatItems: [...base, ...items],
+              agentStatus: snap.status,
+              pendingQuestion: snap.pendingQuestion ? { requestId: snap.pendingQuestion.requestId, questions: snap.pendingQuestion.questions } : null,
+            },
+          };
+        });
+        setPendingApprovals(prev => {
+          const withoutSession = prev.filter(a => a.sessionKey !== sk);
+          if (!snap.pendingApproval) return withoutSession;
+          return [...withoutSession, {
+            requestId: snap.pendingApproval.requestId,
+            toolName: snap.pendingApproval.toolName,
+            input: snap.pendingApproval.input,
+            tier: 'require-approval',
+            sessionKey: sk,
+            timestamp: snap.pendingApproval.timestamp,
+          }];
+        });
+        break;
+      }
+
+      case 'agent.status': {
+        const d = data as { sessionKey: string; status: string; toolName?: string; toolDetail?: string };
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk)) break;
+        setSessionStates(prev => {
+          const state = prev[sk];
+          if (!state) return prev;
+          let statusText = d.status;
+          if (d.status === 'tool_use' && d.toolName) {
+            statusText = `${TOOL_PENDING_TEXT[d.toolName] || `running ${d.toolName}`}...`;
+          } else if (d.status === 'responding') {
+            statusText = 'responding...';
+          } else if (d.status === 'thinking') {
+            statusText = 'thinking...';
+          }
+          return { ...prev, [sk]: { ...state, agentStatus: statusText } };
+        });
+        break;
+      }
+
+      case 'agent.stream_batch': {
+        const events = data as any[];
+        for (const evt of events) {
+          if (evt && typeof evt === 'object') {
+            const seq = (evt as { seq?: unknown }).seq;
+            if (typeof seq === 'number' && seq > lastSeqRef.current) {
+              lastSeqRef.current = seq;
+            }
+          }
+          if (evt && typeof evt === 'object' && 'event' in evt && 'data' in evt) {
+            handleEvent(evt as GatewayEvent);
+          } else {
+            handleEvent({ event: 'agent.stream', data: evt });
+          }
+        }
+        break;
+      }
+
       case 'channel.message': {
         const d = data as ChannelMessage;
         setChannelMessages(prev => [...prev.slice(-500), d]);
@@ -897,6 +1010,11 @@ export function useGateway(url = 'wss://localhost:18789') {
       case 'goals.update': {
         setGoalsVersion(v => v + 1);
         onNotifiableEventRef.current?.({ type: 'goals.update' });
+        break;
+      }
+
+      case 'research.update': {
+        setResearchVersion(v => v + 1);
         break;
       }
 
@@ -997,10 +1115,15 @@ export function useGateway(url = 'wss://localhost:18789') {
       console.log('[gateway] auth token:', token ? `${token.slice(0, 8)}...` : 'MISSING');
       if (token) {
         const authId = ++rpcIdRef.current;
-        ws.send(JSON.stringify({ method: 'auth', params: { token }, id: authId }));
+        ws.send(JSON.stringify({ method: 'auth', params: { token, lastSeq: lastSeqRef.current }, id: authId }));
         pendingRpcRef.current.set(authId, {
           resolve: () => {
             setConnectionState('connected');
+            // re-subscribe all tracked sessions
+            const tracked = Array.from(trackedSessionsRef.current);
+            if (tracked.length > 0) {
+              rpc('sessions.subscribe', { sessionKeys: tracked, lastSeq: lastSeqRef.current }).catch(() => {});
+            }
             rpc('config.get').then((res) => {
               const c = res as Record<string, unknown>;
               setConfigData(c);
@@ -1053,6 +1176,9 @@ export function useGateway(url = 'wss://localhost:18789') {
 
         // event
         if ('event' in msg) {
+          if (typeof msg.seq === 'number' && msg.seq > lastSeqRef.current) {
+            lastSeqRef.current = msg.seq;
+          }
           handleEvent(msg as GatewayEvent);
         }
       } catch {}
@@ -1088,6 +1214,10 @@ export function useGateway(url = 'wss://localhost:18789') {
   useEffect(() => {
     connect();
     return () => {
+      if (pendingSubscribeRef.current) {
+        clearTimeout(pendingSubscribeRef.current);
+        pendingSubscribeRef.current = null;
+      }
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       if (streamRafRef.current !== null) cancelAnimationFrame(streamRafRef.current);
       if (wsRef.current) {
@@ -1098,8 +1228,12 @@ export function useGateway(url = 'wss://localhost:18789') {
     };
   }, [connect]);
 
-  const sendMessage = useCallback(async (prompt: string) => {
-    const sk = activeSessionKeyRef.current;
+  const sendMessage = useCallback(async (prompt: string, sessionKey?: string, chatId?: string) => {
+    const sk = sessionKey || activeSessionKeyRef.current;
+    const cid = chatId || sk.split(':').slice(2).join(':') || currentChatIdRef.current;
+    activeSessionKeyRef.current = sk;
+    currentChatIdRef.current = cid;
+    setActiveSessionKey(sk);
     // Optimistic update: add user message and set status
     setSessionStates(prev => {
       const state = prev[sk] || { ...DEFAULT_SESSION_STATE };
@@ -1113,7 +1247,7 @@ export function useGateway(url = 'wss://localhost:18789') {
       };
     });
     try {
-      const res = await rpc('chat.send', { prompt, chatId: currentChatIdRef.current }) as { sessionKey?: string } | undefined;
+      const res = await rpc('chat.send', { prompt, chatId: cid }) as { sessionKey?: string } | undefined;
       if (res?.sessionKey && res.sessionKey !== sk) {
         // sessionKey changed (e.g. server normalized it) — migrate state
         activeSessionKeyRef.current = res.sessionKey;
@@ -1137,8 +1271,8 @@ export function useGateway(url = 'wss://localhost:18789') {
 
   const loadSession = useCallback(async (sessionId: string, sessionKey?: string, chatId?: string) => {
     // Legacy single-session load — now delegates to loadSessionIntoMap + setActiveSession
-    const sk = sessionKey || 'desktop:dm:default';
-    const cid = chatId || 'default';
+    const cid = chatId || sessionId;
+    const sk = sessionKey || `desktop:dm:${cid}`;
     trackedSessionsRef.current.add(sk);
     setSessionStates(prev => {
       if (prev[sk]) return prev;
@@ -1469,6 +1603,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     sessionStates,
     activeSessionKey,
     trackSession,
+    trackSessionDebounced,
     untrackSession,
     setActiveSession,
     loadSessionIntoMap,
@@ -1527,6 +1662,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     telegramUnlink,
     providerInfo,
     goalsVersion,
+    researchVersion,
     backgroundRuns,
     calendarRuns,
     markCalendarRunsSeen: useCallback(() => {
