@@ -58,7 +58,7 @@ export function SoulView({ gateway, onSetupChat }: Props) {
         [name]: { content: '', original: '', loading: false, saving: false, error: null },
       }));
     }
-  }, [gateway]);
+  }, [gateway.rpc]);
 
   const saveFile = useCallback(async (name: string) => {
     const file = files[name];
@@ -73,7 +73,7 @@ export function SoulView({ gateway, onSetupChat }: Props) {
         [name]: { ...prev[name], saving: false, error: err instanceof Error ? err.message : 'save failed' },
       }));
     }
-  }, [files, gateway]);
+  }, [files, gateway.rpc]);
 
   const revert = useCallback((name: string) => {
     setFiles(prev => ({ ...prev, [name]: { ...prev[name], content: prev[name].original, error: null } }));

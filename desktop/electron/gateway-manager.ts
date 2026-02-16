@@ -148,7 +148,14 @@ export class GatewayManager {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[gateway-manager] Failed to start gateway: ${msg}`);
-      this.opts.onError?.(msg);
+      if (!this.stopping && this.retries < this.maxRetries) {
+        this.retries++;
+        console.log(`[gateway-manager] Retrying gateway start (attempt ${this.retries}/${this.maxRetries})`);
+        this.opts.onError?.(`${msg} (retrying ${this.retries}/${this.maxRetries})`);
+        setTimeout(() => this.start(), 1000);
+      } else {
+        this.opts.onError?.(msg);
+      }
     }
   }
 
