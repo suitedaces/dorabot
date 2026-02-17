@@ -47,6 +47,7 @@ export type AgentOptions = {
   sessionId?: string;
   resumeId?: string;
   config: Config;
+  cwd?: string;
   channel?: string;
   connectedChannels?: { channel: string; chatId: string }[];
   timezone?: string;
@@ -82,6 +83,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     sessionId: providedSessionId,
     resumeId,
     config,
+    cwd,
     channel,
     timezone,
     ownerIdentity,
@@ -157,7 +159,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     config,
     channel,
     resumeId,
-    cwd: config.cwd,
+    cwd: cwd || config.cwd,
     env: cleanEnvForSdk(),
     maxTurns: config.maxTurns ?? undefined,
     canUseTool: opts.canUseTool,
@@ -268,6 +270,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
     sessionId: providedSessionId,
     resumeId,
     config,
+    cwd,
     channel,
     timezone,
     ownerIdentity,
@@ -331,7 +334,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
     config,
     channel,
     resumeId,
-    cwd: config.cwd,
+    cwd: cwd || config.cwd,
     env: cleanEnvForSdk(),
     maxTurns: config.maxTurns ?? undefined,
     canUseTool: opts.canUseTool,

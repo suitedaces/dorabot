@@ -59,7 +59,7 @@ export class GatewayManager {
 
     try {
       const shell = process.env.SHELL || '/bin/zsh';
-      const nodePath = execSync(`${shell} -lc 'command -v node'`, {
+      const nodePath = execSync(`${shell} -c 'command -v node'`, {
         timeout: 5000,
         encoding: 'utf-8',
       }).trim();

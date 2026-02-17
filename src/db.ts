@@ -74,7 +74,7 @@ export function getDb(): Database.Database {
       event_type TEXT,
       message TEXT,
       data TEXT,
-      created_at TEXT DEFAULT datetime('now')
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE INDEX IF NOT EXISTS idx_plans_logs_plan_id ON plans_logs(plan_id);

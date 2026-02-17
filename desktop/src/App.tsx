@@ -68,7 +68,7 @@ function playNotifSound() {
 const PRIMARY_NAV_ITEMS: { id: TabType; label: string; icon: React.ReactNode }[] = [
   { id: 'chat', label: 'Chat', icon: <MessageSquare className="w-3.5 h-3.5" /> },
   { id: 'plans', label: 'Plans', icon: <LayoutGrid className="w-3.5 h-3.5" /> },
-  { id: 'roadmap', label: 'Roadmap', icon: <Map className="w-3.5 h-3.5" /> },
+  { id: 'roadmap', label: 'Ideas', icon: <Map className="w-3.5 h-3.5" /> },
   { id: 'research', label: 'Research', icon: <FileSearch className="w-3.5 h-3.5" /> },
   { id: 'settings', label: 'Settings', icon: <Settings2 className="w-3.5 h-3.5" /> },
 ];

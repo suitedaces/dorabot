@@ -180,7 +180,7 @@ export function RoadmapView({ gateway }: Props) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-        <div className="text-sm font-semibold">Roadmap</div>
+        <div className="text-sm font-semibold">Ideas</div>
         <Badge variant="outline" className="text-[10px]">{items.length}</Badge>
         <Button size="sm" className="ml-auto h-7 text-[11px]" onClick={() => setAddOpen(true)}>
           <Plus className="mr-1 h-3.5 w-3.5" />Add Idea

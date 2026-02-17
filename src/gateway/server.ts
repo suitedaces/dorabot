@@ -1787,10 +1787,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     sessionKey: string;
     source: string;
     channel?: string;
+    cwd?: string;
     extraContext?: string;
     messageMetadata?: import('../session/manager.js').MessageMetadata;
   }): Promise<AgentResult | null> {
-    const { prompt, sessionKey, source, channel, extraContext, messageMetadata } = params;
+    const { prompt, sessionKey, source, channel, cwd, extraContext, messageMetadata } = params;
     console.log(`[gateway] agent run: source=${source} sessionKey=${sessionKey} prompt="${prompt.slice(0, 80)}..."`);
 
     // pre-run auth check: if dorabot_oauth token is expired, don't waste a run
@@ -1848,6 +1849,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           sessionId: session?.sessionId,
           resumeId,
           config,
+          cwd,
           channel,
           connectedChannels: connected,
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -3141,6 +3143,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             prompt,
             sessionKey,
             source: `plans/${planId}`,
+            cwd: worktree.path,
             extraContext: `Worktree path: ${worktree.path}\nBranch: ${worktree.branch}\nBase branch: ${worktree.baseBranch}`,
             messageMetadata: {
               channel: 'desktop',
