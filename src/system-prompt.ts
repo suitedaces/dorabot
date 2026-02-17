@@ -2,7 +2,8 @@ import { hostname } from 'node:os';
 import type { Config } from './config.js';
 import type { Skill } from './skills/loader.js';
 import { type WorkspaceFiles, buildWorkspaceSection, WORKSPACE_DIR, MEMORIES_DIR, loadRecentMemories, getTodayMemoryDir } from './workspace.js';
-import { loadGoals, type GoalTask } from './tools/goals.js';
+import { loadPlans, type Plan } from './tools/plans.js';
+import { loadRoadmap } from './roadmap/tools.js';
 
 export type SystemPromptOptions = {
   config: Config;
@@ -23,7 +24,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
   const sections: string[] = [];
 
   // identity
-  sections.push(`You are a personal agent running inside dorabot. Your job is helping the user achieve their goals. If you don't know what their goals are yet, find out: read USER.md and MEMORY.md, or ask.`);
+  sections.push(`You are a personal agent running inside dorabot. Your job is helping the user achieve their plans. If you don't know what they are yet, find out: read USER.md and MEMORY.md, or ask.`);
 
   // tool call style
   sections.push(`## Tool Call Style
@@ -134,58 +135,68 @@ This is your continuity between runs. Read it to know what already happened toda
 Promote important things from the journal up to MEMORY.md. Let daily files be verbose.${recentMemoriesSection}
 
 When to write:
-- User shares goals, preferences, facts → update USER.md or MEMORY.md
+- User shares plans, preferences, facts → update USER.md or MEMORY.md
 - Important decisions, "remember this" → MEMORY.md
 - Research findings, task outcomes, observations → today's journal
 - If you want something to survive between sessions, write it down.
 
 Don't store secrets or credentials in any memory file.`);
 
-  // goals
+  // plans + roadmap
   try {
-    const goals = loadGoals();
-    const active = goals.tasks.filter(t => !['done', 'rejected'].includes(t.status));
-    const statusRank: Record<GoalTask['status'], number> = {
+    const plans = loadPlans();
+    const roadmap = loadRoadmap();
+    const active = plans.tasks.filter(t => t.status !== 'done');
+    const statusRank: Record<Plan['status'], number> = {
       in_progress: 0,
-      approved: 1,
-      proposed: 2,
-      done: 3,
-      rejected: 4,
+      plan: 1,
+      done: 2,
     };
-    const priorityRank: Record<GoalTask['priority'], number> = { high: 0, medium: 1, low: 2 };
     const sorted = [...active].sort((a, b) => (
       statusRank[a.status] - statusRank[b.status]
-      || priorityRank[a.priority] - priorityRank[b.priority]
+      || a.type.localeCompare(b.type)
       || a.createdAt.localeCompare(b.createdAt)
     ));
     const lines = sorted.map(t => {
-      const pri = t.priority !== 'medium' ? ` (${t.priority})` : '';
       const tags = t.tags?.length ? ` [${t.tags.join(', ')}]` : '';
-      return `- #${t.id} [${t.status}] ${t.title}${pri}${tags}`;
+      const lane = t.roadmapItemId
+        ? roadmap.items.find(r => r.id === t.roadmapItemId)?.lane
+        : undefined;
+      return `- #${t.id} [${t.status}/${t.runState}] (${t.type}) ${t.title}${tags}${lane ? ` [roadmap:${lane}]` : ''}`;
     });
 
-    sections.push(`## Goal Execution Protocol
+    sections.push(`## Plan Execution Protocol
 
-Use goals_view/goals_update/goals_add/goals_propose/goals_move tools to manage goals.
-Prioritize goals in this order:
+Use plan_view/plan_update/plan_add/plan_start tools to manage plans.
+Use roadmap_view/roadmap_update/roadmap_create_plan to connect execution with ideas.
+Prioritize plans in this order:
 1. in_progress
-2. approved
-3. proposed (research-only, no implementation until approved)
+2. plan
 
 Execution rules:
-- For in_progress or approved goals, execute aggressively and push toward completion.
-- Keep goal status and result current with goals_update while you work.
+- For in_progress plans, execute aggressively and push toward completion.
+- Keep status/result/runState current with plan_update while you work.
 - If blocked on user input, ask AskUserQuestion with specific options.
-- If AskUserQuestion times out: message the user on an available channel, sleep 120 seconds, ask once more, then continue with defensible assumptions and log those assumptions in the goal result.
+- If AskUserQuestion times out: message the user on an available channel, sleep 120 seconds, ask once more, then continue with defensible assumptions and log those assumptions in the plan result.
 - Mark done only when the objective is actually complete.`);
 
+    const roadmapLines = roadmap.items
+      .sort((a, b) => a.lane.localeCompare(b.lane) || a.sortOrder - b.sortOrder)
+      .slice(0, 15)
+      .map(item => `- #${item.id} [${item.lane}] ${item.title}${item.linkedPlanIds.length ? ` (plans: ${item.linkedPlanIds.join(', ')})` : ''}`);
+
     if (lines.length > 0) {
-      sections.push(`## Active Goals
+      sections.push(`## Active Plans
 
 ${lines.join('\n')}`);
     }
+    if (roadmapLines.length > 0) {
+      sections.push(`## Roadmap Snapshot
+
+${roadmapLines.join('\n')}`);
+    }
   } catch {
-    // goals not available, skip
+    // plans/roadmap not available, skip
   }
 
   // workspace dir

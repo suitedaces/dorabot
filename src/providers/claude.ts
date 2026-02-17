@@ -4,10 +4,14 @@ import { execFile, execSync } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
 import type { Provider, ProviderRunOptions, ProviderMessage, ProviderAuthStatus, ProviderQueryResult, RunHandle } from './types.js';
 import { DORABOT_DIR, CLAUDE_KEY_PATH, CLAUDE_OAUTH_PATH } from '../workspace.js';
+import { getSecretStorageBackend, keychainDelete, keychainLoad, keychainStore, type SecretStorageBackend } from '../auth/keychain.js';
 
 // ── File paths ──────────────────────────────────────────────────────
 const KEY_FILE = CLAUDE_KEY_PATH;
 const OAUTH_FILE = CLAUDE_OAUTH_PATH;
+const KEYCHAIN_API_KEY_ACCOUNT = 'anthropic-api-key';
+const KEYCHAIN_OAUTH_ACCOUNT = 'anthropic-oauth';
+const REFRESH_LEAD_MS = 30 * 60 * 1000;
 
 // ── OAuth constants (same as Claude Code CLI) ───────────────────────
 const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
@@ -18,6 +22,8 @@ const OAUTH_SCOPES = 'user:inference user:profile';
 
 // ── API key helpers ─────────────────────────────────────────────────
 function loadPersistedKey(): string | undefined {
+  const keychainValue = keychainLoad(KEYCHAIN_API_KEY_ACCOUNT);
+  if (keychainValue) return keychainValue;
   try {
     if (existsSync(KEY_FILE)) {
       const key = readFileSync(KEY_FILE, 'utf-8').trim();
@@ -28,6 +34,8 @@ function loadPersistedKey(): string | undefined {
 }
 
 function persistKey(apiKey: string): void {
+  const storedInKeychain = keychainStore(KEYCHAIN_API_KEY_ACCOUNT, apiKey);
+  if (storedInKeychain) return;
   try {
     mkdirSync(DORABOT_DIR, { recursive: true });
     writeFileSync(KEY_FILE, apiKey, { mode: 0o600 });
@@ -38,6 +46,7 @@ function persistKey(apiKey: string): void {
 }
 
 function clearPersistedKey(): void {
+  keychainDelete(KEYCHAIN_API_KEY_ACCOUNT);
   try {
     if (existsSync(KEY_FILE)) writeFileSync(KEY_FILE, '', { mode: 0o600 });
   } catch { /* ignore */ }
@@ -72,7 +81,51 @@ type OAuthTokens = {
   expires_at: number; // ms since epoch
 };
 
+let nextRefreshAt: number | null = null;
+let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectRequired = false;
+const authRequiredListeners = new Set<(reason: string) => void>();
+
+function emitAuthRequired(reason: string): void {
+  reconnectRequired = true;
+  for (const listener of authRequiredListeners) {
+    try {
+      listener(reason);
+    } catch {
+      // ignore listener errors
+    }
+  }
+}
+
+export function onClaudeAuthRequired(listener: (reason: string) => void): () => void {
+  authRequiredListeners.add(listener);
+  return () => authRequiredListeners.delete(listener);
+}
+
+export function getClaudeTokenState(): {
+  storageBackend: SecretStorageBackend;
+  tokenHealth: 'valid' | 'expiring' | 'expired';
+  nextRefreshAt?: number;
+  reconnectRequired: boolean;
+} {
+  const tokens = loadOAuthTokens();
+  return {
+    storageBackend: getSecretStorageBackend(),
+    tokenHealth: tokenHealth(tokens),
+    nextRefreshAt: nextRefreshAt || undefined,
+    reconnectRequired,
+  };
+}
+
 function loadOAuthTokens(): OAuthTokens | null {
+  const raw = keychainLoad(KEYCHAIN_OAUTH_ACCOUNT);
+  if (raw) {
+    try {
+      return JSON.parse(raw) as OAuthTokens;
+    } catch {
+      // fall through to file
+    }
+  }
   try {
     if (existsSync(OAUTH_FILE)) {
       return JSON.parse(readFileSync(OAUTH_FILE, 'utf-8'));
@@ -82,19 +135,39 @@ function loadOAuthTokens(): OAuthTokens | null {
 }
 
 function persistOAuthTokens(tokens: OAuthTokens): void {
+  reconnectRequired = false;
+  const savedToKeychain = keychainStore(KEYCHAIN_OAUTH_ACCOUNT, JSON.stringify(tokens));
+  if (savedToKeychain) {
+    scheduleTokenRefresh(tokens);
+    return;
+  }
   try {
     mkdirSync(DORABOT_DIR, { recursive: true });
     writeFileSync(OAUTH_FILE, JSON.stringify(tokens), { mode: 0o600 });
     chmodSync(OAUTH_FILE, 0o600);
+    scheduleTokenRefresh(tokens);
   } catch (err) {
     console.error('[claude] failed to persist OAuth tokens:', err);
   }
 }
 
 function clearOAuthTokens(): void {
+  keychainDelete(KEYCHAIN_OAUTH_ACCOUNT);
+  nextRefreshAt = null;
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
   try {
     if (existsSync(OAUTH_FILE)) writeFileSync(OAUTH_FILE, '', { mode: 0o600 });
   } catch { /* ignore */ }
+}
+
+function tokenHealth(tokens: OAuthTokens | null): 'valid' | 'expiring' | 'expired' {
+  if (!tokens) return 'expired';
+  if (Date.now() >= tokens.expires_at) return 'expired';
+  if (Date.now() >= tokens.expires_at - REFRESH_LEAD_MS) return 'expiring';
+  return 'valid';
 }
 
 /** Refresh the access token using the refresh token */
@@ -120,11 +193,41 @@ async function refreshAccessToken(refreshToken: string): Promise<OAuthTokens | n
       expires_at: Date.now() + ((data.expires_in || 28800) * 1000),
     };
     persistOAuthTokens(tokens);
+    reconnectRequired = false;
     return tokens;
   } catch (err) {
     console.error('[claude] token refresh error:', err);
+    emitAuthRequired('OAuth refresh failed');
     return null;
   }
+}
+
+function scheduleTokenRefresh(tokens: OAuthTokens): void {
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
+
+  const runAt = Math.max(Date.now() + 1_000, tokens.expires_at - REFRESH_LEAD_MS);
+  nextRefreshAt = runAt;
+  const delay = runAt - Date.now();
+  refreshTimer = setTimeout(async () => {
+    refreshTimer = null;
+    const latest = loadOAuthTokens();
+    if (!latest) {
+      emitAuthRequired('Missing OAuth tokens');
+      nextRefreshAt = null;
+      return;
+    }
+    const refreshed = await refreshAccessToken(latest.refresh_token);
+    if (!refreshed) {
+      emitAuthRequired('OAuth refresh failed');
+      nextRefreshAt = null;
+      return;
+    }
+    scheduleTokenRefresh(refreshed);
+  }, delay);
+  refreshTimer.unref?.();
 }
 
 /** Ensure we have a valid access token, refreshing if needed. Sets CLAUDE_CODE_OAUTH_TOKEN env. */
@@ -135,11 +238,16 @@ async function ensureOAuthToken(): Promise<string | null> {
   if (Date.now() > tokens.expires_at - 300_000) {
     console.log('[claude] access token expired or expiring, refreshing...');
     const refreshed = await refreshAccessToken(tokens.refresh_token);
-    if (!refreshed) return null;
+    if (!refreshed) {
+      emitAuthRequired('OAuth token expired');
+      return null;
+    }
+    scheduleTokenRefresh(refreshed);
     process.env.CLAUDE_CODE_OAUTH_TOKEN = refreshed.access_token;
     return refreshed.access_token;
   }
 
+  scheduleTokenRefresh(tokens);
   process.env.CLAUDE_CODE_OAUTH_TOKEN = tokens.access_token;
   return tokens.access_token;
 }
@@ -237,6 +345,7 @@ export class ClaudeProvider implements Provider {
       const tokens = loadOAuthTokens();
       if (tokens?.access_token) {
         process.env.CLAUDE_CODE_OAUTH_TOKEN = tokens.access_token;
+        scheduleTokenRefresh(tokens);
       }
     }
     console.log(`[claude] auth method: ${method}`);
@@ -251,32 +360,72 @@ export class ClaudeProvider implements Provider {
   }
 
   async getAuthStatus(): Promise<ProviderAuthStatus> {
-    if (this._cachedAuth) return this._cachedAuth;
-
     const method = getActiveAuthMethod();
+    if (this._cachedAuth && (method === 'api_key' || method === 'cli_keychain')) {
+      return this._cachedAuth;
+    }
     switch (method) {
       case 'api_key': {
         const v = await validateApiKey(getApiKey()!);
         if (v.valid) {
-          this._cachedAuth = { authenticated: true, method: 'api_key', identity: 'Anthropic API key' };
+          this._cachedAuth = {
+            authenticated: true,
+            method: 'api_key',
+            identity: 'Anthropic API key',
+            storageBackend: getSecretStorageBackend(),
+          };
           return this._cachedAuth;
         }
-        return { authenticated: false, method: 'api_key', error: v.error };
+        return {
+          authenticated: false,
+          method: 'api_key',
+          error: v.error,
+          storageBackend: getSecretStorageBackend(),
+        };
       }
       case 'cli_keychain':
-        this._cachedAuth = { authenticated: true, method: 'oauth', identity: 'Claude CLI (keychain)' };
+        this._cachedAuth = {
+          authenticated: true,
+          method: 'oauth',
+          identity: 'Claude CLI (keychain)',
+          storageBackend: 'keychain',
+          tokenHealth: 'valid',
+        };
         return this._cachedAuth;
       case 'dorabot_oauth': {
         const token = await ensureOAuthToken();
+        const tokens = loadOAuthTokens();
+        const tokenState = getClaudeTokenState();
         if (token) {
-          this._cachedAuth = { authenticated: true, method: 'oauth', identity: 'Claude subscription' };
+          this._cachedAuth = {
+            authenticated: true,
+            method: 'oauth',
+            identity: 'Claude subscription',
+            storageBackend: tokenState.storageBackend,
+            tokenHealth: tokenHealth(tokens),
+            nextRefreshAt: tokenState.nextRefreshAt,
+            reconnectRequired: tokenState.reconnectRequired,
+          };
           return this._cachedAuth;
         }
         // token expired and refresh failed — needs re-auth
-        return { authenticated: false, method: 'oauth', error: 'OAuth token expired. Re-authentication required.' };
+        return {
+          authenticated: false,
+          method: 'oauth',
+          error: 'OAuth token expired. Re-authentication required.',
+          storageBackend: tokenState.storageBackend,
+          tokenHealth: tokenState.tokenHealth,
+          nextRefreshAt: tokenState.nextRefreshAt,
+          reconnectRequired: true,
+        };
       }
       default:
-        return { authenticated: false, error: 'Not authenticated. Sign in with your Claude account or provide an API key.' };
+        return {
+          authenticated: false,
+          error: 'Not authenticated. Sign in with your Claude account or provide an API key.',
+          storageBackend: getSecretStorageBackend(),
+          tokenHealth: 'expired',
+        };
     }
   }
 
@@ -287,7 +436,13 @@ export class ClaudeProvider implements Provider {
     }
     process.env.ANTHROPIC_API_KEY = apiKey;
     persistKey(apiKey);
-    this._cachedAuth = { authenticated: true, method: 'api_key', identity: 'Anthropic API key' };
+    reconnectRequired = false;
+    this._cachedAuth = {
+      authenticated: true,
+      method: 'api_key',
+      identity: 'Anthropic API key',
+      storageBackend: getSecretStorageBackend(),
+    };
     return this._cachedAuth;
   }
 
@@ -371,12 +526,21 @@ export class ClaudeProvider implements Provider {
 
       persistOAuthTokens(tokens);
       process.env.CLAUDE_CODE_OAUTH_TOKEN = tokens.access_token;
+      scheduleTokenRefresh(tokens);
 
       this._pkceVerifier = null;
       this._pkceState = null;
       this._pkceLoginId = null;
 
-      this._cachedAuth = { authenticated: true, method: 'oauth', identity: 'Claude subscription' };
+      reconnectRequired = false;
+      this._cachedAuth = {
+        authenticated: true,
+        method: 'oauth',
+        identity: 'Claude subscription',
+        storageBackend: getSecretStorageBackend(),
+        tokenHealth: tokenHealth(tokens),
+        nextRefreshAt: nextRefreshAt || undefined,
+      };
       return this._cachedAuth;
     } catch (err) {
       return { authenticated: false, error: err instanceof Error ? err.message : 'Token exchange failed' };
@@ -390,6 +554,7 @@ export class ClaudeProvider implements Provider {
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     clearPersistedKey();
     clearOAuthTokens();
+    reconnectRequired = false;
   }
 
   async *query(opts: ProviderRunOptions): AsyncGenerator<ProviderMessage, ProviderQueryResult, unknown> {
@@ -466,10 +631,10 @@ export class ClaudeProvider implements Provider {
       async interrupt() { await queryRef?.interrupt(); },
       async setModel(model: string) { await queryRef?.setModel(model); },
       async setPermissionMode(mode: string) { await queryRef?.setPermissionMode(mode as any); },
-      async stopTask(taskId: string) { await queryRef?.stopTask(taskId); },
+      async stopTask(taskId: string) { await (queryRef as any)?.stopTask?.(taskId); },
       async mcpServerStatus() { return queryRef?.mcpServerStatus() ?? []; },
-      async reconnectMcpServer(name: string) { await queryRef?.reconnectMcpServer(name); },
-      async toggleMcpServer(name: string, enabled: boolean) { await queryRef?.toggleMcpServer(name, enabled); },
+      async reconnectMcpServer(name: string) { await (queryRef as any)?.reconnectMcpServer?.(name); },
+      async toggleMcpServer(name: string, enabled: boolean) { await (queryRef as any)?.toggleMcpServer?.(name, enabled); },
     };
 
     // Notify caller that the handle is ready (before SDK query starts)
@@ -522,7 +687,7 @@ export class ClaudeProvider implements Provider {
         canUseTool: opts.canUseTool as any,
         abortController: opts.abortController,
         stderr: (data: string) => console.error(`[claude:stderr] ${data.trimEnd()}`),
-      },
+      } as any,
     });
 
     // Bind SDK query methods to the handle for gateway access

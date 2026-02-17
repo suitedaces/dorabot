@@ -3,7 +3,7 @@ import type { useGateway } from './useGateway';
 import type { useLayout } from './useLayout';
 import type { GroupId } from './useLayout';
 
-export type TabType = 'chat' | 'channels' | 'goals' | 'automation' | 'extensions' | 'memory' | 'research' | 'settings';
+export type TabType = 'chat' | 'channels' | 'plans' | 'roadmap' | 'automation' | 'extensions' | 'memory' | 'research' | 'settings';
 
 export type ChatTab = {
   id: string;
@@ -50,14 +50,26 @@ function loadTabsFromStorage(): Tab[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as Tab[];
     if (!Array.isArray(parsed) || parsed.length === 0) return [];
-    return parsed;
+    return parsed.map((tab) => {
+      if ((tab as any).type === 'goals') {
+        return {
+          ...(tab as any),
+          id: (tab as any).id === 'view:goals' ? 'view:plans' : (tab as any).id,
+          type: 'plans',
+          label: 'Plans',
+        } as Tab;
+      }
+      return tab;
+    });
   } catch {
     return [];
   }
 }
 
 function loadActiveTabIdFromStorage(): string | null {
-  return localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+  const value = localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+  if (value === 'view:goals') return 'view:plans';
+  return value;
 }
 
 export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<typeof useLayout>) {

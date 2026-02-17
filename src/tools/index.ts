@@ -3,7 +3,8 @@ import { messageTool } from './messaging.js';
 import { calendarTools } from './calendar.js';
 import { screenshotTool } from './screenshot.js';
 import { browserTool } from './browser.js';
-import { goalsTools } from './goals.js';
+import { plansTools } from './plans.js';
+import { roadmapTools } from '../roadmap/tools.js';
 import { researchTools } from './research.js';
 import { memoryTools } from './memory.js';
 
@@ -11,7 +12,8 @@ export { messageTool, registerChannelHandler, getChannelHandler, type ChannelHan
 export { setScheduler, getScheduler } from './calendar.js';
 export { screenshotTool } from './screenshot.js';
 export { browserTool, setBrowserConfig } from './browser.js';
-export { loadGoals, saveGoals, type Goals, type GoalTask } from './goals.js';
+export { loadPlans, savePlans, type Plan, type PlansState, type PlanRunState, type PlanStatus, type PlanType } from './plans.js';
+export { loadRoadmap, saveRoadmap, type RoadmapItem, type RoadmapLane, type RoadmapState } from '../roadmap/tools.js';
 export { loadResearch, saveResearch, type Research, type ResearchItem } from './research.js';
 
 // all custom tools for this agent
@@ -20,7 +22,8 @@ const customTools = [
   screenshotTool,
   browserTool,
   ...calendarTools,
-  ...goalsTools,
+  ...plansTools,
+  ...roadmapTools,
   ...researchTools,
   ...memoryTools,
 ];
@@ -32,4 +35,3 @@ export function createAgentMcpServer() {
     tools: customTools,
   });
 }
-

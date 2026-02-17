@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import type { Provider, ProviderRunOptions, ProviderMessage, ProviderAuthStatus, ProviderQueryResult } from './types.js';
 import type { ReasoningEffort } from '../config.js';
 import { DORABOT_DIR, CODEX_OAUTH_PATH, OPENAI_KEY_PATH } from '../workspace.js';
+import { getSecretStorageBackend, keychainDelete, keychainLoad, keychainStore, type SecretStorageBackend } from '../auth/keychain.js';
 
 // ── OAuth constants (same client as Codex CLI) ──────────────────────
 const OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
@@ -22,6 +23,9 @@ const JWT_CLAIM_PATH = 'https://api.openai.com/auth';
 // ── File paths ──────────────────────────────────────────────────────
 const CODEX_OAUTH_FILE = CODEX_OAUTH_PATH;
 const OPENAI_KEY_FILE = OPENAI_KEY_PATH;
+const KEYCHAIN_API_KEY_ACCOUNT = 'openai-api-key';
+const KEYCHAIN_OAUTH_ACCOUNT = 'openai-oauth';
+const REFRESH_LEAD_MS = 30 * 60 * 1000;
 
 const SUCCESS_HTML = `<!doctype html><html><body><p>Authentication successful. You can close this tab.</p></body></html>`;
 
@@ -135,7 +139,58 @@ type CodexOAuthTokens = {
   account_id: string;
 };
 
+let nextRefreshAt: number | null = null;
+let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectRequired = false;
+const authRequiredListeners = new Set<(reason: string) => void>();
+
+function emitAuthRequired(reason: string): void {
+  reconnectRequired = true;
+  for (const listener of authRequiredListeners) {
+    try {
+      listener(reason);
+    } catch {
+      // ignore listener failures
+    }
+  }
+}
+
+export function onCodexAuthRequired(listener: (reason: string) => void): () => void {
+  authRequiredListeners.add(listener);
+  return () => authRequiredListeners.delete(listener);
+}
+
+function tokenHealth(tokens: CodexOAuthTokens | null): 'valid' | 'expiring' | 'expired' {
+  if (!tokens) return 'expired';
+  if (Date.now() >= tokens.expires_at) return 'expired';
+  if (Date.now() >= tokens.expires_at - REFRESH_LEAD_MS) return 'expiring';
+  return 'valid';
+}
+
+export function getCodexTokenState(): {
+  storageBackend: SecretStorageBackend;
+  tokenHealth: 'valid' | 'expiring' | 'expired';
+  nextRefreshAt?: number;
+  reconnectRequired: boolean;
+} {
+  const tokens = loadCodexOAuthTokens();
+  return {
+    storageBackend: getSecretStorageBackend(),
+    tokenHealth: tokenHealth(tokens),
+    nextRefreshAt: nextRefreshAt || undefined,
+    reconnectRequired,
+  };
+}
+
 function loadCodexOAuthTokens(): CodexOAuthTokens | null {
+  const raw = keychainLoad(KEYCHAIN_OAUTH_ACCOUNT);
+  if (raw) {
+    try {
+      return JSON.parse(raw) as CodexOAuthTokens;
+    } catch {
+      // ignore keychain parse errors and fall back to file
+    }
+  }
   try {
     if (existsSync(CODEX_OAUTH_FILE)) {
       return JSON.parse(readFileSync(CODEX_OAUTH_FILE, 'utf-8'));
@@ -145,16 +200,25 @@ function loadCodexOAuthTokens(): CodexOAuthTokens | null {
 }
 
 function persistCodexOAuthTokens(tokens: CodexOAuthTokens): void {
+  reconnectRequired = false;
+  const savedToKeychain = keychainStore(KEYCHAIN_OAUTH_ACCOUNT, JSON.stringify(tokens));
+  if (savedToKeychain) {
+    scheduleCodexRefresh(tokens);
+    return;
+  }
   try {
     ensureDorabotDir();
     writeFileSync(CODEX_OAUTH_FILE, JSON.stringify(tokens), { mode: 0o600 });
     chmodSync(CODEX_OAUTH_FILE, 0o600);
+    scheduleCodexRefresh(tokens);
   } catch (err) {
     console.error('[codex] failed to persist OAuth tokens:', err);
   }
 }
 
 function loadPersistedOpenAIKey(): string | undefined {
+  const fromKeychain = keychainLoad(KEYCHAIN_API_KEY_ACCOUNT);
+  if (fromKeychain) return fromKeychain;
   try {
     if (existsSync(OPENAI_KEY_FILE)) {
       const key = readFileSync(OPENAI_KEY_FILE, 'utf-8').trim();
@@ -165,12 +229,43 @@ function loadPersistedOpenAIKey(): string | undefined {
 }
 
 function persistOpenAIKey(apiKey: string): void {
+  const savedToKeychain = keychainStore(KEYCHAIN_API_KEY_ACCOUNT, apiKey);
+  if (savedToKeychain) return;
   try {
     ensureDorabotDir();
     writeFileSync(OPENAI_KEY_FILE, apiKey, { mode: 0o600 });
     chmodSync(OPENAI_KEY_FILE, 0o600);
   } catch (err) {
     console.error('[codex] failed to persist API key:', err);
+  }
+}
+
+function clearPersistedOpenAIKey(): void {
+  keychainDelete(KEYCHAIN_API_KEY_ACCOUNT);
+  try {
+    if (existsSync(OPENAI_KEY_FILE)) {
+      writeFileSync(OPENAI_KEY_FILE, '', { mode: 0o600 });
+      chmodSync(OPENAI_KEY_FILE, 0o600);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function clearCodexOAuthTokens(): void {
+  keychainDelete(KEYCHAIN_OAUTH_ACCOUNT);
+  nextRefreshAt = null;
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
+  try {
+    if (existsSync(CODEX_OAUTH_FILE)) {
+      writeFileSync(CODEX_OAUTH_FILE, '', { mode: 0o600 });
+      chmodSync(CODEX_OAUTH_FILE, 0o600);
+    }
+  } catch {
+    // ignore
   }
 }
 
@@ -243,8 +338,38 @@ async function refreshCodexAccessToken(refreshToken: string): Promise<CodexOAuth
     };
   } catch (err) {
     console.error('[codex] token refresh error:', err);
+    emitAuthRequired('OAuth refresh failed');
     return null;
   }
+}
+
+function scheduleCodexRefresh(tokens: CodexOAuthTokens): void {
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
+
+  const runAt = Math.max(Date.now() + 1_000, tokens.expires_at - REFRESH_LEAD_MS);
+  nextRefreshAt = runAt;
+  const delay = runAt - Date.now();
+  refreshTimer = setTimeout(async () => {
+    refreshTimer = null;
+    const latest = loadCodexOAuthTokens();
+    if (!latest) {
+      emitAuthRequired('Missing OAuth tokens');
+      nextRefreshAt = null;
+      return;
+    }
+    const refreshed = await refreshCodexAccessToken(latest.refresh_token);
+    if (!refreshed) {
+      emitAuthRequired('OAuth refresh failed');
+      nextRefreshAt = null;
+      return;
+    }
+    persistCodexOAuthTokens(refreshed);
+    scheduleCodexRefresh(refreshed);
+  }, delay);
+  refreshTimer.unref?.();
 }
 
 /** Ensure we have a valid access token, refreshing if needed */
@@ -255,11 +380,17 @@ async function ensureCodexOAuthToken(): Promise<string | null> {
   if (Date.now() > tokens.expires_at - 300_000) {
     console.log('[codex] access token expiring, refreshing...');
     const refreshed = await refreshCodexAccessToken(tokens.refresh_token);
-    if (!refreshed) return null;
+    if (!refreshed) {
+      emitAuthRequired('OAuth token expired');
+      return null;
+    }
     persistCodexOAuthTokens(refreshed);
+    scheduleCodexRefresh(refreshed);
+    reconnectRequired = false;
     return refreshed.access_token;
   }
 
+  scheduleCodexRefresh(tokens);
   return tokens.access_token;
 }
 
@@ -379,6 +510,12 @@ const EFFORT_MAP: Record<ReasoningEffort, ModelReasoningEffort> = {
 export class CodexProvider implements Provider {
   readonly name = 'codex';
   private activeAbort: AbortController | null = null;
+  private pendingOAuth: { verifier: string; state: string; server: OAuthServer } | null = null;
+
+  constructor() {
+    const oauth = loadCodexOAuthTokens();
+    if (oauth) scheduleCodexRefresh(oauth);
+  }
 
   async checkReady(): Promise<{ ready: boolean; reason?: string }> {
     try {
@@ -401,16 +538,43 @@ export class CodexProvider implements Provider {
   async getAuthStatus(): Promise<ProviderAuthStatus> {
     ensureCodexHome();
     try {
+      const storageBackend = getSecretStorageBackend();
       // 1. Managed OAuth tokens (dorabot-managed)
       const oauthTokens = loadCodexOAuthTokens();
       if (oauthTokens) {
-        return { authenticated: true, method: 'oauth', identity: `ChatGPT (${oauthTokens.account_id})` };
+        const token = await ensureCodexOAuthToken();
+        const latest = loadCodexOAuthTokens() || oauthTokens;
+        if (!token) {
+          return {
+            authenticated: false,
+            method: 'oauth',
+            error: 'OAuth token expired. Reconnect required.',
+            storageBackend,
+            tokenHealth: tokenHealth(latest),
+            nextRefreshAt: nextRefreshAt || undefined,
+            reconnectRequired: true,
+          };
+        }
+        return {
+          authenticated: true,
+          method: 'oauth',
+          identity: `ChatGPT (${latest.account_id})`,
+          storageBackend,
+          tokenHealth: tokenHealth(latest),
+          nextRefreshAt: nextRefreshAt || undefined,
+          reconnectRequired,
+        };
       }
 
       // 2. Managed API key or env
       const apiKey = getOpenAIApiKey();
       if (apiKey) {
-        return { authenticated: true, method: 'api_key', identity: process.env.OPENAI_API_KEY ? 'env:OPENAI_API_KEY' : 'managed key' };
+        return {
+          authenticated: true,
+          method: 'api_key',
+          identity: process.env.OPENAI_API_KEY ? 'env:OPENAI_API_KEY' : 'managed key',
+          storageBackend,
+        };
       }
 
       // 3. Codex CLI auth.json
@@ -419,14 +583,27 @@ export class CodexProvider implements Provider {
         try {
           const authData = JSON.parse(readFileSync(authFile, 'utf-8'));
           if (authData.api_key || authData.token || authData.access_token) {
-            return { authenticated: true, method: authData.api_key ? 'api_key' : 'oauth' };
+            return {
+              authenticated: true,
+              method: authData.api_key ? 'api_key' : 'oauth',
+              storageBackend: 'file',
+            };
           }
         } catch { /* ignore */ }
       }
 
-      return { authenticated: false, error: 'Not authenticated with Codex' };
+      return {
+        authenticated: false,
+        error: 'Not authenticated with Codex',
+        storageBackend,
+        tokenHealth: 'expired',
+      };
     } catch (e) {
-      return { authenticated: false, error: `Auth check failed: ${e}` };
+      return {
+        authenticated: false,
+        error: `Auth check failed: ${e}`,
+        storageBackend: getSecretStorageBackend(),
+      };
     }
   }
 
@@ -434,12 +611,11 @@ export class CodexProvider implements Provider {
     ensureCodexHome();
     // Persist to dorabot-managed file
     persistOpenAIKey(apiKey);
+    reconnectRequired = false;
     // Also try to register with codex CLI
     await runCodexCmd(['login', '--with-api-key'], apiKey + '\n').catch(() => {});
     return this.getAuthStatus();
   }
-
-  private pendingOAuth: { verifier: string; state: string; server: OAuthServer } | null = null;
 
   async loginWithOAuth(): Promise<{ authUrl: string; loginId: string }> {
     ensureCodexHome();
@@ -489,6 +665,8 @@ export class CodexProvider implements Provider {
       }
 
       persistCodexOAuthTokens(tokens);
+      scheduleCodexRefresh(tokens);
+      reconnectRequired = false;
       return this.getAuthStatus();
     } finally {
       server.close();
@@ -814,6 +992,11 @@ export class CodexProvider implements Provider {
     if (this.pendingOAuth) {
       this.pendingOAuth.server.close();
       this.pendingOAuth = null;
+    }
+    if (refreshTimer) {
+      clearTimeout(refreshTimer);
+      refreshTimer = null;
+      nextRefreshAt = null;
     }
   }
 }

@@ -1,21 +1,27 @@
 import { motion } from "motion/react"
-import { LayoutGrid, Plus, Pencil, Eye, Lightbulb } from "lucide-react"
+import { LayoutGrid, Plus, Pencil, Eye, ArrowRightCircle, Map } from "lucide-react"
 import type { ToolUIProps } from "../tool-ui"
 import { safeParse } from "../../lib/safe-parse"
 
 const COLUMN_COLORS: Record<string, string> = {
-  proposed: "bg-amber-500",
-  approved: "bg-blue-500",
+  plan: "bg-amber-500",
+  now: "bg-amber-500",
+  next: "bg-blue-500",
+  later: "bg-violet-500",
   in_progress: "bg-violet-500",
   done: "bg-emerald-500",
-  rejected: "bg-muted-foreground",
+  failed: "bg-destructive",
 }
 
 const TOOL_META: Record<string, { icon: typeof LayoutGrid; verb: string; color: string }> = {
-  goals_view: { icon: Eye, verb: "viewing", color: "text-violet-400" },
-  goals_add: { icon: Plus, verb: "adding", color: "text-blue-400" },
-  goals_update: { icon: Pencil, verb: "updating", color: "text-amber-400" },
-  goals_propose: { icon: Lightbulb, verb: "proposing", color: "text-emerald-400" },
+  plan_view: { icon: Eye, verb: "viewing", color: "text-violet-400" },
+  plan_add: { icon: Plus, verb: "adding", color: "text-blue-400" },
+  plan_update: { icon: Pencil, verb: "updating", color: "text-amber-400" },
+  plan_start: { icon: ArrowRightCircle, verb: "starting", color: "text-emerald-400" },
+  roadmap_view: { icon: Eye, verb: "viewing", color: "text-violet-400" },
+  roadmap_add: { icon: Plus, verb: "adding", color: "text-blue-400" },
+  roadmap_update: { icon: Pencil, verb: "updating", color: "text-amber-400" },
+  roadmap_create_plan: { icon: Map, verb: "creating plan", color: "text-emerald-400" },
 }
 
 function MiniBoard({ streaming }: { streaming?: boolean }) {
@@ -45,9 +51,9 @@ function MiniBoard({ streaming }: { streaming?: boolean }) {
   )
 }
 
-export function GoalsStream({ name, input, output, isError, streaming }: ToolUIProps) {
+export function PlanStream({ name, input, output, isError, streaming }: ToolUIProps) {
   const parsed = safeParse(input)
-  const meta = TOOL_META[name] || TOOL_META.goals_view
+  const meta = TOOL_META[name] || TOOL_META.plan_view
   const Icon = meta.icon
   const done = !streaming && output != null
 
@@ -122,13 +128,13 @@ export function GoalsStream({ name, input, output, isError, streaming }: ToolUIP
           )}
 
           {/* view filter */}
-          {name === "goals_view" && parsed.status && parsed.status !== "all" && (
+          {(name === "plan_view" || name === "roadmap_view") && (parsed.status || parsed.lane) && (
             <motion.div
               className="text-[10px] text-muted-foreground/60"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
             >
-              filter: {parsed.status}
+              filter: {parsed.status || parsed.lane}
             </motion.div>
           )}
         </div>

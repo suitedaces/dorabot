@@ -21,7 +21,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import {
   MessageSquare, Radio, Zap, Brain, Settings2,
-  Sparkles, LayoutGrid, Loader2, Star,
+  Sparkles, LayoutGrid, Map, Loader2, Star,
   Sun, Moon, Clock, FileSearch, Plug
 } from 'lucide-react';
 
@@ -65,16 +65,22 @@ function playNotifSound() {
   } catch {}
 }
 
-const NAV_ITEMS: { id: TabType; label: string; icon: React.ReactNode }[] = [
-  { id: 'chat', label: 'Task', icon: <MessageSquare className="w-3.5 h-3.5" /> },
-  { id: 'channels', label: 'Channels', icon: <Radio className="w-3.5 h-3.5" /> },
-  { id: 'goals', label: 'Goals', icon: <LayoutGrid className="w-3.5 h-3.5" /> },
-  { id: 'automation', label: 'Automations', icon: <Zap className="w-3.5 h-3.5" /> },
-  { id: 'extensions', label: 'Extensions', icon: <Sparkles className="w-3.5 h-3.5" /> },
+const PRIMARY_NAV_ITEMS: { id: TabType; label: string; icon: React.ReactNode }[] = [
+  { id: 'chat', label: 'Chat', icon: <MessageSquare className="w-3.5 h-3.5" /> },
+  { id: 'plans', label: 'Plans', icon: <LayoutGrid className="w-3.5 h-3.5" /> },
+  { id: 'roadmap', label: 'Roadmap', icon: <Map className="w-3.5 h-3.5" /> },
   { id: 'research', label: 'Research', icon: <FileSearch className="w-3.5 h-3.5" /> },
-  { id: 'memory', label: 'Memory', icon: <Brain className="w-3.5 h-3.5" /> },
   { id: 'settings', label: 'Settings', icon: <Settings2 className="w-3.5 h-3.5" /> },
 ];
+
+const SECONDARY_NAV_ITEMS: { id: TabType; label: string; icon: React.ReactNode }[] = [
+  { id: 'channels', label: 'Channels', icon: <Radio className="w-3.5 h-3.5" /> },
+  { id: 'automation', label: 'Automations', icon: <Zap className="w-3.5 h-3.5" /> },
+  { id: 'extensions', label: 'Extensions', icon: <Sparkles className="w-3.5 h-3.5" /> },
+  { id: 'memory', label: 'Memory', icon: <Brain className="w-3.5 h-3.5" /> },
+];
+
+const ALL_NAV_ITEMS = [...PRIMARY_NAV_ITEMS, ...SECONDARY_NAV_ITEMS];
 
 export default function App() {
   const [showFiles, setShowFiles] = useState(true);
@@ -231,11 +237,11 @@ export default function App() {
             playNotifSound();
           }
           break;
-        case 'goals.update':
-          if (!allowPing('goals.update')) break;
-          toast('goals updated', { description: 'new goal activity', duration: 4000 });
+        case 'plans.update':
+          if (!allowPing('plans.update')) break;
+          toast('plans updated', { description: 'new plan activity', duration: 4000 });
           if (!windowFocused) {
-            notify('goals updated');
+            notify('plans updated');
             playNotifSound();
           }
           break;
@@ -244,6 +250,13 @@ export default function App() {
           toast('research updated', { description: 'new research activity', duration: 4000 });
           if (!windowFocused) {
             notify('research updated');
+            playNotifSound();
+          }
+          break;
+        case 'auth.required':
+          toast.error(`${event.provider} authentication required`, { description: event.reason, duration: 8000 });
+          if (!windowFocused) {
+            notify(`${event.provider} auth required`);
             playNotifSound();
           }
           break;
@@ -327,7 +340,7 @@ export default function App() {
         tabState.newChatTab();
       }
     } else {
-      tabState.openViewTab(navId, NAV_ITEMS.find(n => n.id === navId)?.label || navId);
+      tabState.openViewTab(navId, ALL_NAV_ITEMS.find(n => n.id === navId)?.label || navId);
     }
     setSelectedFile(null);
   }, [tabState, gw.sessionStates]);
@@ -749,7 +762,30 @@ export default function App() {
           <div className="flex flex-col h-full min-h-0">
             <div className="shrink-0 p-2">
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground px-2.5 pt-3 pb-1">views</div>
-              {NAV_ITEMS.map(item => (
+              {PRIMARY_NAV_ITEMS.map(item => (
+                <Tooltip key={item.id}>
+                  <TooltipTrigger asChild>
+                    <button
+                      className={`flex items-center gap-2 w-full px-2.5 py-1.5 rounded-md text-xs transition-colors ${
+                        activeNavId === item.id
+                          ? 'bg-secondary text-foreground'
+                          : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'
+                      }`}
+                      onClick={() => handleNavClick(item.id)}
+                    >
+                      {item.icon}
+                      {item.label}
+                      {item.id === 'chat' && gw.backgroundRuns.some(r => r.status === 'running') && (
+                        <Loader2 className="w-3 h-3 ml-auto animate-spin text-muted-foreground" />
+                      )}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right" className="text-[10px]">{item.label}</TooltipContent>
+                </Tooltip>
+              ))}
+
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground px-2.5 pt-3 pb-1">advanced</div>
+              {SECONDARY_NAV_ITEMS.map(item => (
                 <Tooltip key={item.id}>
                   <TooltipTrigger asChild>
                     <button

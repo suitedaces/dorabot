@@ -58,6 +58,42 @@ export function getDb(): Database.Database {
       value TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS plans_tasks (
+      id TEXT PRIMARY KEY,
+      data TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS plans_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS plans_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      plan_id TEXT,
+      event_type TEXT,
+      message TEXT,
+      data TEXT,
+      created_at TEXT DEFAULT datetime('now')
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_plans_logs_plan_id ON plans_logs(plan_id);
+
+    CREATE TABLE IF NOT EXISTS roadmap_items (
+      id TEXT PRIMARY KEY,
+      data TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS roadmap_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_roadmap_lane_sort ON roadmap_items(
+      json_extract(data, '$.lane'),
+      json_extract(data, '$.sortOrder')
+    );
+
     -- migrate from old board tables if they exist
     INSERT OR IGNORE INTO goals_tasks SELECT * FROM board_tasks WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='board_tasks');
     INSERT OR IGNORE INTO goals_meta SELECT * FROM board_meta WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='board_meta');

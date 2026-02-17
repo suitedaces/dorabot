@@ -1163,7 +1163,7 @@ const TOUR_FEATURES = [
   },
   {
     icon: LayoutGrid,
-    title: 'Goals',
+    title: 'Plans',
     description: 'Track outcomes and let the agent help execute.',
     color: 'text-success',
   },

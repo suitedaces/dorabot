@@ -11,7 +11,8 @@ import { Automations } from './Automations';
 import { SettingsView } from '../views/Settings';
 import { SoulView } from '../views/Soul';
 import { ExtensionsView } from '../views/Extensions';
-import { GoalsView } from '../views/Goals';
+import { PlansView } from '../views/Plans';
+import { RoadmapView } from '../views/Roadmap';
 import { ResearchView } from '../views/Research';
 import { FileViewer } from './FileViewer';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -122,8 +123,10 @@ export function EditorGroupPanel({
             onSwitchChannel={onSwitchChannel}
           />
         );
-      case 'goals':
-        return <GoalsView gateway={gateway} onViewSession={onViewSession} />;
+      case 'plans':
+        return <PlansView gateway={gateway} onViewSession={onViewSession} />;
+      case 'roadmap':
+        return <RoadmapView gateway={gateway} />;
       case 'automation':
         return <Automations gateway={gateway} />;
       case 'research':

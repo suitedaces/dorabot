@@ -10,7 +10,7 @@ import { ScreenshotTool } from "./ScreenshotTool"
 import { MessageTool } from "./MessageTool"
 import { BrowserTool } from "./BrowserTool"
 import { CronTool } from "./CronTool"
-import { GoalsTool } from "./GoalsTool"
+import { PlanTool } from "./PlanTool"
 import { TaskTool } from "./TaskTool"
 import { DefaultTool } from "./DefaultTool"
 
@@ -41,10 +41,14 @@ const TOOL_MAP: Record<string, React.ComponentType<ToolUIProps>> = {
   schedule_cron: CronTool,
   list_reminders: CronTool,
   cancel_reminder: CronTool,
-  goals_view: GoalsTool,
-  goals_add: GoalsTool,
-  goals_update: GoalsTool,
-  goals_propose: GoalsTool,
+  plan_view: PlanTool,
+  plan_add: PlanTool,
+  plan_update: PlanTool,
+  plan_start: PlanTool,
+  roadmap_view: PlanTool,
+  roadmap_add: PlanTool,
+  roadmap_update: PlanTool,
+  roadmap_create_plan: PlanTool,
   Task: TaskTool,
 }
 

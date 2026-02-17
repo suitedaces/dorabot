@@ -8,6 +8,8 @@ export const WORKSPACE_DIR = join(DORABOT_DIR, 'workspace');
 export const MEMORIES_DIR = join(WORKSPACE_DIR, 'memories');
 export const RESEARCH_DIR = join(DORABOT_DIR, 'research');
 export const RESEARCH_SKILL_PATH = join(RESEARCH_DIR, 'SKILL.md');
+export const PLANS_DIR = join(DORABOT_DIR, 'plans');
+export const WORKTREES_DIR = join(DORABOT_DIR, 'worktrees');
 export const DORABOT_DB_PATH = join(DORABOT_DIR, 'dorabot.db');
 export const DORABOT_CONFIG_PATH = join(DORABOT_DIR, 'config.json');
 export const GATEWAY_TOKEN_PATH = join(DORABOT_DIR, 'gateway-token');
@@ -122,7 +124,7 @@ const DEFAULT_USER = `# User Profile
 - Timezone:
 - Notes:
 
-## Goals
+## Plans
 
 (What are they trying to achieve? Short-term and long-term.)
 
@@ -188,6 +190,8 @@ export function ensureWorkspace(dir?: string): void {
   mkdirSync(wsDir, { recursive: true });
   mkdirSync(MEMORIES_DIR, { recursive: true });
   mkdirSync(RESEARCH_DIR, { recursive: true });
+  mkdirSync(PLANS_DIR, { recursive: true });
+  mkdirSync(WORKTREES_DIR, { recursive: true });
   mkdirSync(LOGS_DIR, { recursive: true });
   mkdirSync(SESSIONS_DIR, { recursive: true });
   mkdirSync(SKILLS_DIR, { recursive: true });

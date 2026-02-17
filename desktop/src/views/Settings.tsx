@@ -270,9 +270,25 @@ const CODEX_MODELS = [
   { value: 'gpt-5', label: 'gpt-5' },
 ];
 
+type ProviderAuthView = {
+  authenticated: boolean;
+  method?: string;
+  identity?: string;
+  error?: string;
+  storageBackend?: 'keychain' | 'file';
+  tokenHealth?: 'valid' | 'expiring' | 'expired';
+  nextRefreshAt?: number;
+  reconnectRequired?: boolean;
+};
+
+function fmtNextRefresh(ts?: number): string {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleString();
+}
+
 function AnthropicCard({ gateway, disabled }: { gateway: ReturnType<typeof useGateway>; disabled: boolean }) {
   const [showAuth, setShowAuth] = useState(false);
-  const [authStatus, setAuthStatus] = useState<{ authenticated: boolean; method?: string; identity?: string } | null>(null);
+  const [authStatus, setAuthStatus] = useState<ProviderAuthView | null>(null);
   const cfg = gateway.configData as Record<string, any> | null;
   const currentModel = gateway.model || cfg?.model || 'claude-sonnet-4-5-20250929';
   const permissionMode = cfg?.permissionMode || 'default';
@@ -292,6 +308,8 @@ function AnthropicCard({ gateway, disabled }: { gateway: ReturnType<typeof useGa
   const authenticated = authStatus?.authenticated ?? false;
   const authMethod = authStatus?.method;
   const authIdentity = authStatus?.identity;
+  const storageBackend = authStatus?.storageBackend || 'file';
+  const tokenHealth = authStatus?.tokenHealth || (authenticated ? 'valid' : 'expired');
 
   const handleAuthSuccess = useCallback(() => {
     setShowAuth(false);
@@ -327,6 +345,12 @@ function AnthropicCard({ gateway, disabled }: { gateway: ReturnType<typeof useGa
                     ? `connected via ${authIdentity || (authMethod === 'oauth' ? 'Claude subscription' : 'API key')}`
                     : 'not authenticated'}
                 </div>
+                <div className="text-[10px] text-muted-foreground">
+                  storage: {storageBackend} · token: {tokenHealth}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  next refresh: {fmtNextRefresh(authStatus?.nextRefreshAt)}
+                </div>
               </div>
               <Button
                 variant="outline"
@@ -335,7 +359,7 @@ function AnthropicCard({ gateway, disabled }: { gateway: ReturnType<typeof useGa
                 onClick={() => setShowAuth(!showAuth)}
                 disabled={disabled}
               >
-                {showAuth ? 'cancel' : authenticated ? 'change' : 'set up'}
+                {showAuth ? 'cancel' : authStatus?.reconnectRequired ? 'reconnect' : authenticated ? 'change' : 'set up'}
               </Button>
             </div>
 
@@ -393,7 +417,7 @@ function AnthropicCard({ gateway, disabled }: { gateway: ReturnType<typeof useGa
 
 function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGateway>; disabled: boolean }) {
   const [showAuth, setShowAuth] = useState(false);
-  const [authStatus, setAuthStatus] = useState<{ authenticated: boolean; method?: string; identity?: string } | null>(null);
+  const [authStatus, setAuthStatus] = useState<ProviderAuthView | null>(null);
   const cfg = gateway.configData as Record<string, any> | null;
   const codexModel = cfg?.provider?.codex?.model || 'gpt-5.3-codex';
   const reasoningEffort = cfg?.reasoningEffort as string | null;
@@ -415,6 +439,8 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
 
   const authenticated = authStatus?.authenticated ?? false;
   const authMethod = authStatus?.method;
+  const storageBackend = authStatus?.storageBackend || 'file';
+  const tokenHealth = authStatus?.tokenHealth || (authenticated ? 'valid' : 'expired');
 
   const handleAuthSuccess = useCallback(() => {
     setShowAuth(false);
@@ -450,6 +476,12 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
                     ? `connected via ${authMethod === 'oauth' ? 'ChatGPT subscription' : 'API key'}`
                     : 'not authenticated'}
                 </div>
+                <div className="text-[10px] text-muted-foreground">
+                  storage: {storageBackend} · token: {tokenHealth}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  next refresh: {fmtNextRefresh(authStatus?.nextRefreshAt)}
+                </div>
               </div>
               <Button
                 variant="outline"
@@ -458,7 +490,7 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
                 onClick={() => setShowAuth(!showAuth)}
                 disabled={disabled}
               >
-                {showAuth ? 'cancel' : authenticated ? 'change' : 'set up'}
+                {showAuth ? 'cancel' : authStatus?.reconnectRequired ? 'reconnect' : authenticated ? 'change' : 'set up'}
               </Button>
             </div>
 

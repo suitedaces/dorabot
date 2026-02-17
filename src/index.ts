@@ -14,6 +14,7 @@ import { startGateway } from './gateway/index.js';
 import { getAllChannelStatuses } from './channels/index.js';
 import { loginWhatsApp, logoutWhatsApp, isWhatsAppLinked } from './channels/whatsapp/index.js';
 import { ensureWorkspace } from './workspace.js';
+import { runGoalsToPlansMigration } from './migrations/rename-goals-to-plans.js';
 
 async function readStdin(): Promise<string> {
   return new Promise((resolve) => {
@@ -269,6 +270,7 @@ Commands (interactive mode):
   migrateDataDir();
   const config = await loadConfig(values.config);
   ensureWorkspace();
+  runGoalsToPlansMigration();
 
   // override model if specified
   if (values.model) {

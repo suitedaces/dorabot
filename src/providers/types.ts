@@ -56,6 +56,10 @@ export type ProviderAuthStatus = {
   method?: 'api_key' | 'oauth';
   identity?: string;
   error?: string;
+  storageBackend?: 'keychain' | 'file';
+  tokenHealth?: 'valid' | 'expiring' | 'expired';
+  nextRefreshAt?: number;
+  reconnectRequired?: boolean;
   /** Model currently configured (e.g. "claude-opus-4-5-20251101") */
   model?: string;
   /** Claude Code CLI version (e.g. "2.0.76") */

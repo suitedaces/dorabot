@@ -26,15 +26,17 @@ import { validateTelegramToken } from '../channels/telegram/bot.js';
 import { insertEvent, queryEventsBySessionCursor, deleteEventsUpToSeq, cleanupOldEvents } from './event-log.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { setScheduler } from '../tools/index.js';
-import { loadGoals, saveGoals, type GoalTask } from '../tools/goals.js';
+import { loadPlans, savePlans, type Plan, appendPlanLog, readPlanLogs, readPlanDoc, createPlanFromRoadmapItem } from '../tools/plans.js';
+import { loadRoadmap, saveRoadmap } from '../roadmap/tools.js';
 import { loadResearch, saveResearch, readResearchContent, type ResearchItem } from '../tools/research.js';
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
-import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, getActiveAuthMethod, isOAuthTokenExpired } from '../providers/claude.js';
-import { isCodexInstalled, hasCodexAuth } from '../providers/codex.js';
+import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, getActiveAuthMethod, isOAuthTokenExpired, onClaudeAuthRequired } from '../providers/claude.js';
+import { isCodexInstalled, hasCodexAuth, onCodexAuthRequired } from '../providers/codex.js';
 import type { ProviderName } from '../config.js';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { classifyToolCall, cleanToolName, isToolAllowed, type Tier } from './tool-policy.js';
 import { AUTONOMOUS_SCHEDULE_ID, buildAutonomousCalendarItem, PULSE_INTERVALS, DEFAULT_PULSE_INTERVAL, pulseIntervalToRrule, rruleToPulseInterval } from '../autonomous.js';
+import { ensureWorktreeForPlan, getWorktreeStats, mergeWorktreeBranch, pushWorktreePr, removeWorktree } from '../worktree/manager.js';
 import {
   DORABOT_DIR,
   GATEWAY_TOKEN_PATH,
@@ -72,7 +74,8 @@ const TOOL_EMOJI: Record<string, string> = {
   screenshot: '📸', browser: '🌐',
   schedule: '⏰', list_schedule: '⏰',
   update_schedule: '⏰', cancel_schedule: '⏰',
-  goals_view: '🎯', goals_add: '🎯', goals_update: '🎯', goals_propose: '🎯',
+  plan_view: '🎯', plan_add: '🎯', plan_update: '🎯', plan_start: '🎯',
+  roadmap_view: '🗺️', roadmap_add: '🗺️', roadmap_update: '🗺️', roadmap_create_plan: '🗺️',
 };
 
 const TOOL_LABEL: Record<string, string> = {
@@ -84,7 +87,8 @@ const TOOL_LABEL: Record<string, string> = {
   screenshot: 'Took screenshot', browser: 'Browsed',
   schedule: 'Scheduled', list_schedule: 'Listed schedule',
   update_schedule: 'Updated schedule', cancel_schedule: 'Cancelled schedule',
-  goals_view: 'Checked goals', goals_add: 'Added goal', goals_update: 'Updated goal', goals_propose: 'Proposed goal',
+  plan_view: 'Checked plans', plan_add: 'Added plan', plan_update: 'Updated plan', plan_start: 'Started plan',
+  roadmap_view: 'Checked roadmap', roadmap_add: 'Added roadmap item', roadmap_update: 'Updated roadmap item', roadmap_create_plan: 'Created plan',
 };
 
 const TOOL_ACTIVE_LABEL: Record<string, string> = {
@@ -96,7 +100,8 @@ const TOOL_ACTIVE_LABEL: Record<string, string> = {
   screenshot: 'Taking screenshot', browser: 'Browsing',
   schedule: 'Scheduling', list_schedule: 'Listing schedule',
   update_schedule: 'Updating schedule', cancel_schedule: 'Cancelling schedule',
-  goals_view: 'Checking goals', goals_add: 'Adding goal', goals_update: 'Updating goal', goals_propose: 'Proposing goal',
+  plan_view: 'Checking plans', plan_add: 'Adding plan', plan_update: 'Updating plan', plan_start: 'Starting plan',
+  roadmap_view: 'Checking roadmap', roadmap_add: 'Adding roadmap item', roadmap_update: 'Updating roadmap item', roadmap_create_plan: 'Creating plan',
 };
 
 // Plural labels when multiple consecutive same-tool calls are grouped
@@ -375,6 +380,19 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     });
   }
 
+  const unsubscribeClaudeAuthRequired = onClaudeAuthRequired((reason) => {
+    broadcast({
+      event: 'provider.auth_required',
+      data: { provider: 'claude', reason, timestamp: Date.now() },
+    });
+  });
+  const unsubscribeCodexAuthRequired = onCodexAuthRequired((reason) => {
+    broadcast({
+      event: 'provider.auth_required',
+      data: { provider: 'codex', reason, timestamp: Date.now() },
+    });
+  });
+
   // file system watcher manager
   type FileWatchEntry = {
     watcher: FSWatcher;
@@ -512,8 +530,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const channelQuestionRefs = new Map<string, ChannelQuestionRef>();
   const MAX_CHANNEL_QUESTION_REFS = 2000;
   const QUESTION_LINK_WINDOW_MS = 45 * 60 * 1000;
-  const activeGoalRuns = new Map<string, { sessionKey: string; startedAt: number }>();
-  const goalRunBySession = new Map<string, string>();
+  const activePlanRuns = new Map<string, { sessionKey: string; startedAt: number }>();
+  const planRunBySession = new Map<string, string>();
   const runEventPruneTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const RUN_EVENT_PRUNE_GRACE_MS = 10 * 60 * 1000;
   // keep replay data for an extended window across crashes; normal pruning is run-end based.
@@ -577,64 +595,92 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   }
 
   function isMarkedRunSource(source: string): boolean {
-    return source === `calendar/${AUTONOMOUS_SCHEDULE_ID}` || source.startsWith('goals/');
+    return source === `calendar/${AUTONOMOUS_SCHEDULE_ID}` || source.startsWith('plans/');
   }
 
-  function extractGoalIdFromSource(source: string): string | null {
-    const m = source.match(/^goals\/([^/]+)$/);
+  function extractPlanIdFromSource(source: string): string | null {
+    const m = source.match(/^plans\/([^/]+)$/);
     return m ? m[1] : null;
   }
 
-  function buildGoalExecutionPrompt(task: GoalTask): string {
+  function buildPlanExecutionPrompt(task: Plan, roadmapContext?: string, planDoc?: string): string {
     const tagLine = task.tags?.length ? `Tags: ${task.tags.join(', ')}` : '';
     const descriptionLine = task.description ? `Description:\n${task.description}` : 'Description:\n(No extra description provided)';
+    const roadmapLine = roadmapContext ? `Roadmap context:\n${roadmapContext}` : '';
+    const planDocLine = planDoc ? `plan.md:\n${planDoc}` : '';
 
     return [
-      `Execute goal #${task.id}: ${task.title}`,
+      `Execute plan #${task.id}: ${task.title}`,
       '',
       descriptionLine,
+      roadmapLine,
+      planDocLine,
       tagLine,
       '',
       'Execution protocol:',
-      '- Push this goal as far as possible toward completion in this run.',
+      '- Push this plan as far as possible toward completion in this run.',
       '- Default to concrete action, not planning-only responses.',
-      '- Keep the goal state accurate with goals_update (status/result/progress).',
+      '- Keep plan state accurate with plan_update (status/runState/result/error).',
       '- If blocked by missing user input, ask AskUserQuestion with specific options.',
-      '- If AskUserQuestion times out: message the user on an available channel, sleep 120 seconds, ask once more, then continue with the best defensible assumption and document that assumption in the goal result.',
-      '- For proposed goals: research-only. For approved/in_progress goals: execute aggressively.',
+      '- If AskUserQuestion times out: message the user on an available channel, sleep 120 seconds, ask once more, then continue with the best defensible assumption and document that assumption in the plan result.',
       '',
       'Done criteria:',
       '- Mark done only when objective is achieved.',
-      '- If not done, leave clear progress notes and the next concrete step in result.',
+      '- If not done, leave clear progress notes and next concrete step in result.',
     ].filter(Boolean).join('\n');
   }
 
-  function markGoalRunStarted(goalId: string, sessionKey: string): void {
-    activeGoalRuns.set(goalId, { sessionKey, startedAt: Date.now() });
-    goalRunBySession.set(sessionKey, goalId);
+  function markPlanRunStarted(planId: string, sessionKey: string): void {
+    activePlanRuns.set(planId, { sessionKey, startedAt: Date.now() });
+    planRunBySession.set(sessionKey, planId);
     broadcast({
-      event: 'goals.execution',
-      data: { goalId, sessionKey, status: 'started', timestamp: Date.now() },
+      event: 'plans.run',
+      data: { planId, sessionKey, status: 'started', timestamp: Date.now() },
     });
   }
 
-  function finishGoalRun(sessionKey: string, status: 'completed' | 'error', error?: string): void {
-    const goalId = goalRunBySession.get(sessionKey);
-    if (!goalId) return;
-    const current = activeGoalRuns.get(goalId);
-    if (current?.sessionKey === sessionKey) activeGoalRuns.delete(goalId);
-    goalRunBySession.delete(sessionKey);
+  function finishPlanRun(sessionKey: string, status: 'completed' | 'error', error?: string): void {
+    const planId = planRunBySession.get(sessionKey);
+    if (!planId) return;
+    const current = activePlanRuns.get(planId);
+    if (current?.sessionKey === sessionKey) activePlanRuns.delete(planId);
+    planRunBySession.delete(sessionKey);
+
+    const plans = loadPlans();
+    const plan = plans.tasks.find(p => p.id === planId);
+    if (plan) {
+      plan.runState = status === 'completed' ? 'idle' : 'failed';
+      plan.error = status === 'error' ? (error || 'Plan run failed') : undefined;
+      plan.updatedAt = new Date().toISOString();
+      if (status === 'completed') {
+        plan.status = 'done';
+        plan.completedAt = plan.updatedAt;
+      }
+      savePlans(plans);
+      appendPlanLog(plan.id, status === 'completed' ? 'run_completed' : 'run_error', status === 'completed' ? 'Plan run completed' : (error || 'Plan run failed'));
+      broadcast({ event: 'plans.update', data: { planId: plan.id, plan } });
+      broadcast({
+        event: 'plans.log',
+        data: {
+          planId: plan.id,
+          eventType: status === 'completed' ? 'run_completed' : 'run_error',
+          message: status === 'completed' ? 'Plan run completed' : (error || 'Plan run failed'),
+          timestamp: Date.now(),
+        },
+      });
+    }
+
     broadcast({
-      event: 'goals.execution',
-      data: { goalId, sessionKey, status, timestamp: Date.now(), ...(error ? { error } : {}) },
+      event: 'plans.run',
+      data: { planId, sessionKey, status, timestamp: Date.now(), ...(error ? { error } : {}) },
     });
   }
 
-  function maybeMarkGoalRunFromSource(source: string, sessionKey: string): void {
-    const goalId = extractGoalIdFromSource(source);
-    if (!goalId) return;
-    if (goalRunBySession.get(sessionKey) === goalId) return;
-    markGoalRunStarted(goalId, sessionKey);
+  function maybeMarkPlanRunFromSource(source: string, sessionKey: string): void {
+    const planId = extractPlanIdFromSource(source);
+    if (!planId) return;
+    if (planRunBySession.get(sessionKey) === planId) return;
+    markPlanRunStarted(planId, sessionKey);
   }
 
   function extractRunSessionId(text?: string): string | undefined {
@@ -1767,7 +1813,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
     const run = prev.then(async () => {
       console.log(`[handleAgentRun] prev resolved, starting run for ${sessionKey}`);
-      maybeMarkGoalRunFromSource(source, sessionKey);
+      maybeMarkPlanRunFromSource(source, sessionKey);
       sessionRegistry.setActiveRun(sessionKey, true);
       if (channel) activeRunChannels.set(sessionKey, channel);
       activeRunSources.set(sessionKey, source);
@@ -1825,13 +1871,36 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
         const maybeRegisterRunRefFromToolResult = (toolUseId: string, toolResultText: string) => {
           const meta = toolUseMeta.get(toolUseId);
-          if (!meta || meta.name !== 'message') return;
-          const sentId = toolResultText.match(/Message sent\. ID:\s*([^\s]+)/)?.[1];
-          const targetChannel = typeof meta.input.channel === 'string' ? meta.input.channel : channel;
-          const targetChatId = typeof meta.input.target === 'string' ? meta.input.target : undefined;
-          const outboundText = typeof meta.input.message === 'string' ? meta.input.message : '';
-          if (!sentId || !targetChannel || !targetChatId) return;
-          registerRunReplyRef(source, sessionKey, targetChannel, targetChatId, sentId, outboundText);
+          if (!meta) return;
+
+          if (meta.name === 'message') {
+            const sentId = toolResultText.match(/Message sent\. ID:\s*([^\s]+)/)?.[1];
+            const targetChannel = typeof meta.input.channel === 'string' ? meta.input.channel : channel;
+            const targetChatId = typeof meta.input.target === 'string' ? meta.input.target : undefined;
+            const outboundText = typeof meta.input.message === 'string' ? meta.input.message : '';
+            if (!sentId || !targetChannel || !targetChatId) return;
+            registerRunReplyRef(source, sessionKey, targetChannel, targetChatId, sentId, outboundText);
+            return;
+          }
+
+          if (meta.name === 'plan_update' || meta.name === 'plan_start') {
+            const planId = typeof meta.input.id === 'string'
+              ? meta.input.id
+              : typeof meta.input.planId === 'string'
+                ? meta.input.planId
+                : undefined;
+            if (!planId) return;
+            broadcast({
+              event: 'plans.log',
+              data: {
+                planId,
+                eventType: meta.name,
+                message: toolResultText.slice(0, 500),
+                timestamp: Date.now(),
+              },
+            });
+            broadcast({ event: 'plans.update', data: { planId } });
+          }
         };
 
         for await (const msg of gen) {
@@ -2166,13 +2235,18 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               scheduleRunEventPrune(sessionKey, resultEvent.seq);
             }
 
-            // per-turn: broadcast goals.update if agent used goals tools
+            // per-turn: broadcast plans/roadmap updates if agent used plan tools
             const tl = toolLogs.get(sessionKey);
             if (tl) {
               const allTools = [...tl.completed.map(t => t.name), tl.current?.name].filter(Boolean);
-              if (allTools.some(t => t?.startsWith('goals_') || t?.startsWith('mcp__dorabot-tools__goals_'))) {
-                broadcast({ event: 'goals.update', data: {} });
-                macNotify('Dora', 'Goals updated');
+              if (allTools.some(t => (
+                t?.startsWith('plan_')
+                || t?.startsWith('roadmap_')
+                || t?.startsWith('mcp__dorabot-tools__plan_')
+                || t?.startsWith('mcp__dorabot-tools__roadmap_')
+              ))) {
+                broadcast({ event: 'plans.update', data: {} });
+                macNotify('Dora', 'Plans updated');
               }
               if (allTools.some(t => t?.startsWith('research_') || t?.startsWith('mcp__dorabot-tools__research_'))) {
                 broadcast({ event: 'research.update', data: {} });
@@ -2199,7 +2273,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               }
             }
 
-            finishGoalRun(sessionKey, 'completed');
+            finishPlanRun(sessionKey, 'completed');
 
             // per-turn: mark idle so sidebar spinner stops
             sessionRegistry.setActiveRun(sessionKey, false);
@@ -2246,13 +2320,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
         }
 
-        // agent.result and goals.update are broadcast per-turn inside executeStream's result handler.
+        // agent.result and plans.update are broadcast per-turn inside executeStream's result handler.
         // This point is only reached when the run actually ends (abort, error, or non-persistent provider).
         console.log(`[gateway] agent run ended: source=${source} result="${result.result.slice(0, 100)}..." cost=$${result.usage.totalCostUsd?.toFixed(4) || '?'}`);
       } catch (err) {
         console.error(`[gateway] agent error: source=${source}`, err);
         const errMsg = err instanceof Error ? err.message : String(err);
-        finishGoalRun(sessionKey, 'error', errMsg);
+        finishPlanRun(sessionKey, 'error', errMsg);
         if (isAuthError(err)) {
           console.log(`[gateway] auth error for ${source}, starting re-auth flow`);
           await startReauthFlow({ prompt, sessionKey, source, channel, chatId: messageMetadata?.chatId, messageMetadata }).catch(() => {});
@@ -2288,8 +2362,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         broadcastStatus(sessionKey, 'idle');
         broadcast({ event: 'status.update', data: { activeRun: false, source, sessionKey } });
         broadcastSessionUpdate(sessionKey);
-        if (goalRunBySession.has(sessionKey)) {
-          finishGoalRun(sessionKey, 'error', 'run ended');
+        if (planRunBySession.has(sessionKey)) {
+          finishPlanRun(sessionKey, 'error', 'run ended');
         }
       }
     });
@@ -2934,118 +3008,95 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           return { id, result: updated };
         }
 
-        case 'goals.list': {
-          const goals = loadGoals();
-          return { id, result: goals.tasks };
+        case 'plans.list': {
+          const plans = loadPlans();
+          return { id, result: plans.tasks };
         }
 
-        case 'goals.add': {
-          const goals = loadGoals();
-          const title = params?.title as string;
-          if (!title) return { id, error: 'title required' };
-          const now = new Date().toISOString();
-          const ids = goals.tasks.map(t => parseInt(t.id, 10)).filter(n => !isNaN(n));
-          const newId = String((ids.length > 0 ? Math.max(...ids) : 0) + 1);
-          const source = (params?.source as string) || 'user';
-          const task: GoalTask = {
-            id: newId,
-            title,
-            description: params?.description as string | undefined,
-            status: (params?.status as GoalTask['status']) || (source === 'user' ? 'approved' : 'proposed'),
-            priority: (params?.priority as GoalTask['priority']) || 'medium',
-            source: source as 'agent' | 'user',
-            createdAt: now,
-            updatedAt: now,
-            tags: params?.tags as string[] | undefined,
-          };
-          goals.tasks.push(task);
-          saveGoals(goals);
-          broadcast({ event: 'goals.update', data: {} });
-          macNotify('Dora', `Goal added: ${task.title}`);
-          return { id, result: task };
+        case 'plans.update': {
+          const planId = params?.id as string;
+          if (!planId) return { id, error: 'id required' };
+          const plans = loadPlans();
+          const plan = plans.tasks.find(t => t.id === planId);
+          if (!plan) return { id, error: 'plan not found' };
+
+          if (params?.title !== undefined) plan.title = params.title as string;
+          if (params?.description !== undefined) plan.description = params.description as string;
+          if (params?.type !== undefined) plan.type = params.type as Plan['type'];
+          if (params?.status !== undefined) plan.status = params.status as Plan['status'];
+          if (params?.runState !== undefined) plan.runState = params.runState as Plan['runState'];
+          if (params?.result !== undefined) plan.result = params.result as string;
+          if (params?.error !== undefined) plan.error = params.error as string;
+          if (params?.tags !== undefined) plan.tags = params.tags as string[];
+          if (params?.sessionKey !== undefined) plan.sessionKey = params.sessionKey as string;
+          if (params?.worktreePath !== undefined) plan.worktreePath = params.worktreePath as string;
+          if (params?.branch !== undefined) plan.branch = params.branch as string;
+          plan.updatedAt = new Date().toISOString();
+          if (plan.status === 'done' && !plan.completedAt) plan.completedAt = plan.updatedAt;
+          if (plan.status !== 'done') plan.completedAt = undefined;
+
+          savePlans(plans);
+          appendPlanLog(plan.id, 'rpc_update', `Plan updated: ${plan.title}`, {
+            status: plan.status,
+            runState: plan.runState,
+          });
+          broadcast({ event: 'plans.update', data: { planId: plan.id, plan } });
+          broadcast({
+            event: 'plans.log',
+            data: { planId: plan.id, eventType: 'rpc_update', message: `Plan updated: ${plan.title}`, timestamp: Date.now() },
+          });
+          macNotify('Dora', `Plan updated: ${plan.title}`);
+          return { id, result: plan };
         }
 
-        case 'goals.update': {
-          const taskId = params?.id as string;
-          if (!taskId) return { id, error: 'id required' };
-          const goals = loadGoals();
-          const task = goals.tasks.find(t => t.id === taskId);
-          if (!task) return { id, error: 'task not found' };
-          const now = new Date().toISOString();
-          if (params?.status !== undefined) task.status = params.status as GoalTask['status'];
-          if (params?.title !== undefined) task.title = params.title as string;
-          if (params?.description !== undefined) task.description = params.description as string;
-          if (params?.priority !== undefined) task.priority = params.priority as GoalTask['priority'];
-          if (params?.result !== undefined) task.result = params.result as string;
-          if (params?.tags !== undefined) task.tags = params.tags as string[];
-          task.updatedAt = now;
-          if (task.status === 'done') task.completedAt = now;
-          saveGoals(goals);
-          broadcast({ event: 'goals.update', data: {} });
-          macNotify('Dora', `Goal updated: ${task.title}`);
-          return { id, result: task };
-        }
-
-        case 'goals.delete': {
-          const taskId = params?.id as string;
-          if (!taskId) return { id, error: 'id required' };
-          const goals = loadGoals();
-          const before = goals.tasks.length;
-          goals.tasks = goals.tasks.filter(t => t.id !== taskId);
-          if (goals.tasks.length === before) return { id, error: 'task not found' };
-          saveGoals(goals);
-          broadcast({ event: 'goals.update', data: {} });
-          macNotify('Dora', `Goal deleted: #${taskId}`);
+        case 'plans.delete': {
+          const planId = params?.id as string;
+          if (!planId) return { id, error: 'id required' };
+          const plans = loadPlans();
+          const before = plans.tasks.length;
+          plans.tasks = plans.tasks.filter(t => t.id !== planId);
+          if (plans.tasks.length === before) return { id, error: 'plan not found' };
+          savePlans(plans);
+          activePlanRuns.delete(planId);
+          broadcast({ event: 'plans.update', data: { planId, deleted: true } });
+          macNotify('Dora', `Plan deleted: #${planId}`);
           return { id, result: { deleted: true } };
         }
 
-        case 'goals.move': {
-          const taskId = params?.id as string;
-          const status = params?.status as string;
-          if (!taskId || !status) return { id, error: 'id and status required' };
-          const goals = loadGoals();
-          const task = goals.tasks.find(t => t.id === taskId);
-          if (!task) return { id, error: 'task not found' };
-          task.status = status as GoalTask['status'];
-          task.updatedAt = new Date().toISOString();
-          if (status === 'done') task.completedAt = task.updatedAt;
-          saveGoals(goals);
-          broadcast({ event: 'goals.update', data: {} });
-          macNotify('Dora', `Goal moved: ${task.title} → ${status}`);
-          return { id, result: task };
+        case 'plans.logs': {
+          const planId = params?.id as string;
+          if (!planId) return { id, error: 'id required' };
+          const limit = Number(params?.limit || 100);
+          return { id, result: readPlanLogs(planId, Math.min(Math.max(limit, 1), 500)) };
         }
 
-        case 'goals.execute': {
-          const goalId = params?.id as string;
-          if (!goalId) return { id, error: 'id required' };
+        case 'plans.start': {
+          const planId = params?.id as string;
+          if (!planId) return { id, error: 'id required' };
 
-          const goals = loadGoals();
-          const task = goals.tasks.find(t => t.id === goalId);
-          if (!task) return { id, error: 'task not found' };
-          if (task.status !== 'approved' && task.status !== 'in_progress') {
-            return { id, error: 'goal must be approved or in_progress to execute' };
-          }
+          const plans = loadPlans();
+          const plan = plans.tasks.find(t => t.id === planId);
+          if (!plan) return { id, error: 'plan not found' };
+          if (plan.status === 'done') return { id, error: 'plan is already done' };
 
-          const existing = activeGoalRuns.get(goalId);
+          const existing = activePlanRuns.get(planId);
           if (existing) {
             const active = sessionRegistry.get(existing.sessionKey)?.activeRun || false;
-            if (active) return { id, error: 'goal execution already running' };
-            activeGoalRuns.delete(goalId);
-            if (goalRunBySession.get(existing.sessionKey) === goalId) {
-              goalRunBySession.delete(existing.sessionKey);
+            if (active) return { id, error: 'plan execution already running' };
+            activePlanRuns.delete(planId);
+            if (planRunBySession.get(existing.sessionKey) === planId) {
+              planRunBySession.delete(existing.sessionKey);
             }
           }
 
-          const now = new Date().toISOString();
-          if (task.status === 'approved') {
-            task.status = 'in_progress';
-            task.updatedAt = now;
-            saveGoals(goals);
-            broadcast({ event: 'goals.update', data: {} });
-            macNotify('Dora', `Goal started: ${task.title}`);
-          }
+          const worktree = ensureWorktreeForPlan({
+            planId,
+            title: plan.title,
+            cwd: config.cwd,
+            baseBranch: params?.baseBranch as string | undefined,
+          });
 
-          const chatId = `goal-${goalId}`;
+          const chatId = `plan-${planId}`;
           const session = sessionRegistry.getOrCreate({
             channel: 'desktop',
             chatType: 'dm',
@@ -3056,13 +3107,41 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           fileSessionManager.setMetadata(session.sessionId, { channel: 'desktop', chatId, chatType: 'dm' });
           broadcastSessionUpdate(session.key);
 
-          const prompt = buildGoalExecutionPrompt(task);
-          markGoalRunStarted(goalId, sessionKey);
+          const now = new Date().toISOString();
+          plan.status = 'in_progress';
+          plan.runState = 'running';
+          plan.error = undefined;
+          plan.sessionKey = sessionKey;
+          plan.worktreePath = worktree.path;
+          plan.branch = worktree.branch;
+          plan.updatedAt = now;
+          savePlans(plans);
+
+          const roadmap = loadRoadmap();
+          const roadmapItem = plan.roadmapItemId ? roadmap.items.find(r => r.id === plan.roadmapItemId) : null;
+          const roadmapContext = roadmapItem
+            ? `#${roadmapItem.id} [${roadmapItem.lane}] ${roadmapItem.title}\nProblem: ${roadmapItem.problem || ''}\nOutcome: ${roadmapItem.outcome || ''}\nAudience: ${roadmapItem.audience || ''}`
+            : undefined;
+          const prompt = buildPlanExecutionPrompt(plan, roadmapContext, readPlanDoc(plan));
+
+          appendPlanLog(plan.id, 'run_started', `Plan started: ${plan.title}`, {
+            sessionKey,
+            worktreePath: worktree.path,
+            branch: worktree.branch,
+          });
+          broadcast({ event: 'plans.update', data: { planId: plan.id, plan } });
+          broadcast({
+            event: 'plans.log',
+            data: { planId: plan.id, eventType: 'run_started', message: `Plan started: ${plan.title}`, timestamp: Date.now() },
+          });
+          markPlanRunStarted(planId, sessionKey);
+          macNotify('Dora', `Plan started: ${plan.title}`);
 
           void handleAgentRun({
             prompt,
             sessionKey,
-            source: `goals/${goalId}`,
+            source: `plans/${planId}`,
+            extraContext: `Worktree path: ${worktree.path}\nBranch: ${worktree.branch}\nBase branch: ${worktree.baseBranch}`,
             messageMetadata: {
               channel: 'desktop',
               chatId,
@@ -3070,21 +3149,236 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               body: prompt,
             },
           }).then((res) => {
-            if (!res) finishGoalRun(sessionKey, 'error', 'goal execution did not start');
+            if (!res) finishPlanRun(sessionKey, 'error', 'plan execution did not start');
           }).catch((err) => {
-            finishGoalRun(sessionKey, 'error', err instanceof Error ? err.message : String(err));
+            finishPlanRun(sessionKey, 'error', err instanceof Error ? err.message : String(err));
           });
 
           return {
             id,
             result: {
               started: true,
-              goalId,
+              planId,
               sessionKey,
               sessionId: session.sessionId,
               chatId,
+              worktreePath: worktree.path,
+              branch: worktree.branch,
             },
           };
+        }
+
+        case 'roadmap.list': {
+          const roadmap = loadRoadmap();
+          return { id, result: roadmap.items };
+        }
+
+        case 'roadmap.add': {
+          const title = params?.title as string;
+          if (!title) return { id, error: 'title required' };
+          const roadmap = loadRoadmap();
+          const now = new Date().toISOString();
+          const lane = (params?.lane as 'now' | 'next' | 'later') || 'next';
+          const sortOrder = Math.max(
+            0,
+            ...roadmap.items.filter(i => i.lane === lane).map(i => i.sortOrder || 0),
+          ) + 1;
+          const ids = roadmap.items.map(i => Number.parseInt(i.id, 10)).filter(n => Number.isFinite(n));
+          const item = {
+            id: String((ids.length ? Math.max(...ids) : 0) + 1),
+            title,
+            description: params?.description as string | undefined,
+            lane,
+            impact: params?.impact as string | undefined,
+            effort: params?.effort as string | undefined,
+            problem: params?.problem as string | undefined,
+            outcome: params?.outcome as string | undefined,
+            audience: params?.audience as string | undefined,
+            risks: params?.risks as string | undefined,
+            notes: params?.notes as string | undefined,
+            tags: params?.tags as string[] | undefined,
+            linkedPlanIds: [] as string[],
+            createdAt: now,
+            updatedAt: now,
+            sortOrder,
+          };
+          roadmap.items.push(item);
+          saveRoadmap(roadmap);
+          broadcast({ event: 'plans.update', data: { roadmapVersion: roadmap.version } });
+          return { id, result: item };
+        }
+
+        case 'roadmap.update': {
+          const roadmapId = params?.id as string;
+          if (!roadmapId) return { id, error: 'id required' };
+          const roadmap = loadRoadmap();
+          const item = roadmap.items.find(i => i.id === roadmapId);
+          if (!item) return { id, error: 'roadmap item not found' };
+
+          if (params?.title !== undefined) item.title = params.title as string;
+          if (params?.description !== undefined) item.description = params.description as string;
+          if (params?.lane !== undefined) item.lane = params.lane as 'now' | 'next' | 'later';
+          if (params?.impact !== undefined) item.impact = params.impact as string;
+          if (params?.effort !== undefined) item.effort = params.effort as string;
+          if (params?.problem !== undefined) item.problem = params.problem as string;
+          if (params?.outcome !== undefined) item.outcome = params.outcome as string;
+          if (params?.audience !== undefined) item.audience = params.audience as string;
+          if (params?.risks !== undefined) item.risks = params.risks as string;
+          if (params?.notes !== undefined) item.notes = params.notes as string;
+          if (params?.tags !== undefined) item.tags = params.tags as string[];
+          if (params?.linkedPlanIds !== undefined) item.linkedPlanIds = params.linkedPlanIds as string[];
+          if (params?.sortOrder !== undefined) item.sortOrder = Number(params.sortOrder);
+          item.updatedAt = new Date().toISOString();
+          saveRoadmap(roadmap);
+          broadcast({ event: 'plans.update', data: { roadmapItemId: item.id } });
+          return { id, result: item };
+        }
+
+        case 'roadmap.delete': {
+          const roadmapId = params?.id as string;
+          if (!roadmapId) return { id, error: 'id required' };
+          const roadmap = loadRoadmap();
+          const before = roadmap.items.length;
+          roadmap.items = roadmap.items.filter(i => i.id !== roadmapId);
+          if (roadmap.items.length === before) return { id, error: 'roadmap item not found' };
+          saveRoadmap(roadmap);
+          broadcast({ event: 'plans.update', data: { roadmapItemId: roadmapId, deleted: true } });
+          return { id, result: { deleted: true } };
+        }
+
+        case 'roadmap.move': {
+          const roadmapId = params?.id as string;
+          if (!roadmapId) return { id, error: 'id required' };
+          const roadmap = loadRoadmap();
+          const item = roadmap.items.find(i => i.id === roadmapId);
+          if (!item) return { id, error: 'roadmap item not found' };
+          const lane = (params?.lane as 'now' | 'next' | 'later') || item.lane;
+          item.lane = lane;
+          item.sortOrder = Number(params?.sortOrder || item.sortOrder || 1);
+          item.updatedAt = new Date().toISOString();
+          saveRoadmap(roadmap);
+          broadcast({ event: 'plans.update', data: { roadmapItemId: item.id } });
+          return { id, result: item };
+        }
+
+        case 'roadmap.create_plan': {
+          const roadmapItemId = params?.roadmapItemId as string;
+          if (!roadmapItemId) return { id, error: 'roadmapItemId required' };
+          const roadmap = loadRoadmap();
+          const item = roadmap.items.find(i => i.id === roadmapItemId);
+          if (!item) return { id, error: 'roadmap item not found' };
+
+          const plan = createPlanFromRoadmapItem({
+            roadmapItemId: item.id,
+            title: (params?.title as string) || item.title,
+            description: (params?.description as string) || item.description || item.outcome || item.problem,
+            type: (params?.type as Plan['type']) || 'feature',
+            tags: (params?.tags as string[]) || item.tags,
+          });
+
+          if (!item.linkedPlanIds.includes(plan.id)) {
+            item.linkedPlanIds.push(plan.id);
+            item.updatedAt = new Date().toISOString();
+            saveRoadmap(roadmap);
+          }
+
+          appendPlanLog(plan.id, 'created_from_roadmap', `Created from roadmap item #${item.id}`, { roadmapItemId: item.id });
+          broadcast({ event: 'plans.update', data: { planId: plan.id, roadmapItemId: item.id } });
+          broadcast({
+            event: 'plans.log',
+            data: { planId: plan.id, eventType: 'created_from_roadmap', message: `Created from roadmap item #${item.id}`, timestamp: Date.now() },
+          });
+          return { id, result: { plan, roadmapItem: item } };
+        }
+
+        case 'worktree.create': {
+          const planId = params?.planId as string;
+          if (!planId) return { id, error: 'planId required' };
+          const plans = loadPlans();
+          const plan = plans.tasks.find(p => p.id === planId);
+          const worktree = ensureWorktreeForPlan({
+            planId,
+            title: plan?.title,
+            cwd: config.cwd,
+            baseBranch: params?.baseBranch as string | undefined,
+          });
+          if (plan) {
+            plan.worktreePath = worktree.path;
+            plan.branch = worktree.branch;
+            plan.updatedAt = new Date().toISOString();
+            savePlans(plans);
+            broadcast({ event: 'plans.update', data: { planId: plan.id, plan } });
+          }
+          return { id, result: worktree };
+        }
+
+        case 'worktree.stats': {
+          const planId = params?.planId as string | undefined;
+          let worktreePath = params?.path as string | undefined;
+          if (!worktreePath && planId) {
+            const plans = loadPlans();
+            worktreePath = plans.tasks.find(p => p.id === planId)?.worktreePath;
+          }
+          if (!worktreePath) return { id, error: 'path or planId required' };
+          return { id, result: getWorktreeStats(worktreePath) };
+        }
+
+        case 'worktree.merge': {
+          const planId = params?.planId as string | undefined;
+          let sourceBranch = params?.sourceBranch as string | undefined;
+          if (!sourceBranch && planId) {
+            const plans = loadPlans();
+            sourceBranch = plans.tasks.find(p => p.id === planId)?.branch;
+          }
+          if (!sourceBranch) return { id, error: 'sourceBranch or planId required' };
+          const merged = mergeWorktreeBranch({
+            cwd: config.cwd,
+            sourceBranch,
+            targetBranch: params?.targetBranch as string | undefined,
+          });
+          return { id, result: merged };
+        }
+
+        case 'worktree.push_pr': {
+          const planId = params?.planId as string | undefined;
+          let worktreePath = params?.path as string | undefined;
+          if (!worktreePath && planId) {
+            const plans = loadPlans();
+            worktreePath = plans.tasks.find(p => p.id === planId)?.worktreePath;
+          }
+          if (!worktreePath) return { id, error: 'path or planId required' };
+          const pushed = pushWorktreePr({
+            worktreePath,
+            baseBranch: params?.baseBranch as string | undefined,
+            title: params?.title as string | undefined,
+            body: params?.body as string | undefined,
+          });
+          return { id, result: pushed };
+        }
+
+        case 'worktree.remove': {
+          const planId = params?.planId as string | undefined;
+          let worktreePath = params?.path as string | undefined;
+          let branch = params?.branch as string | undefined;
+          const plans = loadPlans();
+          const plan = planId ? plans.tasks.find(p => p.id === planId) : undefined;
+          if (!worktreePath && plan) worktreePath = plan.worktreePath;
+          if (!branch && plan) branch = plan.branch;
+          if (!worktreePath) return { id, error: 'path or planId required' };
+          const removed = removeWorktree({
+            cwd: config.cwd,
+            worktreePath,
+            branch,
+            removeBranch: Boolean(params?.removeBranch),
+          });
+          if (plan) {
+            plan.worktreePath = undefined;
+            plan.branch = undefined;
+            plan.updatedAt = new Date().toISOString();
+            savePlans(plans);
+            broadcast({ event: 'plans.update', data: { planId: plan.id, plan } });
+          }
+          return { id, result: removed };
         }
 
         // ── Research ──
@@ -4210,6 +4504,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       clearInterval(heartbeatSweepTimer);
       for (const [, batch] of streamBatches) { if (batch.timer) clearTimeout(batch.timer); }
       streamBatches.clear();
+      unsubscribeClaudeAuthRequired();
+      unsubscribeCodexAuthRequired();
       for (const [, timer] of runEventPruneTimers) clearTimeout(timer);
       runEventPruneTimers.clear();
       scheduler?.stop();
