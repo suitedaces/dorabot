@@ -251,7 +251,7 @@ export function RoadmapView({ gateway }: Props) {
   const createPlan = useCallback(async (item: RoadmapItem) => {
     setBusy(item.id, true);
     try {
-      await gateway.rpc('ideas.create_plan', { roadmapItemId: item.id });
+      await gateway.rpc('ideas.create_plan', { ideaId: item.id });
       await load();
     } catch (err) {
       console.error('failed to create plan:', err);

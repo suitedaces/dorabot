@@ -292,21 +292,10 @@ function inferPlanType(item: RoadmapItem): PlanType {
   return 'feature';
 }
 
-// keep old names as aliases for backward compat with gateway RPCs
-export const roadmapViewTool = ideasViewTool;
-export const roadmapAddTool = ideasAddTool;
-export const roadmapUpdateTool = ideasUpdateTool;
-export const roadmapCreatePlanTool = ideasCreatePlanTool;
-
-export const roadmapTools = [
+export const ideasTools = [
   ideasViewTool,
   ideasAddTool,
   ideasUpdateTool,
   ideasDeleteTool,
   ideasCreatePlanTool,
 ];
-
-export type RoadmapCreatePlanResult = {
-  roadmapItem: RoadmapItem;
-  plan: Plan;
-};

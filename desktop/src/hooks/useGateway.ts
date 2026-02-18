@@ -1143,8 +1143,8 @@ export function useGateway(url = 'wss://localhost:18789') {
 
       case 'plans.update': {
         setPlansVersion(v => v + 1);
-        const payload = data as { roadmapItemId?: string; roadmapVersion?: number };
-        if (payload?.roadmapItemId || payload?.roadmapVersion) {
+        const payload = data as { ideaId?: string; ideasVersion?: number };
+        if (payload?.ideaId || payload?.ideasVersion) {
           setRoadmapVersion(v => v + 1);
         }
         onNotifiableEventRef.current?.({ type: 'plans.update' });

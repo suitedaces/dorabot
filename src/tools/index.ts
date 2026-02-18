@@ -4,7 +4,7 @@ import { calendarTools } from './calendar.js';
 import { screenshotTool } from './screenshot.js';
 import { browserTool } from './browser.js';
 import { plansTools } from './plans.js';
-import { roadmapTools } from '../roadmap/tools.js';
+import { ideasTools } from '../roadmap/tools.js';
 import { researchTools } from './research.js';
 import { memoryTools } from './memory.js';
 
@@ -23,7 +23,7 @@ const customTools = [
   browserTool,
   ...calendarTools,
   ...plansTools,
-  ...roadmapTools,
+  ...ideasTools,
   ...researchTools,
   ...memoryTools,
 ];

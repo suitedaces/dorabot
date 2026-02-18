@@ -2232,7 +2232,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               scheduleRunEventPrune(sessionKey, resultEvent.seq);
             }
 
-            // per-turn: broadcast plans/roadmap updates if agent used plan tools
+            // per-turn: broadcast plans/ideas updates if agent used plan tools
             const tl = toolLogs.get(sessionKey);
             if (tl) {
               const allTools = [...tl.completed.map(t => t.name), tl.current?.name].filter(Boolean);
@@ -3114,8 +3114,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           plan.updatedAt = now;
           savePlans(plans);
 
-          const roadmap = loadRoadmap();
-          const idea = plan.roadmapItemId ? roadmap.items.find(r => r.id === plan.roadmapItemId) : null;
+          const ideas = loadRoadmap();
+          const idea = plan.roadmapItemId ? ideas.items.find(r => r.id === plan.roadmapItemId) : null;
           const ideaContext = idea
             ? `#${idea.id} [${idea.lane}] ${idea.title}\nProblem: ${idea.problem || ''}\nOutcome: ${idea.outcome || ''}\nAudience: ${idea.audience || ''}`
             : undefined;
@@ -3166,24 +3166,22 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           };
         }
 
-        case 'ideas.list':
-        case 'roadmap.list': {
-          const roadmap = loadRoadmap();
-          return { id, result: roadmap.items };
+        case 'ideas.list': {
+          const state = loadRoadmap();
+          return { id, result: state.items };
         }
 
-        case 'ideas.add':
-        case 'roadmap.add': {
+        case 'ideas.add': {
           const title = params?.title as string;
           if (!title) return { id, error: 'title required' };
-          const roadmap = loadRoadmap();
+          const state = loadRoadmap();
           const now = new Date().toISOString();
           const lane = (params?.lane as 'now' | 'next' | 'later') || 'next';
           const sortOrder = Math.max(
             0,
-            ...roadmap.items.filter(i => i.lane === lane).map(i => i.sortOrder || 0),
+            ...state.items.filter(i => i.lane === lane).map(i => i.sortOrder || 0),
           ) + 1;
-          const ids = roadmap.items.map(i => Number.parseInt(i.id, 10)).filter(n => Number.isFinite(n));
+          const ids = state.items.map(i => Number.parseInt(i.id, 10)).filter(n => Number.isFinite(n));
           const item = {
             id: String((ids.length ? Math.max(...ids) : 0) + 1),
             title,
@@ -3202,23 +3200,22 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             updatedAt: now,
             sortOrder,
           };
-          roadmap.items.push(item);
-          saveRoadmap(roadmap);
-          broadcast({ event: 'plans.update', data: { roadmapVersion: roadmap.version } });
+          state.items.push(item);
+          saveRoadmap(state);
+          broadcast({ event: 'plans.update', data: { ideasVersion: state.version } });
           return { id, result: item };
         }
 
-        case 'ideas.update':
-        case 'roadmap.update': {
-          const roadmapId = params?.id as string;
-          if (!roadmapId) return { id, error: 'id required' };
-          const roadmap = loadRoadmap();
-          const item = roadmap.items.find(i => i.id === roadmapId);
-          if (!item) return { id, error: 'roadmap item not found' };
+        case 'ideas.update': {
+          const ideaId = params?.id as string;
+          if (!ideaId) return { id, error: 'id required' };
+          const state = loadRoadmap();
+          const item = state.items.find(i => i.id === ideaId);
+          if (!item) return { id, error: 'idea not found' };
 
           if (params?.title !== undefined) item.title = params.title as string;
           if (params?.description !== undefined) item.description = params.description as string;
-          if (params?.lane !== undefined) item.lane = params.lane as 'now' | 'next' | 'later';
+          if (params?.lane !== undefined) item.lane = params.lane as 'now' | 'next' | 'later' | 'done';
           if (params?.impact !== undefined) item.impact = params.impact as string;
           if (params?.effort !== undefined) item.effort = params.effort as string;
           if (params?.problem !== undefined) item.problem = params.problem as string;
@@ -3230,47 +3227,44 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (params?.linkedPlanIds !== undefined) item.linkedPlanIds = params.linkedPlanIds as string[];
           if (params?.sortOrder !== undefined) item.sortOrder = Number(params.sortOrder);
           item.updatedAt = new Date().toISOString();
-          saveRoadmap(roadmap);
-          broadcast({ event: 'plans.update', data: { roadmapItemId: item.id } });
+          saveRoadmap(state);
+          broadcast({ event: 'plans.update', data: { ideaId: item.id } });
           return { id, result: item };
         }
 
-        case 'ideas.delete':
-        case 'roadmap.delete': {
-          const roadmapId = params?.id as string;
-          if (!roadmapId) return { id, error: 'id required' };
-          const roadmap = loadRoadmap();
-          const before = roadmap.items.length;
-          roadmap.items = roadmap.items.filter(i => i.id !== roadmapId);
-          if (roadmap.items.length === before) return { id, error: 'roadmap item not found' };
-          saveRoadmap(roadmap);
-          broadcast({ event: 'plans.update', data: { roadmapItemId: roadmapId, deleted: true } });
+        case 'ideas.delete': {
+          const ideaId = params?.id as string;
+          if (!ideaId) return { id, error: 'id required' };
+          const state = loadRoadmap();
+          const before = state.items.length;
+          state.items = state.items.filter(i => i.id !== ideaId);
+          if (state.items.length === before) return { id, error: 'idea not found' };
+          saveRoadmap(state);
+          broadcast({ event: 'plans.update', data: { ideaId, deleted: true } });
           return { id, result: { deleted: true } };
         }
 
-        case 'ideas.move':
-        case 'roadmap.move': {
-          const roadmapId = params?.id as string;
-          if (!roadmapId) return { id, error: 'id required' };
-          const roadmap = loadRoadmap();
-          const item = roadmap.items.find(i => i.id === roadmapId);
-          if (!item) return { id, error: 'roadmap item not found' };
-          const lane = (params?.lane as 'now' | 'next' | 'later') || item.lane;
+        case 'ideas.move': {
+          const ideaId = params?.id as string;
+          if (!ideaId) return { id, error: 'id required' };
+          const state = loadRoadmap();
+          const item = state.items.find(i => i.id === ideaId);
+          if (!item) return { id, error: 'idea not found' };
+          const lane = (params?.lane as 'now' | 'next' | 'later' | 'done') || item.lane;
           item.lane = lane;
           item.sortOrder = Number(params?.sortOrder || item.sortOrder || 1);
           item.updatedAt = new Date().toISOString();
-          saveRoadmap(roadmap);
-          broadcast({ event: 'plans.update', data: { roadmapItemId: item.id } });
+          saveRoadmap(state);
+          broadcast({ event: 'plans.update', data: { ideaId: item.id } });
           return { id, result: item };
         }
 
-        case 'ideas.create_plan':
-        case 'roadmap.create_plan': {
-          const roadmapItemId = params?.roadmapItemId as string;
-          if (!roadmapItemId) return { id, error: 'roadmapItemId required' };
-          const roadmap = loadRoadmap();
-          const item = roadmap.items.find(i => i.id === roadmapItemId);
-          if (!item) return { id, error: 'roadmap item not found' };
+        case 'ideas.create_plan': {
+          const ideaId = (params?.ideaId || params?.roadmapItemId) as string;
+          if (!ideaId) return { id, error: 'ideaId required' };
+          const state = loadRoadmap();
+          const item = state.items.find(i => i.id === ideaId);
+          if (!item) return { id, error: 'idea not found' };
 
           const plan = createPlanFromRoadmapItem({
             roadmapItemId: item.id,
@@ -3283,16 +3277,16 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!item.linkedPlanIds.includes(plan.id)) {
             item.linkedPlanIds.push(plan.id);
             item.updatedAt = new Date().toISOString();
-            saveRoadmap(roadmap);
+            saveRoadmap(state);
           }
 
-          appendPlanLog(plan.id, 'created_from_roadmap', `Created from roadmap item #${item.id}`, { roadmapItemId: item.id });
-          broadcast({ event: 'plans.update', data: { planId: plan.id, roadmapItemId: item.id } });
+          appendPlanLog(plan.id, 'created_from_idea', `Created from idea #${item.id}`, { ideaId: item.id });
+          broadcast({ event: 'plans.update', data: { planId: plan.id, ideaId: item.id } });
           broadcast({
             event: 'plans.log',
-            data: { planId: plan.id, eventType: 'created_from_roadmap', message: `Created from roadmap item #${item.id}`, timestamp: Date.now() },
+            data: { planId: plan.id, eventType: 'created_from_idea', message: `Created from idea #${item.id}`, timestamp: Date.now() },
           });
-          return { id, result: { plan, roadmapItem: item } };
+          return { id, result: { plan, idea: item } };
         }
 
         case 'worktree.create': {
