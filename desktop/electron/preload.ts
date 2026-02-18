@@ -11,6 +11,15 @@ const gatewayToken = existsSync(tokenPath)
 
 let tokenDelivered = false;
 
+// Listen for token push from main process (handles fresh install race condition)
+ipcRenderer.on('gateway-token', (_event, token: string) => {
+  if (token) {
+    try { localStorage.setItem('dorabot:gateway-token', token); } catch {}
+    // Dispatch a custom event so the gateway client can retry connection
+    window.dispatchEvent(new CustomEvent('dorabot:token-available'));
+  }
+});
+
 const electronAPI = {
   platform: process.platform,
   appVersion: (() => { try { return require('electron').app?.getVersion?.() || process.env.npm_package_version || '0.0.0'; } catch { return '0.0.0'; } })(),

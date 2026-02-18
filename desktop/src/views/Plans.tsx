@@ -111,7 +111,7 @@ function DraggableCard({ plan, run, column, selected, onClick }: {
       {...attributes}
       onClick={onClick}
       className={cn(
-        'w-full text-left rounded-md border border-border bg-card px-3 py-2 transition-colors cursor-grab active:cursor-grabbing',
+        'w-full text-left rounded-md border border-border bg-card px-4 py-3 transition-colors cursor-grab active:cursor-grabbing',
         'hover:bg-accent hover:border-accent-foreground/20',
         'border-l-2',
         column.accent,
@@ -119,24 +119,24 @@ function DraggableCard({ plan, run, column, selected, onClick }: {
         isDragging && 'opacity-50',
       )}
     >
-      <div className="flex items-start gap-1.5">
+      <div className="flex items-start gap-2">
         <span className="mt-0.5 text-muted-foreground/50 shrink-0">
-          <GripVertical className="h-3 w-3" />
+          <GripVertical className="h-3.5 w-3.5" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-[11px] font-medium leading-snug line-clamp-2 mb-1">{plan.title}</div>
+          <div className="text-xs font-medium leading-snug mb-1.5">{plan.title}</div>
           {plan.description && (
-            <div className="text-[10px] text-muted-foreground line-clamp-1 mb-1.5">{plan.description}</div>
+            <div className="text-[11px] text-muted-foreground line-clamp-2 mb-2">{plan.description}</div>
           )}
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <Badge className={`text-[9px] h-4 border px-1 ${TYPE_BADGE[plan.type]}`}>{plan.type}</Badge>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge className={`text-[10px] h-5 border px-1.5 ${TYPE_BADGE[plan.type]}`}>{plan.type}</Badge>
             {plan.runState === 'failed' && (
-              <Badge className="text-[9px] h-4 border px-1 bg-destructive/10 text-destructive border-destructive/30">failed</Badge>
+              <Badge className="text-[10px] h-5 border px-1.5 bg-destructive/10 text-destructive border-destructive/30">failed</Badge>
             )}
-            {isRunning && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+            {isRunning && <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />}
             {plan.branch && (
-              <span className="flex items-center gap-0.5 text-[9px] text-muted-foreground ml-auto">
-                <GitBranch className="h-2.5 w-2.5" />{plan.branch.replace(/^.*\//, '')}
+              <span className="flex items-center gap-0.5 text-[10px] text-muted-foreground ml-auto">
+                <GitBranch className="h-3 w-3" />{plan.branch.replace(/^.*\//, '')}
               </span>
             )}
           </div>
@@ -174,29 +174,29 @@ function PlanDragOverlay({ activePlan, planRuns }: { activePlan: Plan | undefine
     <DragOverlay dropAnimation={null}>
       <div
         className={cn(
-          'rounded-md border border-border bg-card px-3 py-2 shadow-xl cursor-grabbing border-l-2',
+          'rounded-md border border-border bg-card px-4 py-3 shadow-xl cursor-grabbing border-l-2',
           col?.accent,
         )}
         style={activeNodeRect ? { width: activeNodeRect.width } : undefined}
       >
-        <div className="flex items-start gap-1.5">
+        <div className="flex items-start gap-2">
           <span className="mt-0.5 text-muted-foreground/50 shrink-0">
-            <GripVertical className="h-3 w-3" />
+            <GripVertical className="h-3.5 w-3.5" />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="text-[11px] font-medium leading-snug line-clamp-2 mb-1">{activePlan.title}</div>
+            <div className="text-xs font-medium leading-snug mb-1.5">{activePlan.title}</div>
             {activePlan.description && (
-              <div className="text-[10px] text-muted-foreground line-clamp-1 mb-1.5">{activePlan.description}</div>
+              <div className="text-[11px] text-muted-foreground line-clamp-2 mb-2">{activePlan.description}</div>
             )}
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <Badge className={`text-[9px] h-4 border px-1 ${TYPE_BADGE[activePlan.type]}`}>{activePlan.type}</Badge>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge className={`text-[10px] h-5 border px-1.5 ${TYPE_BADGE[activePlan.type]}`}>{activePlan.type}</Badge>
               {activePlan.runState === 'failed' && (
-                <Badge className="text-[9px] h-4 border px-1 bg-destructive/10 text-destructive border-destructive/30">failed</Badge>
+                <Badge className="text-[10px] h-5 border px-1.5 bg-destructive/10 text-destructive border-destructive/30">failed</Badge>
               )}
-              {isRunning && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+              {isRunning && <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />}
               {activePlan.branch && (
-                <span className="flex items-center gap-0.5 text-[9px] text-muted-foreground ml-auto">
-                  <GitBranch className="h-2.5 w-2.5" />{activePlan.branch.replace(/^.*\//, '')}
+                <span className="flex items-center gap-0.5 text-[10px] text-muted-foreground ml-auto">
+                  <GitBranch className="h-3 w-3" />{activePlan.branch.replace(/^.*\//, '')}
                 </span>
               )}
             </div>
@@ -348,7 +348,7 @@ export function PlansView({ gateway, onViewSession }: Props) {
                   <span className="text-[11px] font-semibold">{col.label}</span>
                   <span className="ml-auto text-[10px] text-muted-foreground">{byStatus[col.id].length}</span>
                 </div>
-                <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+                <div className="flex-1 overflow-y-auto p-2.5 space-y-2">
                   {byStatus[col.id].map((plan) => (
                     <DraggableCard
                       key={plan.id}

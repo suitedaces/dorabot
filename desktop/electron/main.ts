@@ -2,7 +2,9 @@ import { app, BrowserWindow, Tray, Menu, nativeImage, session, ipcMain, Notifica
 import { autoUpdater } from 'electron-updater';
 import { is } from '@electron-toolkit/utils';
 import * as path from 'path';
+import { readFileSync, existsSync } from 'fs';
 import { GatewayManager } from './gateway-manager';
+import { GATEWAY_TOKEN_PATH } from './dorabot-paths';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -216,6 +218,17 @@ app.on('ready', async () => {
     onReady: () => {
       console.log('[main] Gateway ready');
       updateTrayTitle('online');
+      // Push token to renderer in case preload missed it (fresh install race)
+      try {
+        if (existsSync(GATEWAY_TOKEN_PATH)) {
+          const token = readFileSync(GATEWAY_TOKEN_PATH, 'utf-8').trim();
+          if (token && mainWindow) {
+            mainWindow.webContents.send('gateway-token', token);
+          }
+        }
+      } catch (err) {
+        console.error('[main] Failed to push token to renderer:', err);
+      }
     },
     onError: (error) => {
       console.error('[main] Gateway error:', error);

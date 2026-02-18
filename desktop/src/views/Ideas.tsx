@@ -69,7 +69,7 @@ function DraggableCard({ item, lane, selected, onClick }: {
       {...attributes}
       onClick={onClick}
       className={cn(
-        'w-full text-left rounded-md border border-border bg-card px-3 py-2 transition-colors cursor-grab active:cursor-grabbing',
+        'w-full text-left rounded-md border border-border bg-card px-4 py-3 transition-colors cursor-grab active:cursor-grabbing',
         'hover:bg-accent hover:border-accent-foreground/20',
         'border-l-2',
         lane.accent,
@@ -77,24 +77,24 @@ function DraggableCard({ item, lane, selected, onClick }: {
         isDragging && 'opacity-50',
       )}
     >
-      <div className="flex items-start gap-1.5">
+      <div className="flex items-start gap-2">
         <span className="mt-0.5 text-muted-foreground/50 shrink-0">
-          <GripVertical className="h-3 w-3" />
+          <GripVertical className="h-3.5 w-3.5" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-[11px] font-medium leading-snug line-clamp-2 mb-1">{item.title}</div>
+          <div className="text-xs font-medium leading-snug mb-1.5">{item.title}</div>
           {item.outcome && (
-            <div className="text-[10px] text-muted-foreground line-clamp-1 mb-1.5">{item.outcome}</div>
+            <div className="text-[11px] text-muted-foreground line-clamp-2 mb-2">{item.outcome}</div>
           )}
-          <div className="flex items-center gap-1.5 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
             {item.impact && (
-              <span className="text-[9px] text-muted-foreground border border-border rounded px-1 py-0.5 leading-none truncate max-w-[80px]">{item.impact}</span>
+              <span className="text-[10px] text-muted-foreground border border-border rounded px-1.5 py-0.5 leading-none truncate max-w-[90px]">{item.impact}</span>
             )}
             {item.effort && (
-              <span className="text-[9px] text-muted-foreground border border-border rounded px-1 py-0.5 leading-none truncate max-w-[80px]">{item.effort}</span>
+              <span className="text-[10px] text-muted-foreground border border-border rounded px-1.5 py-0.5 leading-none truncate max-w-[90px]">{item.effort}</span>
             )}
             {item.linkedPlanIds?.length > 0 && (
-              <span className="text-[9px] text-muted-foreground ml-auto">{item.linkedPlanIds.length} plan{item.linkedPlanIds.length !== 1 ? 's' : ''}</span>
+              <span className="text-[10px] text-muted-foreground ml-auto">{item.linkedPlanIds.length} plan{item.linkedPlanIds.length !== 1 ? 's' : ''}</span>
             )}
           </div>
         </div>
@@ -126,26 +126,26 @@ function IdeaDragOverlay({ activeItem }: { activeItem?: Idea }) {
     <DragOverlay dropAnimation={null}>
       <div
         className={cn(
-          'rounded-md border border-border bg-card px-3 py-2 shadow-xl cursor-grabbing border-l-2',
+          'rounded-md border border-border bg-card px-4 py-3 shadow-xl cursor-grabbing border-l-2',
           lane?.accent,
         )}
         style={activeNodeRect ? { width: activeNodeRect.width } : undefined}
       >
-        <div className="flex items-start gap-1.5">
+        <div className="flex items-start gap-2">
           <span className="mt-0.5 text-muted-foreground/50 shrink-0">
-            <GripVertical className="h-3 w-3" />
+            <GripVertical className="h-3.5 w-3.5" />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="text-[11px] font-medium leading-snug line-clamp-2 mb-1">{activeItem.title}</div>
+            <div className="text-xs font-medium leading-snug mb-1.5">{activeItem.title}</div>
             {activeItem.outcome && (
-              <div className="text-[10px] text-muted-foreground line-clamp-1 mb-1.5">{activeItem.outcome}</div>
+              <div className="text-[11px] text-muted-foreground line-clamp-2 mb-2">{activeItem.outcome}</div>
             )}
-            <div className="flex items-center gap-1.5 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap">
               {activeItem.impact && (
-                <span className="text-[9px] text-muted-foreground border border-border rounded px-1 py-0.5 leading-none truncate max-w-[80px]">{activeItem.impact}</span>
+                <span className="text-[10px] text-muted-foreground border border-border rounded px-1.5 py-0.5 leading-none truncate max-w-[90px]">{activeItem.impact}</span>
               )}
               {activeItem.effort && (
-                <span className="text-[9px] text-muted-foreground border border-border rounded px-1 py-0.5 leading-none truncate max-w-[80px]">{activeItem.effort}</span>
+                <span className="text-[10px] text-muted-foreground border border-border rounded px-1.5 py-0.5 leading-none truncate max-w-[90px]">{activeItem.effort}</span>
               )}
             </div>
           </div>
@@ -352,7 +352,7 @@ export function IdeasView({ gateway }: Props) {
                   <span className="text-[11px] font-semibold">{lane.label}</span>
                   <span className="ml-auto text-[10px] text-muted-foreground">{grouped[lane.id].length}</span>
                 </div>
-                <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+                <div className="flex-1 overflow-y-auto p-2.5 space-y-2">
                   {grouped[lane.id].map((item) => (
                     <DraggableCard key={item.id} item={item} lane={lane} selected={selected} onClick={() => openDetail(item)} />
                   ))}
@@ -373,7 +373,7 @@ export function IdeasView({ gateway }: Props) {
 
       {/* detail modal */}
       <Dialog open={Boolean(selected)} onOpenChange={(open) => { if (!open) closeDetail(); }}>
-        <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-hidden flex flex-col">
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
           {selected && (
             <>
               <DialogHeader>
@@ -444,24 +444,36 @@ export function IdeasView({ gateway }: Props) {
                     </div>
                   </div>
 
-                  {/* text fields */}
-                  {([
-                    ['Problem', 'problem'],
-                    ['Outcome', 'outcome'],
-                    ['Audience', 'audience'],
-                    ['Risks', 'risks'],
-                    ['Notes', 'notes'],
-                  ] as [string, keyof Idea][]).map(([label, key]) => (
-                    <div key={key} className="space-y-1.5">
-                      <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</Label>
-                      <Textarea
-                        rows={2}
-                        value={(draft[key] as string) ?? ''}
-                        onChange={e => setDraft(d => ({ ...d, [key]: e.target.value }))}
-                        className="text-xs resize-none"
-                      />
-                    </div>
-                  ))}
+                  {/* text fields — 2-col grid */}
+                  <div className="grid grid-cols-2 gap-3">
+                    {([
+                      ['Problem', 'problem'],
+                      ['Outcome', 'outcome'],
+                      ['Audience', 'audience'],
+                      ['Risks', 'risks'],
+                    ] as [string, keyof Idea][]).map(([label, key]) => (
+                      <div key={key} className="space-y-1.5">
+                        <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</Label>
+                        <Textarea
+                          rows={3}
+                          value={(draft[key] as string) ?? ''}
+                          onChange={e => setDraft(d => ({ ...d, [key]: e.target.value }))}
+                          className="text-xs resize-none"
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* notes — full width */}
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">Notes</Label>
+                    <Textarea
+                      rows={3}
+                      value={(draft.notes as string) ?? ''}
+                      onChange={e => setDraft(d => ({ ...d, notes: e.target.value }))}
+                      className="text-xs resize-none"
+                    />
+                  </div>
 
                   {selected.linkedPlanIds?.length > 0 && (
                     <div className="rounded-md border border-border bg-secondary/30 p-2.5">
@@ -485,7 +497,7 @@ export function IdeasView({ gateway }: Props) {
 
       {/* add dialog */}
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle className="text-sm">Add Idea</DialogTitle>
           </DialogHeader>
@@ -501,42 +513,44 @@ export function IdeasView({ gateway }: Props) {
                 placeholder="What's the idea?"
               />
             </div>
-            <div className="space-y-1">
-              <Label className="text-[11px]">Lane</Label>
-              <div className="flex gap-1">
-                {LANES.map(l => (
-                  <button
-                    key={l.id}
-                    onClick={() => setNewIdea(p => ({ ...p, lane: l.id }))}
-                    className={cn(
-                      'flex-1 rounded px-2 py-1.5 text-[11px] border transition-colors',
-                      newIdea.lane === l.id
-                        ? 'bg-primary text-primary-foreground border-primary'
-                        : 'border-border text-muted-foreground hover:border-foreground/30',
-                    )}
-                  >
-                    {l.label}
-                  </button>
-                ))}
+            <div className="grid grid-cols-[1fr_auto_auto] gap-3 items-end">
+              <div className="space-y-1">
+                <Label className="text-[11px]">Lane</Label>
+                <div className="flex gap-1">
+                  {LANES.map(l => (
+                    <button
+                      key={l.id}
+                      onClick={() => setNewIdea(p => ({ ...p, lane: l.id }))}
+                      className={cn(
+                        'flex-1 rounded px-2 py-1.5 text-[11px] border transition-colors',
+                        newIdea.lane === l.id
+                          ? 'bg-primary text-primary-foreground border-primary'
+                          : 'border-border text-muted-foreground hover:border-foreground/30',
+                      )}
+                    >
+                      {l.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
                 <Label className="text-[11px]">Impact</Label>
-                <Input value={newIdea.impact} onChange={e => setNewIdea(p => ({ ...p, impact: e.target.value }))} className="h-8 text-xs" placeholder="low / med / high" />
+                <Input value={newIdea.impact} onChange={e => setNewIdea(p => ({ ...p, impact: e.target.value }))} className="h-8 text-xs w-28" placeholder="low / med / high" />
               </div>
               <div className="space-y-1">
                 <Label className="text-[11px]">Effort</Label>
-                <Input value={newIdea.effort} onChange={e => setNewIdea(p => ({ ...p, effort: e.target.value }))} className="h-8 text-xs" placeholder="low / med / high" />
+                <Input value={newIdea.effort} onChange={e => setNewIdea(p => ({ ...p, effort: e.target.value }))} className="h-8 text-xs w-28" placeholder="low / med / high" />
               </div>
             </div>
-            <div className="space-y-1">
-              <Label className="text-[11px]">Problem</Label>
-              <Textarea value={newIdea.problem} onChange={e => setNewIdea(p => ({ ...p, problem: e.target.value }))} rows={2} className="text-xs resize-none" />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-[11px]">Outcome</Label>
-              <Textarea value={newIdea.outcome} onChange={e => setNewIdea(p => ({ ...p, outcome: e.target.value }))} rows={2} className="text-xs resize-none" />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-[11px]">Problem</Label>
+                <Textarea value={newIdea.problem} onChange={e => setNewIdea(p => ({ ...p, problem: e.target.value }))} rows={3} className="text-xs resize-none" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[11px]">Outcome</Label>
+                <Textarea value={newIdea.outcome} onChange={e => setNewIdea(p => ({ ...p, outcome: e.target.value }))} rows={3} className="text-xs resize-none" />
+              </div>
             </div>
             <div className="flex justify-end gap-2">
               <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setAddOpen(false)}>Cancel</Button>

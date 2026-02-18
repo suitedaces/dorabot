@@ -1368,7 +1368,7 @@ export function useGateway(url = 'wss://localhost:18789') {
       };
     });
     try {
-      const res = await rpc('chat.send', { prompt, chatId: cid }) as { sessionKey?: string } | undefined;
+      const res = await rpc('chat.send', { prompt, chatId: cid, sessionKey: sk }) as { sessionKey?: string } | undefined;
       if (res?.sessionKey && res.sessionKey !== sk) {
         // sessionKey changed (e.g. server normalized it) — migrate state
         activeSessionKeyRef.current = res.sessionKey;

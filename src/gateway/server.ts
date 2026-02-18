@@ -2478,23 +2478,28 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!prompt) return { id, error: 'prompt required' };
 
           const chatId = (params?.chatId as string) || `task-${Date.now()}`;
-          const sessionKey = `desktop:dm:${chatId}`;
-          let session = sessionRegistry.getOrCreate({
+          const requestedSessionKey = params?.sessionKey as string | undefined;
+          // use client-provided sessionKey if it exists in the registry (e.g. replying to a calendar session)
+          const existingSession = requestedSessionKey ? sessionRegistry.get(requestedSessionKey) : undefined;
+          const sessionKey = existingSession ? requestedSessionKey! : `desktop:dm:${chatId}`;
+          let session = existingSession || sessionRegistry.getOrCreate({
             channel: 'desktop',
             chatId,
           });
 
-          // idle timeout: reset session if too long since last message
-          const desktopGap = Date.now() - session.lastMessageAt;
-          if (session.messageCount > 0 && desktopGap > IDLE_TIMEOUT_MS) {
-            console.log(`[gateway] idle timeout for ${session.key} (${Math.floor(desktopGap / 3600000)}h), starting new session`);
-            fileSessionManager.setMetadata(session.sessionId, { sdkSessionId: undefined });
-            sessionRegistry.remove(session.key);
-            session = sessionRegistry.getOrCreate({ channel: 'desktop', chatId });
+          // idle timeout: reset session if too long since last message (skip for cross-session replies)
+          if (!existingSession) {
+            const desktopGap = Date.now() - session.lastMessageAt;
+            if (session.messageCount > 0 && desktopGap > IDLE_TIMEOUT_MS) {
+              console.log(`[gateway] idle timeout for ${session.key} (${Math.floor(desktopGap / 3600000)}h), starting new session`);
+              fileSessionManager.setMetadata(session.sessionId, { sdkSessionId: undefined });
+              sessionRegistry.remove(session.key);
+              session = sessionRegistry.getOrCreate({ channel: 'desktop', chatId });
+            }
+            fileSessionManager.setMetadata(session.sessionId, { channel: 'desktop', chatId, chatType: 'dm' });
           }
 
           sessionRegistry.incrementMessages(session.key);
-          fileSessionManager.setMetadata(session.sessionId, { channel: 'desktop', chatId, chatType: 'dm' });
           broadcastSessionUpdate(sessionKey);
 
           // try injection into active run first

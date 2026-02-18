@@ -34,23 +34,31 @@ type GatewayClientOptions = {
 const HEARTBEAT_INTERVAL_MS = 10_000;
 const HEARTBEAT_TIMEOUT_MS = 5_000;
 
-// Token consumed once from preload, cached in module scope — not re-extractable.
+// Token consumed once from preload, cached in module scope.
+// If preload didn't have it yet (fresh install race), we retry from localStorage
+// and listen for a push from main process via IPC.
 let cachedToken: string | null = null;
+
 function getToken(): string {
-  if (!cachedToken) {
-    const consumed = (window as any).electronAPI?.consumeGatewayToken?.() || '';
-    if (consumed) {
-      cachedToken = consumed;
-      try {
-        localStorage.setItem('dorabot:gateway-token', consumed);
-      } catch {
-        // ignore storage errors
-      }
-    } else {
-      cachedToken = localStorage.getItem('dorabot:gateway-token') || '';
-    }
+  if (cachedToken) return cachedToken;
+
+  // Try preload's one-shot delivery first
+  const consumed = (window as any).electronAPI?.consumeGatewayToken?.() || '';
+  if (consumed) {
+    cachedToken = consumed;
+    try { localStorage.setItem('dorabot:gateway-token', consumed); } catch {}
+    return consumed;
   }
-  return cachedToken ?? '';
+
+  // Fall back to localStorage (may have been pushed by main process after gateway ready)
+  const stored = localStorage.getItem('dorabot:gateway-token') || '';
+  if (stored) {
+    cachedToken = stored;
+    return stored;
+  }
+
+  // No token yet, return empty (will trigger reconnect later)
+  return '';
 }
 
 function classifyDisconnect(code: number, reason: string): string {
@@ -87,8 +95,19 @@ export class GatewayClient {
 
   private connectId: string | undefined;
 
+  private tokenListener: (() => void) | null = null;
+
   constructor(opts: GatewayClientOptions) {
     this.url = opts.url;
+    // Listen for delayed token delivery (fresh install: main pushes token after gateway ready)
+    const onTokenAvailable = () => {
+      if (this.state === 'disconnected' && !this.manuallyClosed) {
+        cachedToken = null; // clear so getToken() re-reads from localStorage
+        this.connect();
+      }
+    };
+    window.addEventListener('dorabot:token-available', onTokenAvailable);
+    this.tokenListener = () => window.removeEventListener('dorabot:token-available', onTokenAvailable);
   }
 
   get connectionState(): GatewayConnectionState {

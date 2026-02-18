@@ -357,7 +357,6 @@ function AnthropicCard({ gateway, disabled }: { gateway: ReturnType<typeof useGa
                 size="sm"
                 className="h-6 text-[10px] px-2"
                 onClick={() => setShowAuth(!showAuth)}
-                disabled={disabled}
               >
                 {showAuth ? 'cancel' : authStatus?.reconnectRequired ? 'reconnect' : authenticated ? 'change' : 'set up'}
               </Button>
@@ -488,7 +487,6 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
                 size="sm"
                 className="h-6 text-[10px] px-2"
                 onClick={() => setShowAuth(!showAuth)}
-                disabled={disabled}
               >
                 {showAuth ? 'cancel' : authStatus?.reconnectRequired ? 'reconnect' : authenticated ? 'change' : 'set up'}
               </Button>
