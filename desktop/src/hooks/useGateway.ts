@@ -456,7 +456,7 @@ export function useGateway(url = 'wss://localhost:18789') {
   const [telegramLinkError, setTelegramLinkError] = useState<string | null>(null);
   const [providerInfo, setProviderInfo] = useState<{ name: string; auth: ProviderAuthInfo } | null>(null);
   const [plansVersion, setPlansVersion] = useState(0);
-  const [ideasVersion, setRoadmapVersion] = useState(0);
+  const [ideasVersion, setIdeasVersion] = useState(0);
   const [planRuns, setPlanRuns] = useState<Record<string, PlanRun>>({});
   const [researchVersion, setResearchVersion] = useState(0);
   const [backgroundRuns, setBackgroundRuns] = useState<BackgroundRun[]>([]);
@@ -1145,7 +1145,7 @@ export function useGateway(url = 'wss://localhost:18789') {
         setPlansVersion(v => v + 1);
         const payload = data as { ideaId?: string; ideasVersion?: number };
         if (payload?.ideaId || payload?.ideasVersion) {
-          setRoadmapVersion(v => v + 1);
+          setIdeasVersion(v => v + 1);
         }
         onNotifiableEventRef.current?.({ type: 'plans.update' });
         break;

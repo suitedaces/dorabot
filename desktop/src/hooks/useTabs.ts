@@ -59,6 +59,14 @@ function loadTabsFromStorage(): Tab[] {
           label: 'Plans',
         } as Tab;
       }
+      if ((tab as any).type === 'roadmap') {
+        return {
+          ...(tab as any),
+          id: 'view:ideas',
+          type: 'ideas',
+          label: 'Ideas',
+        } as Tab;
+      }
       return tab;
     });
   } catch {
@@ -69,6 +77,7 @@ function loadTabsFromStorage(): Tab[] {
 function loadActiveTabIdFromStorage(): string | null {
   const value = localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
   if (value === 'view:goals') return 'view:plans';
+  if (value === 'view:roadmap') return 'view:ideas';
   return value;
 }
 
