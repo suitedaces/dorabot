@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { useGateway, PlanRun } from '../hooks/useGateway';
 import {
   DndContext,
@@ -8,6 +9,7 @@ import {
   useSensors,
   useDroppable,
   useDraggable,
+  useDndContext,
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
@@ -15,12 +17,11 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
-import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import {
-  Play, RotateCcw, Eye, GitBranch, GitPullRequest, GitMerge,
-  Trash2, BarChart3, Loader2, GripVertical,
+  Play, RotateCcw, Eye, GitBranch,
+  Loader2, GripVertical,
 } from 'lucide-react';
 
 type Plan = {
@@ -51,16 +52,6 @@ type PlanLog = {
   createdAt: string;
 };
 
-type WorktreeStats = {
-  clean: boolean;
-  staged: number;
-  changed: number;
-  untracked: number;
-  ahead: number;
-  behind: number;
-  lastCommit: string;
-};
-
 type PlanStartResponse = {
   started: boolean;
   planId: string;
@@ -76,16 +67,22 @@ type Props = {
   onViewSession?: (sessionId: string, channel?: string, chatId?: string, chatType?: string) => void;
 };
 
-const COLUMNS: { id: Plan['status']; label: string }[] = [
-  { id: 'plan', label: 'Plan' },
-  { id: 'in_progress', label: 'In Progress' },
-  { id: 'done', label: 'Done' },
+const COLUMNS: { id: Plan['status']; label: string; accent: string; dot: string }[] = [
+  { id: 'plan',        label: 'Plan',        accent: 'border-l-amber-500',   dot: 'bg-amber-500' },
+  { id: 'in_progress', label: 'In Progress', accent: 'border-l-sky-500',     dot: 'bg-sky-500' },
+  { id: 'done',        label: 'Done',        accent: 'border-l-emerald-500', dot: 'bg-emerald-500' },
 ];
 
 const TYPE_BADGE: Record<Plan['type'], string> = {
   feature: 'bg-blue-500/10 text-blue-300 border-blue-500/30',
   bug: 'bg-red-500/10 text-red-300 border-red-500/30',
   chore: 'bg-muted text-muted-foreground',
+};
+
+const RUN_BADGE: Record<Plan['runState'], string> = {
+  idle: 'bg-muted text-muted-foreground',
+  running: 'bg-sky-500/10 text-sky-400 border-sky-500/30',
+  failed: 'bg-destructive/10 text-destructive border-destructive/30',
 };
 
 function parseSessionKey(sessionKey: string): { channel: string; chatType: string; chatId: string } | null {
@@ -95,105 +92,118 @@ function parseSessionKey(sessionKey: string): { channel: string; chatType: strin
   return { channel, chatType, chatId };
 }
 
-// ── Kanban Card ──
+// ── Card ──
 
-function KanbanCard({ plan, run, onClick, overlay }: {
+function DraggableCard({ plan, run, column, selected, onClick }: {
   plan: Plan;
   run?: PlanRun;
+  column: typeof COLUMNS[number];
+  selected: Plan | null;
   onClick: () => void;
-  overlay?: boolean;
 }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: plan.id });
-
-  const style = transform
-    ? { transform: `translate3d(${transform.x}px,${transform.y}px,0)` }
-    : undefined;
-
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: plan.id });
   const isRunning = plan.runState === 'running' || run?.status === 'started';
 
   return (
+    <button
+      ref={setNodeRef}
+      {...listeners}
+      {...attributes}
+      onClick={onClick}
+      className={cn(
+        'w-full text-left rounded-md border border-border bg-card px-3 py-2 transition-colors cursor-grab active:cursor-grabbing',
+        'hover:bg-accent hover:border-accent-foreground/20',
+        'border-l-2',
+        column.accent,
+        selected?.id === plan.id && 'ring-1 ring-primary',
+        isDragging && 'opacity-50',
+      )}
+    >
+      <div className="flex items-start gap-1.5">
+        <span className="mt-0.5 text-muted-foreground/50 shrink-0">
+          <GripVertical className="h-3 w-3" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] font-medium leading-snug line-clamp-2 mb-1">{plan.title}</div>
+          {plan.description && (
+            <div className="text-[10px] text-muted-foreground line-clamp-1 mb-1.5">{plan.description}</div>
+          )}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <Badge className={`text-[9px] h-4 border px-1 ${TYPE_BADGE[plan.type]}`}>{plan.type}</Badge>
+            {plan.runState === 'failed' && (
+              <Badge className="text-[9px] h-4 border px-1 bg-destructive/10 text-destructive border-destructive/30">failed</Badge>
+            )}
+            {isRunning && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+            {plan.branch && (
+              <span className="flex items-center gap-0.5 text-[9px] text-muted-foreground ml-auto">
+                <GitBranch className="h-2.5 w-2.5" />{plan.branch.replace(/^.*\//, '')}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+// ── Column ──
+
+function DroppableColumn({ column, children }: { column: typeof COLUMNS[number]; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id: column.id });
+  return (
     <div
       ref={setNodeRef}
-      style={style}
-      {...attributes}
       className={cn(
-        'rounded-md border border-border bg-card px-2.5 py-2 cursor-pointer select-none transition-shadow',
-        isDragging && !overlay && 'opacity-40',
-        overlay && 'shadow-xl rotate-1',
-        'hover:border-primary/40 hover:shadow-sm',
+        'flex flex-col min-h-0 rounded-lg border border-border bg-secondary/10 transition-colors',
+        isOver && 'bg-primary/5 border-primary/30',
       )}
-      onClick={!overlay ? onClick : undefined}
     >
-      <div className="flex items-start gap-1.5 mb-1">
-        <div
-          {...listeners}
-          className="mt-0.5 cursor-grab text-muted-foreground/40 hover:text-muted-foreground shrink-0"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <GripVertical className="h-3 w-3" />
-        </div>
-        <span className="flex-1 text-[11px] font-medium leading-tight line-clamp-2">{plan.title}</span>
-        {isRunning && <Loader2 className="h-3 w-3 animate-spin text-primary shrink-0 mt-0.5" />}
-      </div>
-
-      {plan.description && (
-        <p className="text-[10px] text-muted-foreground line-clamp-2 mb-1.5 ml-4">{plan.description}</p>
-      )}
-
-      <div className="flex flex-wrap items-center gap-1 ml-4">
-        <Badge className={`text-[9px] h-4 border px-1 ${TYPE_BADGE[plan.type]}`}>{plan.type}</Badge>
-        {plan.runState === 'failed' && (
-          <Badge className="text-[9px] h-4 border px-1 bg-destructive/10 text-destructive border-destructive/30">failed</Badge>
-        )}
-        {plan.branch && (
-          <span className="flex items-center gap-0.5 text-[9px] text-muted-foreground">
-            <GitBranch className="h-2.5 w-2.5" />{plan.branch.replace(/^.*\//, '')}
-          </span>
-        )}
-      </div>
+      {children}
     </div>
   );
 }
 
-// ── Kanban Column ──
+// ── Drag Overlay ──
 
-function KanbanColumn({ id, label, plans, runs, onCardClick }: {
-  id: Plan['status'];
-  label: string;
-  plans: Plan[];
-  runs: Record<string, PlanRun>;
-  onCardClick: (plan: Plan) => void;
-}) {
-  const { setNodeRef, isOver } = useDroppable({ id });
-
+function PlanDragOverlay({ activePlan, planRuns }: { activePlan: Plan | undefined; planRuns: Record<string, PlanRun> }) {
+  const { activeNodeRect } = useDndContext();
+  if (!activePlan) return <DragOverlay dropAnimation={null} />;
+  const col = COLUMNS.find(c => c.id === activePlan.status);
+  const isRunning = activePlan.runState === 'running' || planRuns[activePlan.id]?.status === 'started';
   return (
-    <div
-      ref={setNodeRef}
-      className={cn(
-        'flex flex-col min-w-[220px] w-[220px] shrink-0 rounded-lg border border-border bg-secondary/20 transition-colors',
-        isOver && 'border-primary/50 bg-primary/5',
-      )}
-    >
-      <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border shrink-0">
-        <span className="text-[11px] font-semibold">{label}</span>
-        <Badge variant="outline" className="text-[9px] h-4 ml-auto">{plans.length}</Badge>
-      </div>
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="p-2 space-y-1.5">
-          {plans.length === 0 && (
-            <div className="text-[10px] text-muted-foreground text-center py-6 opacity-40">empty</div>
-          )}
-          {plans.map((plan) => (
-            <KanbanCard
-              key={plan.id}
-              plan={plan}
-              run={runs[plan.id]}
-              onClick={() => onCardClick(plan)}
-            />
-          ))}
+    <DragOverlay dropAnimation={null}>
+      <div
+        className={cn(
+          'rounded-md border border-border bg-card px-3 py-2 shadow-xl cursor-grabbing border-l-2',
+          col?.accent,
+        )}
+        style={activeNodeRect ? { width: activeNodeRect.width } : undefined}
+      >
+        <div className="flex items-start gap-1.5">
+          <span className="mt-0.5 text-muted-foreground/50 shrink-0">
+            <GripVertical className="h-3 w-3" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] font-medium leading-snug line-clamp-2 mb-1">{activePlan.title}</div>
+            {activePlan.description && (
+              <div className="text-[10px] text-muted-foreground line-clamp-1 mb-1.5">{activePlan.description}</div>
+            )}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <Badge className={`text-[9px] h-4 border px-1 ${TYPE_BADGE[activePlan.type]}`}>{activePlan.type}</Badge>
+              {activePlan.runState === 'failed' && (
+                <Badge className="text-[9px] h-4 border px-1 bg-destructive/10 text-destructive border-destructive/30">failed</Badge>
+              )}
+              {isRunning && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+              {activePlan.branch && (
+                <span className="flex items-center gap-0.5 text-[9px] text-muted-foreground ml-auto">
+                  <GitBranch className="h-2.5 w-2.5" />{activePlan.branch.replace(/^.*\//, '')}
+                </span>
+              )}
+            </div>
+          </div>
         </div>
-      </ScrollArea>
-    </div>
+      </div>
+    </DragOverlay>
   );
 }
 
@@ -205,11 +215,10 @@ export function PlansView({ gateway, onViewSession }: Props) {
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
   const [logs, setLogs] = useState<PlanLog[]>([]);
   const [doc, setDoc] = useState<string | null>(null);
-  const [stats, setStats] = useState<WorktreeStats | null>(null);
   const [busyPlanId, setBusyPlanId] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
 
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
   const byStatus = useMemo(() => {
     const map: Record<Plan['status'], Plan[]> = { plan: [], in_progress: [], done: [] };
@@ -217,13 +226,8 @@ export function PlansView({ gateway, onViewSession }: Props) {
     return map;
   }, [plans]);
 
-  const planById = useMemo(() => {
-    const map: Record<string, Plan> = {};
-    for (const p of plans) map[p.id] = p;
-    return map;
-  }, [plans]);
-
-  const activePlan = activeId ? planById[activeId] : null;
+  const planById = useMemo(() => new Map(plans.map(p => [p.id, p])), [plans]);
+  const activePlan = activeId ? planById.get(activeId) : null;
 
   const load = useCallback(async () => {
     if (gateway.connectionState !== 'connected') return;
@@ -250,7 +254,6 @@ export function PlansView({ gateway, onViewSession }: Props) {
     setSelectedPlan(plan);
     setLogs([]);
     setDoc(null);
-    setStats(null);
     try {
       const [logsRes, docRes] = await Promise.all([
         gateway.rpc('plans.logs', { id: plan.id, limit: 20 }),
@@ -292,27 +295,6 @@ export function PlansView({ gateway, onViewSession }: Props) {
     }
   }, [gateway, load, onViewSession]);
 
-  const runWorktreeAction = useCallback(async (plan: Plan, action: 'stats' | 'merge' | 'push' | 'remove') => {
-    setBusyPlanId(plan.id);
-    try {
-      if (action === 'stats') {
-        const s = await gateway.rpc('worktree.stats', { planId: plan.id }) as WorktreeStats;
-        if (s) setStats(s);
-      } else if (action === 'merge') {
-        await gateway.rpc('worktree.merge', { planId: plan.id });
-      } else if (action === 'push') {
-        await gateway.rpc('worktree.push_pr', { planId: plan.id });
-      } else if (action === 'remove') {
-        await gateway.rpc('worktree.remove', { planId: plan.id });
-      }
-      await load();
-    } catch (err) {
-      console.error(`worktree ${action} failed:`, err);
-    } finally {
-      setBusyPlanId(null);
-    }
-  }, [gateway, load]);
-
   const handleDragStart = useCallback((e: DragStartEvent) => {
     setActiveId(e.active.id as string);
   }, []);
@@ -322,7 +304,7 @@ export function PlansView({ gateway, onViewSession }: Props) {
     const { active, over } = e;
     if (!over || active.id === over.id) return;
     const newStatus = over.id as Plan['status'];
-    const plan = planById[active.id as string];
+    const plan = planById.get(active.id as string);
     if (!plan || plan.status === newStatus) return;
 
     setPlans((prev) => prev.map((p) => p.id === plan.id ? { ...p, status: newStatus } : p));
@@ -340,12 +322,10 @@ export function PlansView({ gateway, onViewSession }: Props) {
 
   if (loading) {
     return (
-      <div className="p-4 space-y-2">
-        <Skeleton className="h-8 w-48" />
-        <div className="flex gap-3">
-          <Skeleton className="h-40 w-[220px]" />
-          <Skeleton className="h-40 w-[220px]" />
-          <Skeleton className="h-40 w-[220px]" />
+      <div className="p-4 space-y-3">
+        <div className="h-8 w-48 rounded bg-muted/40 animate-pulse" />
+        <div className="grid grid-cols-3 gap-3">
+          {[1, 2, 3].map(n => <div key={n} className="h-48 rounded-lg bg-muted/20 animate-pulse" />)}
         </div>
       </div>
     );
@@ -359,36 +339,45 @@ export function PlansView({ gateway, onViewSession }: Props) {
       </div>
 
       <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-        <div className="flex-1 min-h-0 overflow-x-auto">
-          <div className="flex gap-3 p-4 h-full">
+        <ScrollArea className="flex-1 min-h-0">
+          <div className="grid grid-cols-3 gap-3 p-3">
             {COLUMNS.map((col) => (
-              <KanbanColumn
-                key={col.id}
-                id={col.id}
-                label={col.label}
-                plans={byStatus[col.id]}
-                runs={gateway.planRuns}
-                onCardClick={openDetail}
-              />
+              <DroppableColumn key={col.id} column={col}>
+                <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
+                  <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', col.dot)} />
+                  <span className="text-[11px] font-semibold">{col.label}</span>
+                  <span className="ml-auto text-[10px] text-muted-foreground">{byStatus[col.id].length}</span>
+                </div>
+                <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+                  {byStatus[col.id].map((plan) => (
+                    <DraggableCard
+                      key={plan.id}
+                      plan={plan}
+                      run={gateway.planRuns[plan.id]}
+                      column={col}
+                      selected={selectedPlan}
+                      onClick={() => openDetail(plan)}
+                    />
+                  ))}
+                  {byStatus[col.id].length === 0 && (
+                    <div className="py-8 text-center text-[10px] text-muted-foreground/50">empty</div>
+                  )}
+                </div>
+              </DroppableColumn>
             ))}
-            {plans.length === 0 && (
-              <div className="flex items-center justify-center flex-1 text-xs text-muted-foreground">
-                No plans yet. Create ideas in the Ideas tab, then generate plans from there.
-              </div>
-            )}
           </div>
-        </div>
 
-        <DragOverlay>
-          {activePlan && (
-            <KanbanCard
-              plan={activePlan}
-              run={gateway.planRuns[activePlan.id]}
-              onClick={() => {}}
-              overlay
-            />
+          {plans.length === 0 && (
+            <div className="flex items-center justify-center py-16 text-xs text-muted-foreground">
+              No plans yet. Create ideas in the Ideas tab, then generate plans from there.
+            </div>
           )}
-        </DragOverlay>
+        </ScrollArea>
+
+        {createPortal(
+          <PlanDragOverlay activePlan={activePlan ?? undefined} planRuns={gateway.planRuns} />,
+          document.body,
+        )}
       </DndContext>
 
       {/* detail modal */}
@@ -400,16 +389,21 @@ export function PlansView({ gateway, onViewSession }: Props) {
                 <DialogTitle className="text-sm flex items-center gap-2">
                   <span className="truncate">{selectedPlan.title}</span>
                   <Badge className={`text-[9px] h-4 border px-1 shrink-0 ${TYPE_BADGE[selectedPlan.type]}`}>{selectedPlan.type}</Badge>
+                  <Badge className={cn('text-[9px] h-4 border px-1.5 shrink-0 ml-auto', RUN_BADGE[selectedPlan.runState])}>
+                    {selectedPlan.runState === 'running' && <Loader2 className="mr-1 h-2.5 w-2.5 animate-spin" />}
+                    {selectedPlan.runState}
+                  </Badge>
                 </DialogTitle>
               </DialogHeader>
 
               <ScrollArea className="flex-1 min-h-0 -mx-6 px-6">
-                <div className="space-y-3 text-[11px] pb-1">
+                <div className="space-y-4 pb-1">
                   {/* actions */}
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex items-center gap-1.5">
                     {selectedPlan.status === 'plan' && (
                       <Button size="sm" className="h-7 px-2.5 text-[10px]" onClick={() => startPlan(selectedPlan)} disabled={busyPlanId === selectedPlan.id}>
-                        <Play className="mr-1 h-3 w-3" />Start
+                        {busyPlanId === selectedPlan.id ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Play className="mr-1 h-3 w-3" />}
+                        Start
                       </Button>
                     )}
                     {selectedPlan.runState === 'failed' && (
@@ -420,58 +414,65 @@ export function PlansView({ gateway, onViewSession }: Props) {
                     <Button size="sm" variant="outline" className="h-7 px-2.5 text-[10px]" onClick={() => monitorPlan(selectedPlan)} disabled={!selectedPlan.sessionKey}>
                       <Eye className="mr-1 h-3 w-3" />Monitor
                     </Button>
-                    <Button size="sm" variant="outline" className="h-7 px-2.5 text-[10px]" onClick={() => runWorktreeAction(selectedPlan, 'stats')} disabled={busyPlanId === selectedPlan.id}>
-                      <BarChart3 className="mr-1 h-3 w-3" />Stats
-                    </Button>
-                    <Button size="sm" variant="outline" className="h-7 px-2.5 text-[10px]" onClick={() => runWorktreeAction(selectedPlan, 'merge')} disabled={!selectedPlan.branch || busyPlanId === selectedPlan.id}>
-                      <GitMerge className="mr-1 h-3 w-3" />Merge
-                    </Button>
-                    <Button size="sm" variant="outline" className="h-7 px-2.5 text-[10px]" onClick={() => runWorktreeAction(selectedPlan, 'push')} disabled={!selectedPlan.worktreePath || busyPlanId === selectedPlan.id}>
-                      <GitPullRequest className="mr-1 h-3 w-3" />Push PR
-                    </Button>
-                    <Button size="sm" variant="destructive" className="h-7 px-2.5 text-[10px]" onClick={() => runWorktreeAction(selectedPlan, 'remove')} disabled={!selectedPlan.worktreePath || busyPlanId === selectedPlan.id}>
-                      <Trash2 className="mr-1 h-3 w-3" />Remove
-                    </Button>
                   </div>
 
                   <Separator />
 
                   {/* meta */}
-                  <div className="space-y-1.5 text-muted-foreground border border-border rounded-md p-2.5">
-                    <div>run: <span className={selectedPlan.runState === 'failed' ? 'text-destructive' : 'text-foreground'}>{selectedPlan.runState}</span></div>
-                    <div>updated: {new Date(selectedPlan.updatedAt).toLocaleString()}</div>
+                  <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-[11px]">
+                    <span className="text-muted-foreground">status</span>
+                    <span>{selectedPlan.status.replace('_', ' ')}</span>
+
+                    <span className="text-muted-foreground">updated</span>
+                    <span>{new Date(selectedPlan.updatedAt).toLocaleString()}</span>
+
                     {selectedPlan.branch && (
-                      <div className="flex items-center gap-1">
-                        <GitBranch className="h-3 w-3 shrink-0" />
-                        <span className="break-all">{selectedPlan.branch}</span>
-                      </div>
+                      <>
+                        <span className="text-muted-foreground">branch</span>
+                        <span className="flex items-center gap-1">
+                          <GitBranch className="h-3 w-3 shrink-0" />
+                          <span className="break-all">{selectedPlan.branch}</span>
+                        </span>
+                      </>
                     )}
-                    {selectedPlan.worktreePath && <div className="break-all text-[10px]">{selectedPlan.worktreePath}</div>}
-                    {selectedPlan.error && <div className="text-destructive break-words">error: {selectedPlan.error}</div>}
-                    {selectedPlan.result && <div className="break-words">result: {selectedPlan.result}</div>}
-                    {stats && (
-                      <div>{stats.clean ? 'clean' : 'dirty'} · staged {stats.staged} · changed {stats.changed} · untracked {stats.untracked} · ahead {stats.ahead}</div>
+
+                    {selectedPlan.error && (
+                      <>
+                        <span className="text-muted-foreground">error</span>
+                        <span className="text-destructive break-words">{selectedPlan.error}</span>
+                      </>
+                    )}
+
+                    {selectedPlan.result && (
+                      <>
+                        <span className="text-muted-foreground">result</span>
+                        <span className="break-words">{selectedPlan.result}</span>
+                      </>
                     )}
                   </div>
 
-                  {/* plan.md */}
+                  {/* plan doc */}
                   <div>
-                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">plan.md</div>
-                    <pre className="max-h-48 overflow-auto whitespace-pre-wrap font-mono text-[10px] bg-secondary/40 rounded p-2.5">
-                      {doc ?? 'no plan.md'}
-                    </pre>
+                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1.5">plan document</div>
+                    <div className="rounded-md border border-border bg-secondary/30 overflow-hidden">
+                      <pre className="max-h-48 overflow-auto whitespace-pre-wrap font-mono text-[10px] p-3 leading-relaxed">
+                        {doc ?? 'no plan document'}
+                      </pre>
+                    </div>
                   </div>
 
                   {/* logs */}
                   <div>
-                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">recent logs</div>
-                    <div className="space-y-0.5 max-h-40 overflow-auto">
-                      {logs.length === 0 && <div className="text-muted-foreground">no logs</div>}
+                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1.5">activity</div>
+                    <div className="space-y-1 max-h-40 overflow-auto">
+                      {logs.length === 0 && <div className="text-[10px] text-muted-foreground/50 py-2">no activity yet</div>}
                       {logs.map((log) => (
-                        <div key={log.id} className="text-[10px]">
-                          <span className="text-foreground/60">[{new Date(log.createdAt).toLocaleTimeString()}]</span>{' '}
-                          <span className="uppercase text-foreground/80">{log.eventType}</span>{' '}
-                          <span className="text-foreground/70">{log.message}</span>
+                        <div key={log.id} className="flex items-baseline gap-2 text-[10px]">
+                          <span className="text-muted-foreground/50 shrink-0 tabular-nums">
+                            {new Date(log.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                          <span className="text-muted-foreground/70 uppercase text-[9px] shrink-0 w-16">{log.eventType}</span>
+                          <span className="text-foreground/70 min-w-0">{log.message}</span>
                         </div>
                       ))}
                     </div>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { useGateway } from '../hooks/useGateway';
 import {
   DndContext,
@@ -8,6 +9,7 @@ import {
   useSensors,
   useDroppable,
   useDraggable,
+  useDndContext,
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
@@ -58,16 +60,16 @@ function DraggableCard({ item, lane, selected, onClick }: {
   selected: RoadmapItem | null;
   onClick: () => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: item.id });
-  const style = transform ? { transform: `translate(${transform.x}px, ${transform.y}px)` } : undefined;
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: item.id });
 
   return (
     <button
       ref={setNodeRef}
-      style={style}
+      {...listeners}
+      {...attributes}
       onClick={onClick}
       className={cn(
-        'w-full text-left rounded-md border border-border bg-card px-3 py-2 transition-colors',
+        'w-full text-left rounded-md border border-border bg-card px-3 py-2 transition-colors cursor-grab active:cursor-grabbing',
         'hover:bg-accent hover:border-accent-foreground/20',
         'border-l-2',
         lane.accent,
@@ -76,7 +78,7 @@ function DraggableCard({ item, lane, selected, onClick }: {
       )}
     >
       <div className="flex items-start gap-1.5">
-        <span {...listeners} {...attributes} className="mt-0.5 cursor-grab text-muted-foreground/50 hover:text-muted-foreground shrink-0">
+        <span className="mt-0.5 text-muted-foreground/50 shrink-0">
           <GripVertical className="h-3 w-3" />
         </span>
         <div className="min-w-0 flex-1">
@@ -113,6 +115,43 @@ function DroppableLane({ lane, children }: { lane: typeof LANES[number]; childre
     >
       {children}
     </div>
+  );
+}
+
+function IdeaDragOverlay({ activeItem }: { activeItem?: RoadmapItem }) {
+  const { activeNodeRect } = useDndContext();
+  if (!activeItem) return <DragOverlay dropAnimation={null} />;
+  const lane = LANES.find(l => l.id === activeItem.lane);
+  return (
+    <DragOverlay dropAnimation={null}>
+      <div
+        className={cn(
+          'rounded-md border border-border bg-card px-3 py-2 shadow-xl cursor-grabbing border-l-2',
+          lane?.accent,
+        )}
+        style={activeNodeRect ? { width: activeNodeRect.width } : undefined}
+      >
+        <div className="flex items-start gap-1.5">
+          <span className="mt-0.5 text-muted-foreground/50 shrink-0">
+            <GripVertical className="h-3 w-3" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] font-medium leading-snug line-clamp-2 mb-1">{activeItem.title}</div>
+            {activeItem.outcome && (
+              <div className="text-[10px] text-muted-foreground line-clamp-1 mb-1.5">{activeItem.outcome}</div>
+            )}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {activeItem.impact && (
+                <span className="text-[9px] text-muted-foreground border border-border rounded px-1 py-0.5 leading-none truncate max-w-[80px]">{activeItem.impact}</span>
+              )}
+              {activeItem.effort && (
+                <span className="text-[9px] text-muted-foreground border border-border rounded px-1 py-0.5 leading-none truncate max-w-[80px]">{activeItem.effort}</span>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </DragOverlay>
   );
 }
 
@@ -303,8 +342,8 @@ export function RoadmapView({ gateway }: Props) {
         </Button>
       </div>
 
-      <ScrollArea className="flex-1 min-h-0">
-        <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+      <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <ScrollArea className="flex-1 min-h-0">
           <div className="grid grid-cols-4 gap-3 p-3">
             {LANES.map((lane) => (
               <DroppableLane key={lane.id} lane={lane}>
@@ -324,15 +363,13 @@ export function RoadmapView({ gateway }: Props) {
               </DroppableLane>
             ))}
           </div>
-          <DragOverlay>
-            {activeId && itemById.get(activeId) ? (
-              <div className="rounded-md border border-border bg-card px-3 py-2 shadow-lg opacity-90 max-w-[250px]">
-                <div className="text-[11px] font-medium leading-snug line-clamp-2">{itemById.get(activeId)!.title}</div>
-              </div>
-            ) : null}
-          </DragOverlay>
-        </DndContext>
-      </ScrollArea>
+        </ScrollArea>
+
+        {createPortal(
+          <IdeaDragOverlay activeItem={activeId ? itemById.get(activeId) : undefined} />,
+          document.body,
+        )}
+      </DndContext>
 
       {/* detail modal */}
       <Dialog open={Boolean(selected)} onOpenChange={(open) => { if (!open) closeDetail(); }}>
@@ -347,9 +384,9 @@ export function RoadmapView({ gateway }: Props) {
               </DialogHeader>
 
               <ScrollArea className="flex-1 min-h-0 -mx-6 px-6">
-                <div className="space-y-3 pb-1">
+                <div className="space-y-4 pb-1">
                   {/* actions */}
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex items-center gap-1.5">
                     <Button size="sm" className="h-7 px-2.5 text-[10px]" onClick={() => createPlan(selected)} disabled={isBusy(selected.id)}>
                       {isBusy(selected.id) ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Sparkles className="mr-1 h-3 w-3" />}
                       Create Plan
@@ -427,8 +464,9 @@ export function RoadmapView({ gateway }: Props) {
                   ))}
 
                   {selected.linkedPlanIds?.length > 0 && (
-                    <div className="text-[10px] text-muted-foreground">
-                      linked plans: {selected.linkedPlanIds.join(', ')}
+                    <div className="rounded-md border border-border bg-secondary/30 p-2.5">
+                      <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">linked plans</div>
+                      <div className="text-[11px]">{selected.linkedPlanIds.join(', ')}</div>
                     </div>
                   )}
                 </div>
