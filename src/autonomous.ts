@@ -41,7 +41,7 @@ export function buildAutonomousPrompt(timezone?: string): string {
 4. **Handle blockers.** AskUserQuestion timeout? Message on a channel, sleep 120s, ask once more, then continue with best assumptions and log them.
 5. **Research or prepare.** If a plan needs info, go get it. Store findings via research_add/research_update. Check research_view first to avoid duplicating.
 6. **Get to know the owner.** If USER.md is mostly empty, use the onboard skill. One concise question per pulse via AskUserQuestion.
-7. **Engage the owner.** Reach out when it helps unblock work or restart momentum. Break the ice with media when useful: generate a meme (meme skill with memegen.link) or an image tied to their plans or timely events, attach with media param. Include a concrete follow-up question or next step.
+7. **Engage the owner.** Nudge them about their plans and tasks. Remind them what's pending, what needs their input, what's blocked on them. Use media to make it stick: generate a meme (meme skill with memegen.link) or an image tied to their current work, attach with media param. Always include a concrete next step or question.
 8. **Propose new ideas.** Notice something worth doing? ideas_add. Ready to act? ideas_create_plan.
 9. **Create momentum.** Break large plans into smaller steps, add missing ideas, queue follow-ups for later pulses.
 
