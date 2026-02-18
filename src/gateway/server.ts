@@ -75,7 +75,8 @@ const TOOL_EMOJI: Record<string, string> = {
   schedule: '⏰', list_schedule: '⏰',
   update_schedule: '⏰', cancel_schedule: '⏰',
   plan_view: '🎯', plan_add: '🎯', plan_update: '🎯', plan_start: '🎯',
-  roadmap_view: '🗺️', roadmap_add: '🗺️', roadmap_update: '🗺️', roadmap_create_plan: '🗺️',
+  plan_delete: '🎯',
+  ideas_view: '💡', ideas_add: '💡', ideas_update: '💡', ideas_delete: '💡', ideas_create_plan: '💡',
 };
 
 const TOOL_LABEL: Record<string, string> = {
@@ -87,8 +88,8 @@ const TOOL_LABEL: Record<string, string> = {
   screenshot: 'Took screenshot', browser: 'Browsed',
   schedule: 'Scheduled', list_schedule: 'Listed schedule',
   update_schedule: 'Updated schedule', cancel_schedule: 'Cancelled schedule',
-  plan_view: 'Checked plans', plan_add: 'Added plan', plan_update: 'Updated plan', plan_start: 'Started plan',
-  roadmap_view: 'Checked roadmap', roadmap_add: 'Added roadmap item', roadmap_update: 'Updated roadmap item', roadmap_create_plan: 'Created plan',
+  plan_view: 'Checked plans', plan_add: 'Added plan', plan_update: 'Updated plan', plan_start: 'Started plan', plan_delete: 'Deleted plan',
+  ideas_view: 'Checked ideas', ideas_add: 'Added idea', ideas_update: 'Updated idea', ideas_delete: 'Deleted idea', ideas_create_plan: 'Created plan from idea',
 };
 
 const TOOL_ACTIVE_LABEL: Record<string, string> = {
@@ -100,8 +101,8 @@ const TOOL_ACTIVE_LABEL: Record<string, string> = {
   screenshot: 'Taking screenshot', browser: 'Browsing',
   schedule: 'Scheduling', list_schedule: 'Listing schedule',
   update_schedule: 'Updating schedule', cancel_schedule: 'Cancelling schedule',
-  plan_view: 'Checking plans', plan_add: 'Adding plan', plan_update: 'Updating plan', plan_start: 'Starting plan',
-  roadmap_view: 'Checking roadmap', roadmap_add: 'Adding roadmap item', roadmap_update: 'Updating roadmap item', roadmap_create_plan: 'Creating plan',
+  plan_view: 'Checking plans', plan_add: 'Adding plan', plan_update: 'Updating plan', plan_start: 'Starting plan', plan_delete: 'Deleting plan',
+  ideas_view: 'Checking ideas', ideas_add: 'Adding idea', ideas_update: 'Updating idea', ideas_delete: 'Deleting idea', ideas_create_plan: 'Creating plan from idea',
 };
 
 // Plural labels when multiple consecutive same-tool calls are grouped
@@ -603,30 +604,24 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     return m ? m[1] : null;
   }
 
-  function buildPlanExecutionPrompt(task: Plan, roadmapContext?: string, planDoc?: string): string {
+  function buildPlanExecutionPrompt(task: Plan, ideaContext?: string, planDoc?: string): string {
     const tagLine = task.tags?.length ? `Tags: ${task.tags.join(', ')}` : '';
-    const descriptionLine = task.description ? `Description:\n${task.description}` : 'Description:\n(No extra description provided)';
-    const roadmapLine = roadmapContext ? `Roadmap context:\n${roadmapContext}` : '';
+    const descriptionLine = task.description ? `Description:\n${task.description}` : '';
+    const ideaLine = ideaContext ? `Idea context:\n${ideaContext}` : '';
     const planDocLine = planDoc ? `plan.md:\n${planDoc}` : '';
 
     return [
       `Execute plan #${task.id}: ${task.title}`,
       '',
       descriptionLine,
-      roadmapLine,
+      ideaLine,
       planDocLine,
       tagLine,
       '',
-      'Execution protocol:',
-      '- Push this plan as far as possible toward completion in this run.',
-      '- Default to concrete action, not planning-only responses.',
-      '- Keep plan state accurate with plan_update (status/runState/result/error).',
-      '- If blocked by missing user input, ask AskUserQuestion with specific options.',
-      '- If AskUserQuestion times out: message the user on an available channel, sleep 120 seconds, ask once more, then continue with the best defensible assumption and document that assumption in the plan result.',
-      '',
-      'Done criteria:',
-      '- Mark done only when objective is achieved.',
-      '- If not done, leave clear progress notes and next concrete step in result.',
+      'Push this plan toward completion. Default to action, not narration.',
+      'Keep plan state current with plan_update as you work.',
+      'If blocked, ask the user. If no response, make a reasonable call and document it.',
+      'Mark done only when the objective is actually met. Otherwise leave progress notes and next steps.',
     ].filter(Boolean).join('\n');
   }
 
@@ -2243,9 +2238,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               const allTools = [...tl.completed.map(t => t.name), tl.current?.name].filter(Boolean);
               if (allTools.some(t => (
                 t?.startsWith('plan_')
-                || t?.startsWith('roadmap_')
+                || t?.startsWith('ideas_')
                 || t?.startsWith('mcp__dorabot-tools__plan_')
-                || t?.startsWith('mcp__dorabot-tools__roadmap_')
+                || t?.startsWith('mcp__dorabot-tools__ideas_')
               ))) {
                 broadcast({ event: 'plans.update', data: {} });
                 macNotify('Dora', 'Plans updated');
@@ -3120,11 +3115,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           savePlans(plans);
 
           const roadmap = loadRoadmap();
-          const roadmapItem = plan.roadmapItemId ? roadmap.items.find(r => r.id === plan.roadmapItemId) : null;
-          const roadmapContext = roadmapItem
-            ? `#${roadmapItem.id} [${roadmapItem.lane}] ${roadmapItem.title}\nProblem: ${roadmapItem.problem || ''}\nOutcome: ${roadmapItem.outcome || ''}\nAudience: ${roadmapItem.audience || ''}`
+          const idea = plan.roadmapItemId ? roadmap.items.find(r => r.id === plan.roadmapItemId) : null;
+          const ideaContext = idea
+            ? `#${idea.id} [${idea.lane}] ${idea.title}\nProblem: ${idea.problem || ''}\nOutcome: ${idea.outcome || ''}\nAudience: ${idea.audience || ''}`
             : undefined;
-          const prompt = buildPlanExecutionPrompt(plan, roadmapContext, readPlanDoc(plan));
+          const prompt = buildPlanExecutionPrompt(plan, ideaContext, readPlanDoc(plan));
 
           appendPlanLog(plan.id, 'run_started', `Plan started: ${plan.title}`, {
             sessionKey,
@@ -3171,11 +3166,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           };
         }
 
+        case 'ideas.list':
         case 'roadmap.list': {
           const roadmap = loadRoadmap();
           return { id, result: roadmap.items };
         }
 
+        case 'ideas.add':
         case 'roadmap.add': {
           const title = params?.title as string;
           if (!title) return { id, error: 'title required' };
@@ -3211,6 +3208,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           return { id, result: item };
         }
 
+        case 'ideas.update':
         case 'roadmap.update': {
           const roadmapId = params?.id as string;
           if (!roadmapId) return { id, error: 'id required' };
@@ -3237,6 +3235,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           return { id, result: item };
         }
 
+        case 'ideas.delete':
         case 'roadmap.delete': {
           const roadmapId = params?.id as string;
           if (!roadmapId) return { id, error: 'id required' };
@@ -3249,6 +3248,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           return { id, result: { deleted: true } };
         }
 
+        case 'ideas.move':
         case 'roadmap.move': {
           const roadmapId = params?.id as string;
           if (!roadmapId) return { id, error: 'id required' };
@@ -3264,6 +3264,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           return { id, result: item };
         }
 
+        case 'ideas.create_plan':
         case 'roadmap.create_plan': {
           const roadmapItemId = params?.roadmapItemId as string;
           if (!roadmapItemId) return { id, error: 'roadmapItemId required' };

@@ -7,7 +7,7 @@ import {
   type PlanType,
 } from '../tools/plans.js';
 
-export type RoadmapLane = 'now' | 'next' | 'later';
+export type RoadmapLane = 'now' | 'next' | 'later' | 'done';
 
 export type RoadmapItem = {
   id: string;
@@ -83,16 +83,16 @@ export function saveRoadmap(state: RoadmapState): void {
   tx();
 }
 
-function roadmapSummary(item: RoadmapItem): string {
+function ideaSummary(item: RoadmapItem): string {
   const outcome = item.outcome ? ` -> ${item.outcome}` : '';
   return `#${item.id} [${item.lane}] ${item.title}${outcome}`;
 }
 
-export const roadmapViewTool = tool(
-  'roadmap_view',
-  'View ideas organized by lane (now/next/later).',
+export const ideasViewTool = tool(
+  'ideas_view',
+  'View ideas organized by lane (now/next/later/done).',
   {
-    lane: z.enum(['all', 'now', 'next', 'later']).optional(),
+    lane: z.enum(['all', 'now', 'next', 'later', 'done']).optional(),
     id: z.string().optional(),
   },
   async (args) => {
@@ -105,7 +105,7 @@ export const roadmapViewTool = tool(
       }
 
       const lines = [
-        roadmapSummary(item),
+        ideaSummary(item),
         item.description ? `Description: ${item.description}` : '',
         item.problem ? `Problem: ${item.problem}` : '',
         item.outcome ? `Outcome: ${item.outcome}` : '',
@@ -132,14 +132,14 @@ export const roadmapViewTool = tool(
       return (a.sortOrder || 0) - (b.sortOrder || 0);
     });
 
-    const lines = sorted.map((item) => roadmapSummary(item));
+    const lines = sorted.map((item) => ideaSummary(item));
     return { content: [{ type: 'text', text: `Ideas (${lines.length}):\n\n${lines.join('\n')}` }] };
   },
 );
 
-export const roadmapAddTool = tool(
-  'roadmap_add',
-  'Add an idea in now/next/later lane.',
+export const ideasAddTool = tool(
+  'ideas_add',
+  'Add an idea to the ideas board.',
   {
     title: z.string(),
     description: z.string().optional(),
@@ -183,14 +183,14 @@ export const roadmapAddTool = tool(
   },
 );
 
-export const roadmapUpdateTool = tool(
-  'roadmap_update',
+export const ideasUpdateTool = tool(
+  'ideas_update',
   'Update an idea\'s fields and lane position.',
   {
     id: z.string(),
     title: z.string().optional(),
     description: z.string().optional(),
-    lane: z.enum(['now', 'next', 'later']).optional(),
+    lane: z.enum(['now', 'next', 'later', 'done']).optional(),
     impact: z.string().optional(),
     effort: z.string().optional(),
     problem: z.string().optional(),
@@ -206,7 +206,7 @@ export const roadmapUpdateTool = tool(
     const roadmap = loadRoadmap();
     const item = roadmap.items.find((r) => r.id === args.id);
     if (!item) {
-      return { content: [{ type: 'text', text: `Roadmap item #${args.id} not found` }], isError: true };
+      return { content: [{ type: 'text', text: `Idea #${args.id} not found` }], isError: true };
     }
 
     if (args.title !== undefined) item.title = args.title;
@@ -232,11 +232,29 @@ export const roadmapUpdateTool = tool(
   },
 );
 
-export const roadmapCreatePlanTool = tool(
-  'roadmap_create_plan',
+export const ideasDeleteTool = tool(
+  'ideas_delete',
+  'Delete an idea from the board.',
+  {
+    id: z.string(),
+  },
+  async (args) => {
+    const roadmap = loadRoadmap();
+    const before = roadmap.items.length;
+    roadmap.items = roadmap.items.filter((i) => i.id !== args.id);
+    if (roadmap.items.length === before) {
+      return { content: [{ type: 'text', text: `Idea #${args.id} not found` }], isError: true };
+    }
+    saveRoadmap(roadmap);
+    return { content: [{ type: 'text', text: `Idea #${args.id} deleted` }] };
+  },
+);
+
+export const ideasCreatePlanTool = tool(
+  'ideas_create_plan',
   'Create a plan from an idea and link it back.',
   {
-    roadmapItemId: z.string(),
+    ideaId: z.string(),
     title: z.string().optional(),
     description: z.string().optional(),
     type: z.enum(['feature', 'bug', 'chore']).optional(),
@@ -244,9 +262,9 @@ export const roadmapCreatePlanTool = tool(
   },
   async (args) => {
     const roadmap = loadRoadmap();
-    const item = roadmap.items.find((r) => r.id === args.roadmapItemId);
+    const item = roadmap.items.find((r) => r.id === args.ideaId);
     if (!item) {
-      return { content: [{ type: 'text', text: `Idea #${args.roadmapItemId} not found` }], isError: true };
+      return { content: [{ type: 'text', text: `Idea #${args.ideaId} not found` }], isError: true };
     }
 
     const plan = createPlanFromRoadmapItem({
@@ -274,11 +292,18 @@ function inferPlanType(item: RoadmapItem): PlanType {
   return 'feature';
 }
 
+// keep old names as aliases for backward compat with gateway RPCs
+export const roadmapViewTool = ideasViewTool;
+export const roadmapAddTool = ideasAddTool;
+export const roadmapUpdateTool = ideasUpdateTool;
+export const roadmapCreatePlanTool = ideasCreatePlanTool;
+
 export const roadmapTools = [
-  roadmapViewTool,
-  roadmapAddTool,
-  roadmapUpdateTool,
-  roadmapCreatePlanTool,
+  ideasViewTool,
+  ideasAddTool,
+  ideasUpdateTool,
+  ideasDeleteTool,
+  ideasCreatePlanTool,
 ];
 
 export type RoadmapCreatePlanResult = {

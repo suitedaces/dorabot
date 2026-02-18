@@ -14,11 +14,13 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import {
   Play, RotateCcw, Eye, GitBranch, GitPullRequest, GitMerge,
-  Trash2, BarChart3, Loader2, X, ChevronRight,
+  Trash2, BarChart3, Loader2, GripVertical,
 } from 'lucide-react';
 
 type Plan = {
@@ -93,108 +95,6 @@ function parseSessionKey(sessionKey: string): { channel: string; chatType: strin
   return { channel, chatType, chatId };
 }
 
-// ── Detail Panel ──
-
-function DetailPanel({ plan, logs, doc, stats, busy, onClose, onStart, onRetry, onMonitor, onWorktreeAction }: {
-  plan: Plan;
-  logs: PlanLog[];
-  doc: string | null;
-  stats: WorktreeStats | null;
-  busy: boolean;
-  onClose: () => void;
-  onStart: () => void;
-  onRetry: () => void;
-  onMonitor: () => void;
-  onWorktreeAction: (action: 'stats' | 'merge' | 'push' | 'remove') => void;
-}) {
-  return (
-    <div className="flex flex-col w-72 shrink-0 border-l border-border bg-background h-full min-h-0">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
-        <span className="flex-1 text-xs font-semibold truncate">{plan.title}</span>
-        <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
-          <X className="h-3.5 w-3.5" />
-        </button>
-      </div>
-
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="p-3 space-y-3 text-[11px]">
-
-          {/* actions */}
-          <div className="flex flex-wrap gap-1">
-            {plan.status === 'plan' && (
-              <Button size="sm" className="h-6 px-2 text-[10px]" onClick={onStart} disabled={busy}>
-                <Play className="mr-1 h-3 w-3" />Start
-              </Button>
-            )}
-            {plan.runState === 'failed' && (
-              <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={onRetry} disabled={busy}>
-                <RotateCcw className="mr-1 h-3 w-3" />Retry
-              </Button>
-            )}
-            <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={onMonitor} disabled={!plan.sessionKey}>
-              <Eye className="mr-1 h-3 w-3" />Monitor
-            </Button>
-            <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => onWorktreeAction('stats')} disabled={busy}>
-              <BarChart3 className="mr-1 h-3 w-3" />Stats
-            </Button>
-            <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => onWorktreeAction('merge')} disabled={!plan.branch || busy}>
-              <GitMerge className="mr-1 h-3 w-3" />Merge
-            </Button>
-            <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => onWorktreeAction('push')} disabled={!plan.worktreePath || busy}>
-              <GitPullRequest className="mr-1 h-3 w-3" />Push PR
-            </Button>
-            <Button size="sm" variant="destructive" className="h-6 px-2 text-[10px]" onClick={() => onWorktreeAction('remove')} disabled={!plan.worktreePath || busy}>
-              <Trash2 className="mr-1 h-3 w-3" />Remove
-            </Button>
-          </div>
-
-          {/* meta */}
-          <div className="space-y-1 text-muted-foreground border border-border rounded-md p-2">
-            <div>run: <span className={plan.runState === 'failed' ? 'text-destructive' : 'text-foreground'}>{plan.runState}</span></div>
-            <div>updated: {new Date(plan.updatedAt).toLocaleString()}</div>
-            {plan.branch && (
-              <div className="flex items-center gap-1">
-                <GitBranch className="h-3 w-3 shrink-0" />
-                <span className="break-all">{plan.branch}</span>
-              </div>
-            )}
-            {plan.worktreePath && <div className="break-all text-[10px]">{plan.worktreePath}</div>}
-            {plan.error && <div className="text-destructive break-words">error: {plan.error}</div>}
-            {plan.result && <div className="break-words">result: {plan.result}</div>}
-            {stats && (
-              <div>{stats.clean ? 'clean' : 'dirty'} · staged {stats.staged} · changed {stats.changed} · untracked {stats.untracked} · ahead {stats.ahead}</div>
-            )}
-          </div>
-
-          {/* plan.md */}
-          <div>
-            <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">plan.md</div>
-            <pre className="max-h-48 overflow-auto whitespace-pre-wrap font-mono text-[10px] bg-secondary/40 rounded p-2">
-              {doc ?? 'no plan.md'}
-            </pre>
-          </div>
-
-          {/* logs */}
-          <div>
-            <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">recent logs</div>
-            <div className="space-y-0.5 max-h-40 overflow-auto">
-              {logs.length === 0 && <div className="text-muted-foreground">no logs</div>}
-              {logs.map((log) => (
-                <div key={log.id} className="text-[10px]">
-                  <span className="text-foreground/60">[{new Date(log.createdAt).toLocaleTimeString()}]</span>{' '}
-                  <span className="uppercase text-foreground/80">{log.eventType}</span>{' '}
-                  <span className="text-foreground/70">{log.message}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-        </div>
-      </ScrollArea>
-    </div>
-  );
-}
-
 // ── Kanban Card ──
 
 function KanbanCard({ plan, run, onClick, overlay }: {
@@ -224,14 +124,13 @@ function KanbanCard({ plan, run, onClick, overlay }: {
       )}
       onClick={!overlay ? onClick : undefined}
     >
-      {/* drag handle row */}
       <div className="flex items-start gap-1.5 mb-1">
         <div
           {...listeners}
           className="mt-0.5 cursor-grab text-muted-foreground/40 hover:text-muted-foreground shrink-0"
           onClick={(e) => e.stopPropagation()}
         >
-          <ChevronRight className="h-3 w-3 rotate-90" />
+          <GripVertical className="h-3 w-3" />
         </div>
         <span className="flex-1 text-[11px] font-medium leading-tight line-clamp-2">{plan.title}</span>
         {isRunning && <Loader2 className="h-3 w-3 animate-spin text-primary shrink-0 mt-0.5" />}
@@ -341,7 +240,6 @@ export function PlansView({ gateway, onViewSession }: Props) {
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (!loading) load(); }, [gateway.plansVersion]); // eslint-disable-line
 
-  // keep selectedPlan in sync with live data
   useEffect(() => {
     if (!selectedPlan) return;
     const updated = plans.find((p) => p.id === selectedPlan.id);
@@ -363,6 +261,8 @@ export function PlansView({ gateway, onViewSession }: Props) {
       if (typeof content === 'string') setDoc(content);
     } catch {}
   }, [gateway]);
+
+  const closeDetail = () => setSelectedPlan(null);
 
   const monitorPlan = useCallback((plan: Plan) => {
     if (!onViewSession || !plan.sessionKey) return;
@@ -425,7 +325,6 @@ export function PlansView({ gateway, onViewSession }: Props) {
     const plan = planById[active.id as string];
     if (!plan || plan.status === newStatus) return;
 
-    // optimistic update
     setPlans((prev) => prev.map((p) => p.id === plan.id ? { ...p, status: newStatus } : p));
     try {
       await gateway.rpc('plans.update', { id: plan.id, status: newStatus });
@@ -453,63 +352,136 @@ export function PlansView({ gateway, onViewSession }: Props) {
   }
 
   return (
-    <div className="flex h-full min-h-0">
-      {/* board */}
-      <div className="flex flex-col flex-1 min-w-0 min-h-0">
-        <div className="flex items-center gap-2 border-b border-border px-4 py-2.5 shrink-0">
-          <div className="text-sm font-semibold">Plans</div>
-          <Badge variant="outline" className="text-[10px]">{plans.length}</Badge>
-        </div>
-
-        <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-          <div className="flex-1 min-h-0 overflow-x-auto">
-            <div className="flex gap-3 p-4 h-full">
-              {COLUMNS.map((col) => (
-                <KanbanColumn
-                  key={col.id}
-                  id={col.id}
-                  label={col.label}
-                  plans={byStatus[col.id]}
-                  runs={gateway.planRuns}
-                  onCardClick={openDetail}
-                />
-              ))}
-              {plans.length === 0 && (
-                <div className="flex items-center justify-center flex-1 text-xs text-muted-foreground">
-                  No plans yet. Create ideas in the Ideas tab, then generate plans from there.
-                </div>
-              )}
-            </div>
-          </div>
-
-          <DragOverlay>
-            {activePlan && (
-              <KanbanCard
-                plan={activePlan}
-                run={gateway.planRuns[activePlan.id]}
-                onClick={() => {}}
-                overlay
-              />
-            )}
-          </DragOverlay>
-        </DndContext>
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center gap-2 border-b border-border px-4 py-2.5 shrink-0">
+        <div className="text-sm font-semibold">Plans</div>
+        <Badge variant="outline" className="text-[10px]">{plans.length}</Badge>
       </div>
 
-      {/* detail panel */}
-      {selectedPlan && (
-        <DetailPanel
-          plan={selectedPlan}
-          logs={logs}
-          doc={doc}
-          stats={stats}
-          busy={busyPlanId === selectedPlan.id}
-          onClose={() => setSelectedPlan(null)}
-          onStart={() => startPlan(selectedPlan)}
-          onRetry={() => startPlan(selectedPlan)}
-          onMonitor={() => monitorPlan(selectedPlan)}
-          onWorktreeAction={(action) => runWorktreeAction(selectedPlan, action)}
-        />
-      )}
+      <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <div className="flex-1 min-h-0 overflow-x-auto">
+          <div className="flex gap-3 p-4 h-full">
+            {COLUMNS.map((col) => (
+              <KanbanColumn
+                key={col.id}
+                id={col.id}
+                label={col.label}
+                plans={byStatus[col.id]}
+                runs={gateway.planRuns}
+                onCardClick={openDetail}
+              />
+            ))}
+            {plans.length === 0 && (
+              <div className="flex items-center justify-center flex-1 text-xs text-muted-foreground">
+                No plans yet. Create ideas in the Ideas tab, then generate plans from there.
+              </div>
+            )}
+          </div>
+        </div>
+
+        <DragOverlay>
+          {activePlan && (
+            <KanbanCard
+              plan={activePlan}
+              run={gateway.planRuns[activePlan.id]}
+              onClick={() => {}}
+              overlay
+            />
+          )}
+        </DragOverlay>
+      </DndContext>
+
+      {/* detail modal */}
+      <Dialog open={Boolean(selectedPlan)} onOpenChange={(open) => { if (!open) closeDetail(); }}>
+        <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-hidden flex flex-col">
+          {selectedPlan && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="text-sm flex items-center gap-2">
+                  <span className="truncate">{selectedPlan.title}</span>
+                  <Badge className={`text-[9px] h-4 border px-1 shrink-0 ${TYPE_BADGE[selectedPlan.type]}`}>{selectedPlan.type}</Badge>
+                </DialogTitle>
+              </DialogHeader>
+
+              <ScrollArea className="flex-1 min-h-0 -mx-6 px-6">
+                <div className="space-y-3 text-[11px] pb-1">
+                  {/* actions */}
+                  <div className="flex flex-wrap gap-1.5">
+                    {selectedPlan.status === 'plan' && (
+                      <Button size="sm" className="h-7 px-2.5 text-[10px]" onClick={() => startPlan(selectedPlan)} disabled={busyPlanId === selectedPlan.id}>
+                        <Play className="mr-1 h-3 w-3" />Start
+                      </Button>
+                    )}
+                    {selectedPlan.runState === 'failed' && (
+                      <Button size="sm" variant="outline" className="h-7 px-2.5 text-[10px]" onClick={() => startPlan(selectedPlan)} disabled={busyPlanId === selectedPlan.id}>
+                        <RotateCcw className="mr-1 h-3 w-3" />Retry
+                      </Button>
+                    )}
+                    <Button size="sm" variant="outline" className="h-7 px-2.5 text-[10px]" onClick={() => monitorPlan(selectedPlan)} disabled={!selectedPlan.sessionKey}>
+                      <Eye className="mr-1 h-3 w-3" />Monitor
+                    </Button>
+                    <Button size="sm" variant="outline" className="h-7 px-2.5 text-[10px]" onClick={() => runWorktreeAction(selectedPlan, 'stats')} disabled={busyPlanId === selectedPlan.id}>
+                      <BarChart3 className="mr-1 h-3 w-3" />Stats
+                    </Button>
+                    <Button size="sm" variant="outline" className="h-7 px-2.5 text-[10px]" onClick={() => runWorktreeAction(selectedPlan, 'merge')} disabled={!selectedPlan.branch || busyPlanId === selectedPlan.id}>
+                      <GitMerge className="mr-1 h-3 w-3" />Merge
+                    </Button>
+                    <Button size="sm" variant="outline" className="h-7 px-2.5 text-[10px]" onClick={() => runWorktreeAction(selectedPlan, 'push')} disabled={!selectedPlan.worktreePath || busyPlanId === selectedPlan.id}>
+                      <GitPullRequest className="mr-1 h-3 w-3" />Push PR
+                    </Button>
+                    <Button size="sm" variant="destructive" className="h-7 px-2.5 text-[10px]" onClick={() => runWorktreeAction(selectedPlan, 'remove')} disabled={!selectedPlan.worktreePath || busyPlanId === selectedPlan.id}>
+                      <Trash2 className="mr-1 h-3 w-3" />Remove
+                    </Button>
+                  </div>
+
+                  <Separator />
+
+                  {/* meta */}
+                  <div className="space-y-1.5 text-muted-foreground border border-border rounded-md p-2.5">
+                    <div>run: <span className={selectedPlan.runState === 'failed' ? 'text-destructive' : 'text-foreground'}>{selectedPlan.runState}</span></div>
+                    <div>updated: {new Date(selectedPlan.updatedAt).toLocaleString()}</div>
+                    {selectedPlan.branch && (
+                      <div className="flex items-center gap-1">
+                        <GitBranch className="h-3 w-3 shrink-0" />
+                        <span className="break-all">{selectedPlan.branch}</span>
+                      </div>
+                    )}
+                    {selectedPlan.worktreePath && <div className="break-all text-[10px]">{selectedPlan.worktreePath}</div>}
+                    {selectedPlan.error && <div className="text-destructive break-words">error: {selectedPlan.error}</div>}
+                    {selectedPlan.result && <div className="break-words">result: {selectedPlan.result}</div>}
+                    {stats && (
+                      <div>{stats.clean ? 'clean' : 'dirty'} · staged {stats.staged} · changed {stats.changed} · untracked {stats.untracked} · ahead {stats.ahead}</div>
+                    )}
+                  </div>
+
+                  {/* plan.md */}
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">plan.md</div>
+                    <pre className="max-h-48 overflow-auto whitespace-pre-wrap font-mono text-[10px] bg-secondary/40 rounded p-2.5">
+                      {doc ?? 'no plan.md'}
+                    </pre>
+                  </div>
+
+                  {/* logs */}
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">recent logs</div>
+                    <div className="space-y-0.5 max-h-40 overflow-auto">
+                      {logs.length === 0 && <div className="text-muted-foreground">no logs</div>}
+                      {logs.map((log) => (
+                        <div key={log.id} className="text-[10px]">
+                          <span className="text-foreground/60">[{new Date(log.createdAt).toLocaleTimeString()}]</span>{' '}
+                          <span className="uppercase text-foreground/80">{log.eventType}</span>{' '}
+                          <span className="text-foreground/70">{log.message}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </ScrollArea>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -24,7 +24,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
   const sections: string[] = [];
 
   // identity
-  sections.push(`You are a personal agent running inside dorabot. Your job is helping the user achieve their plans. If you don't know what they are yet, find out: read USER.md and MEMORY.md, or ask.`);
+  sections.push(`You are a personal agent running inside dorabot. You help the user by noticing what matters, capturing ideas, planning work, and executing. Read USER.md and MEMORY.md to know what's going on.`);
 
   // tool call style
   sections.push(`## Tool Call Style
@@ -142,10 +142,10 @@ When to write:
 
 Don't store secrets or credentials in any memory file.`);
 
-  // plans + roadmap
+  // ideas + plans pipeline
   try {
     const plans = loadPlans();
-    const roadmap = loadRoadmap();
+    const ideas = loadRoadmap();
     const active = plans.tasks.filter(t => t.status !== 'done');
     const statusRank: Record<Plan['status'], number> = {
       in_progress: 0,
@@ -157,46 +157,48 @@ Don't store secrets or credentials in any memory file.`);
       || a.type.localeCompare(b.type)
       || a.createdAt.localeCompare(b.createdAt)
     ));
-    const lines = sorted.map(t => {
+    const planLines = sorted.map(t => {
       const tags = t.tags?.length ? ` [${t.tags.join(', ')}]` : '';
       const lane = t.roadmapItemId
-        ? roadmap.items.find(r => r.id === t.roadmapItemId)?.lane
+        ? ideas.items.find(r => r.id === t.roadmapItemId)?.lane
         : undefined;
       return `- #${t.id} [${t.status}/${t.runState}] (${t.type}) ${t.title}${tags}${lane ? ` [idea:${lane}]` : ''}`;
     });
 
-    sections.push(`## Plan Execution Protocol
-
-Use plan_view/plan_update/plan_add/plan_start tools to manage plans.
-Use roadmap_view/roadmap_update/roadmap_create_plan to connect execution with ideas in the Ideas board.
-Prioritize plans in this order:
-1. in_progress
-2. plan
-
-Execution rules:
-- For in_progress plans, execute aggressively and push toward completion.
-- Keep status/result/runState current with plan_update while you work.
-- If blocked on user input, ask AskUserQuestion with specific options.
-- If AskUserQuestion times out: message the user on an available channel, sleep 120 seconds, ask once more, then continue with defensible assumptions and log those assumptions in the plan result.
-- Mark done only when the objective is actually complete.`);
-
-    const roadmapLines = roadmap.items
+    const ideaLines = ideas.items
+      .filter(i => i.lane !== 'done')
       .sort((a, b) => a.lane.localeCompare(b.lane) || a.sortOrder - b.sortOrder)
       .slice(0, 15)
       .map(item => `- #${item.id} [${item.lane}] ${item.title}${item.linkedPlanIds.length ? ` (plans: ${item.linkedPlanIds.join(', ')})` : ''}`);
 
-    if (lines.length > 0) {
+    sections.push(`## Ideas and Plans
+
+You manage a pipeline: observe what's happening, capture ideas, turn them into plans, schedule work, execute, mark done.
+
+Ideas (ideas_view/ideas_add/ideas_update/ideas_delete/ideas_create_plan): things worth doing. Lanes: now, next, later, done. Create ideas freely when you notice something useful from conversations, patterns, or research. Low threshold.
+
+Plans (plan_view/plan_add/plan_update/plan_start/plan_delete): concrete work derived from ideas. Create a plan when an idea is ready to act on.
+
+When working on a plan, keep plan_update current as you go. If you're picking up an existing project, check what actually happened since last time: read git log, check diffs, look for errors. Do real work, not status reports.
+
+When a plan completes, move its linked idea to done.
+
+Schedule wake-ups (schedule tool) to check on things, continue work, or follow up. Don't schedule for the sake of it, only when there's actually something to come back to.
+
+Small stuff that doesn't need the pipeline, just do directly.`);
+
+    if (planLines.length > 0) {
       sections.push(`## Active Plans
 
-${lines.join('\n')}`);
+${planLines.join('\n')}`);
     }
-    if (roadmapLines.length > 0) {
-      sections.push(`## Ideas Snapshot
+    if (ideaLines.length > 0) {
+      sections.push(`## Ideas
 
-${roadmapLines.join('\n')}`);
+${ideaLines.join('\n')}`);
     }
   } catch {
-    // plans/roadmap not available, skip
+    // plans/ideas not available, skip
   }
 
   // workspace dir

@@ -412,9 +412,29 @@ export const planStartTool = tool(
   },
 );
 
+export const planDeleteTool = tool(
+  'plan_delete',
+  'Delete a plan.',
+  {
+    id: z.string(),
+  },
+  async (args) => {
+    const state = loadPlans();
+    const before = state.tasks.length;
+    state.tasks = state.tasks.filter((p) => p.id !== args.id);
+    if (state.tasks.length === before) {
+      return { content: [{ type: 'text', text: `Plan #${args.id} not found` }], isError: true };
+    }
+    savePlans(state);
+    appendPlanLog(args.id, 'plan_delete', `Plan #${args.id} deleted`);
+    return { content: [{ type: 'text', text: `Plan #${args.id} deleted` }] };
+  },
+);
+
 export const plansTools = [
   planViewTool,
   planAddTool,
   planUpdateTool,
   planStartTool,
+  planDeleteTool,
 ];

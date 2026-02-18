@@ -670,6 +670,7 @@ export class ClaudeProvider implements Provider {
         model: opts.model,
         systemPrompt: opts.systemPrompt,
         tools: { type: 'preset', preset: 'claude_code' } as any,
+        disallowedTools: ['EnterPlanMode', 'ExitPlanMode'],
         agents: opts.agents as any,
         hooks: opts.hooks as any,
         mcpServers: opts.mcpServer as any,
