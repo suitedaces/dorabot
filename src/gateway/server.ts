@@ -2205,7 +2205,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             broadcast({ event: 'plans.update', data: { planId } });
           }
 
-          if (meta.name === 'tasks_update' || meta.name === 'tasks_done' || meta.name === 'tasks_add') {
+          if (meta.name === 'tasks_update' || meta.name === 'tasks_done' || meta.name === 'tasks_add' || meta.name === 'tasks_delete') {
             let taskId = typeof meta.input.id === 'string'
               ? meta.input.id
               : typeof meta.input.taskId === 'string'
@@ -2226,6 +2226,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               },
             });
             broadcast({ event: 'goals.update', data: { taskId } });
+          }
+
+          if (meta.name === 'goals_add' || meta.name === 'goals_update' || meta.name === 'goals_delete') {
+            const goalId = typeof meta.input.id === 'string'
+              ? meta.input.id
+              : toolResultText.match(/Goal #(\d+)/)?.[1];
+            broadcast({ event: 'goals.update', data: { goalId: goalId || undefined } });
           }
         };
 

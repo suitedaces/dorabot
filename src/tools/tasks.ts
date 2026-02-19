@@ -191,16 +191,29 @@ export function readTaskLogs(taskId: string, limit = 50): Array<{
   }));
 }
 
+function derivedState(task: Task): string {
+  if (task.status === 'planned') {
+    if (task.approvalRequestId) return 'needs_approval';
+    if (task.reason && /denied/i.test(task.reason)) return 'denied';
+    if (task.approvedAt) return 'ready';
+  }
+  return task.status;
+}
+
 function taskSummary(task: Task): string {
   const goal = task.goalId ? ` goal=${task.goalId}` : '';
-  return `#${task.id} [${task.status}]${goal} ${task.title}`;
+  const state = derivedState(task);
+  const extra = state !== task.status ? ` (${state})` : '';
+  return `#${task.id} [${task.status}${extra}]${goal} ${task.title}`;
 }
 
 export const tasksViewTool = tool(
   'tasks_view',
-  'View tasks. Filter by status, goalId, or id.',
+  'View tasks. Filter by status (raw), filter (derived state like needs_approval/ready/denied), goalId, or id.',
   {
     status: z.enum(['all', 'planning', 'planned', 'in_progress', 'done', 'blocked', 'cancelled']).optional(),
+    filter: z.enum(['needs_approval', 'ready', 'denied', 'running', 'active']).optional()
+      .describe('Derived state filter. needs_approval = awaiting human approval, ready = approved but not started, denied = plan was denied, running = in_progress, active = not done/cancelled/denied'),
     goalId: z.string().optional(),
     id: z.string().optional(),
     includeLogs: z.boolean().optional(),
@@ -234,6 +247,22 @@ export const tasksViewTool = tool(
     const status = args.status || 'all';
     let tasks = status === 'all' ? state.tasks : state.tasks.filter(t => t.status === status);
     if (args.goalId) tasks = tasks.filter(t => t.goalId === args.goalId);
+
+    if (args.filter) {
+      const DISMISSED = new Set(['done', 'cancelled']);
+      tasks = tasks.filter(t => {
+        const ds = derivedState(t);
+        switch (args.filter) {
+          case 'needs_approval': return ds === 'needs_approval';
+          case 'ready': return ds === 'ready';
+          case 'denied': return ds === 'denied';
+          case 'running': return t.status === 'in_progress';
+          case 'active': return !DISMISSED.has(t.status) && ds !== 'denied';
+          default: return true;
+        }
+      });
+    }
+
     if (!tasks.length) {
       return { content: [{ type: 'text', text: 'No tasks found.' }] };
     }

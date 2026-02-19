@@ -147,7 +147,13 @@ Write consistently. User shares facts or preferences → USER.md or MEMORY.md. D
     ));
     const taskLines = sortedTasks.map(t => {
       const goal = t.goalId ? goals.goals.find(g => g.id === t.goalId)?.title : undefined;
-      return `- #${t.id} [${t.status}] ${t.title}${goal ? ` [goal:${goal}]` : ''}`;
+      let state = t.status as string;
+      if (t.status === 'planned') {
+        if (t.approvalRequestId) state = 'planned:needs_approval';
+        else if (t.reason && /denied/i.test(t.reason)) state = 'planned:denied';
+        else if (t.approvedAt) state = 'planned:ready';
+      }
+      return `- #${t.id} [${state}] ${t.title}${goal ? ` [goal:${goal}]` : ''}`;
     });
 
     const goalRank: Record<Goal['status'], number> = {
@@ -162,15 +168,32 @@ Write consistently. User shares facts or preferences → USER.md or MEMORY.md. D
 
     sections.push(`## Goals and Tasks
 
-Pipeline: define goals → create tasks → plan → approval → execute → done.
+Pipeline: define goals → create tasks → write plan → wait for approval → execute → mark done.
 
-Goals (goals_view/goals_add/goals_update/goals_delete): directional outcomes. Keep them concise and durable.
+**Goals** (goals_view/goals_add/goals_update/goals_delete):
+- High-level outcomes. Short, durable titles. Use description for context.
+- Status: active (working on it), paused (deprioritized), done (completed).
 
-Tasks (tasks_view/tasks_add/tasks_update/tasks_done/tasks_delete): concrete work under a goal (or orphan). \`planned\` is human approval stage. Keep tasks_update current as you go.
+**Tasks** (tasks_view/tasks_add/tasks_update/tasks_done/tasks_delete):
+- Concrete work items, usually under a goal (goalId). Can be orphan.
+- Status flow: planning → planned → (human approves) → in_progress → done.
+- \`planning\`: you're still drafting the plan. \`planned\`: ready for human review.
+- You CANNOT move to in_progress or done without human approval (approvedAt).
+- Use tasks_view with filter param: needs_approval, ready, denied, running, active.
 
-For every task, maintain a substantial markdown execution plan in its PLAN.md file (task.planDocPath). Use \`tasks_update.plan\` to write/revise that full plan, not just a one-line summary.
+**Plans**: every task has a PLAN.md (task.planDocPath). Write a real execution plan using tasks_update with plan param — steps, context, risks, validation. Not a one-liner.
 
-Schedule wake-ups (schedule tool) when there's something to come back to. Small stuff that doesn't need the pipeline, just do directly.`);
+**Approval flow**:
+1. Create task (planning), write thorough plan, set status to planned.
+2. Human sees it in their dashboard, reads plan, approves or denies.
+3. If approved (approvedAt set), you can start it. If denied (reason set), revise or drop.
+4. Check tasks_view(filter: "needs_approval") to see what's waiting.
+5. Check tasks_view(filter: "ready") to find approved tasks you can start.
+6. Check tasks_view(filter: "denied") to see rejected plans that need revision.
+
+**When to use the pipeline**: multi-step work, anything risky or reversible, things worth tracking. Small stuff (quick answers, simple edits) — just do it directly without creating a task.
+
+Schedule wake-ups (schedule tool) when there's something to come back to.`);
 
     if (taskLines.length > 0) {
       sections.push(`## Active Tasks
