@@ -27,8 +27,8 @@ const TOOL_PENDING_TEXT: Record<string, string> = {
   screenshot: 'taking screenshot', browser: 'using browser',
   schedule: 'scheduling', list_schedule: 'listing schedule',
   update_schedule: 'updating schedule', cancel_schedule: 'cancelling schedule',
-  plan_view: 'viewing plans', plan_add: 'adding plan', plan_update: 'updating plan', plan_start: 'starting plan',
-  ideas_view: 'viewing ideas', ideas_add: 'adding idea', ideas_update: 'updating idea', ideas_create_plan: 'creating plan',
+  goals_view: 'viewing goals', goals_add: 'adding goal', goals_update: 'updating goal', goals_delete: 'deleting goal',
+  tasks_view: 'viewing tasks', tasks_add: 'adding task', tasks_update: 'updating task', tasks_done: 'completing task', tasks_delete: 'deleting task',
   research_view: 'viewing research', research_add: 'adding research', research_update: 'updating research',
 };
 
@@ -161,7 +161,7 @@ export type NotifiableEvent =
   | { type: 'agent.result'; sessionKey: string; cost?: number }
   | { type: 'agent.error'; sessionKey: string; error: string }
   | { type: 'tool_approval'; toolName: string }
-  | { type: 'plans.update' }
+  | { type: 'goals.update' }
   | { type: 'research.update' }
   | { type: 'auth.required'; provider: string; reason: string }
   | { type: 'whatsapp.status'; status: string }
@@ -191,7 +191,7 @@ export type CalendarRun = {
   seen?: boolean;
 };
 
-export type PlanRun = {
+export type TaskRun = {
   sessionKey: string;
   status: 'started' | 'completed' | 'error';
   updatedAt: number;
@@ -455,9 +455,9 @@ export function useGateway(url = 'wss://localhost:18789') {
   const [telegramBotUsername, setTelegramBotUsername] = useState<string | null>(null);
   const [telegramLinkError, setTelegramLinkError] = useState<string | null>(null);
   const [providerInfo, setProviderInfo] = useState<{ name: string; auth: ProviderAuthInfo } | null>(null);
-  const [plansVersion, setPlansVersion] = useState(0);
-  const [ideasVersion, setIdeasVersion] = useState(0);
-  const [planRuns, setPlanRuns] = useState<Record<string, PlanRun>>({});
+  const [goalsVersion, setGoalsVersion] = useState(0);
+  const [taskRuns, setTaskRuns] = useState<Record<string, TaskRun>>({});
+  const [taskLogsVersion, setTaskLogsVersion] = useState(0);
   const [researchVersion, setResearchVersion] = useState(0);
   const [backgroundRuns, setBackgroundRuns] = useState<BackgroundRun[]>([]);
   const [calendarRuns, setCalendarRuns] = useState<CalendarRun[]>([]);
@@ -663,7 +663,7 @@ export function useGateway(url = 'wss://localhost:18789') {
             const state = prev[sk];
             if (!state) return prev;
             const last = state.chatItems[state.chatItems.length - 1];
-            const isMarkedRunSource = d.source.startsWith('plans/') || d.source.startsWith('calendar/');
+            const isMarkedRunSource = d.source.startsWith('tasks/') || d.source.startsWith('calendar/');
             if (isMarkedRunSource && last?.type === 'user' && last.content === d.prompt) {
               return prev;
             }
@@ -1141,22 +1141,18 @@ export function useGateway(url = 'wss://localhost:18789') {
         break;
       }
 
-      case 'plans.update': {
-        setPlansVersion(v => v + 1);
-        const payload = data as { ideaId?: string; ideasVersion?: number };
-        if (payload?.ideaId || payload?.ideasVersion) {
-          setIdeasVersion(v => v + 1);
-        }
-        onNotifiableEventRef.current?.({ type: 'plans.update' });
+      case 'goals.update': {
+        setGoalsVersion(v => v + 1);
+        onNotifiableEventRef.current?.({ type: 'goals.update' });
         break;
       }
 
-      case 'plans.run': {
-        const d = data as { planId: string; sessionKey: string; status: 'started' | 'completed' | 'error'; timestamp: number };
-        if (!d.planId) break;
-        setPlanRuns(prev => ({
+      case 'tasks.run': {
+        const d = data as { taskId: string; sessionKey: string; status: 'started' | 'completed' | 'error'; timestamp: number };
+        if (!d.taskId) break;
+        setTaskRuns(prev => ({
           ...prev,
-          [d.planId]: {
+          [d.taskId]: {
             sessionKey: d.sessionKey,
             status: d.status,
             updatedAt: d.timestamp || Date.now(),
@@ -1165,8 +1161,8 @@ export function useGateway(url = 'wss://localhost:18789') {
         break;
       }
 
-      case 'plans.log': {
-        setPlansVersion(v => v + 1);
+      case 'tasks.log': {
+        setTaskLogsVersion(v => v + 1);
         break;
       }
 
@@ -1782,9 +1778,9 @@ export function useGateway(url = 'wss://localhost:18789') {
     telegramLink,
     telegramUnlink,
     providerInfo,
-    plansVersion,
-    ideasVersion,
-    planRuns,
+    goalsVersion,
+    taskRuns,
+    taskLogsVersion,
     researchVersion,
     backgroundRuns,
     calendarRuns,

@@ -1163,8 +1163,8 @@ const TOUR_FEATURES = [
   },
   {
     icon: LayoutGrid,
-    title: 'Plans',
-    description: 'Track outcomes and let the agent help execute.',
+    title: 'Goals',
+    description: 'Track goals and tasks, approve plans, and execute.',
     color: 'text-success',
   },
   {

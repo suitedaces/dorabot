@@ -2,8 +2,8 @@ import { hostname } from 'node:os';
 import type { Config } from './config.js';
 import type { Skill } from './skills/loader.js';
 import { type WorkspaceFiles, buildWorkspaceSection, WORKSPACE_DIR, MEMORIES_DIR, loadRecentMemories, getTodayMemoryDir } from './workspace.js';
-import { loadPlans, type Plan } from './tools/plans.js';
-import { loadIdeas } from './ideas/tools.js';
+import { loadGoals, type Goal } from './tools/goals.js';
+import { loadTasks, type Task } from './tools/tasks.js';
 
 export type SystemPromptOptions = {
   config: Config;
@@ -62,7 +62,7 @@ If the owner's intent is unclear, infer the most useful action and proceed. Use 
 Proactively use the browser and web tools to gather fresh external context. Do not rely on memory alone for anything time-sensitive. Verify with live checks.
 </default_to_discovery>
 
-Push code in branches, test changes, propose ideas, execute plans end-to-end. If something clearly makes sense and there's enough context, do it. Log what you did after.
+Push code, test changes, propose goals/tasks, and execute tasks end-to-end. If something clearly makes sense and there's enough context, do it. Log what you did after.
 
 Confirm before:
 - Irreversible destructive operations (rm -rf, force-push, dropping databases)
@@ -127,57 +127,63 @@ Timestamped entries. This is your continuity between runs. Promote important thi
 
 Write consistently. User shares facts or preferences → USER.md or MEMORY.md. Decisions, "remember this" → MEMORY.md. Task outcomes, observations, research → today's journal. Memory files are the only thing that survives between sessions.`);
 
-  // ideas + plans pipeline
+  // goals + tasks pipeline
   try {
-    const plans = loadPlans();
-    const ideas = loadIdeas();
-    const active = plans.tasks.filter(t => t.status !== 'done');
-    const statusRank: Record<Plan['status'], number> = {
+    const goals = loadGoals();
+    const tasks = loadTasks();
+    const activeGoals = goals.goals.filter(g => g.status !== 'done');
+    const activeTasks = tasks.tasks.filter(t => t.status !== 'done' && t.status !== 'cancelled');
+    const statusRank: Record<Task['status'], number> = {
       in_progress: 0,
-      plan: 1,
-      done: 2,
+      blocked: 1,
+      planning: 2,
+      planned: 3,
+      done: 4,
+      cancelled: 5,
     };
-    const sorted = [...active].sort((a, b) => (
+    const sortedTasks = [...activeTasks].sort((a, b) => (
       statusRank[a.status] - statusRank[b.status]
-      || a.type.localeCompare(b.type)
       || a.createdAt.localeCompare(b.createdAt)
     ));
-    const planLines = sorted.map(t => {
-      const tags = t.tags?.length ? ` [${t.tags.join(', ')}]` : '';
-      const lane = t.ideaId
-        ? ideas.items.find(r => r.id === t.ideaId)?.lane
-        : undefined;
-      return `- #${t.id} [${t.status}/${t.runState}] (${t.type}) ${t.title}${tags}${lane ? ` [idea:${lane}]` : ''}`;
+    const taskLines = sortedTasks.map(t => {
+      const goal = t.goalId ? goals.goals.find(g => g.id === t.goalId)?.title : undefined;
+      return `- #${t.id} [${t.status}] ${t.title}${goal ? ` [goal:${goal}]` : ''}`;
     });
 
-    const ideaLines = ideas.items
-      .filter(i => i.lane !== 'done')
-      .sort((a, b) => a.lane.localeCompare(b.lane) || a.sortOrder - b.sortOrder)
-      .slice(0, 15)
-      .map(item => `- #${item.id} [${item.lane}] ${item.title}${item.linkedPlanIds.length ? ` (plans: ${item.linkedPlanIds.join(', ')})` : ''}`);
+    const goalRank: Record<Goal['status'], number> = {
+      active: 0,
+      paused: 1,
+      done: 2,
+    };
+    const goalLines = activeGoals
+      .sort((a, b) => goalRank[a.status] - goalRank[b.status] || a.createdAt.localeCompare(b.createdAt))
+      .slice(0, 20)
+      .map(goal => `- #${goal.id} [${goal.status}] ${goal.title}`);
 
-    sections.push(`## Ideas and Plans
+    sections.push(`## Goals and Tasks
 
-Pipeline: observe → capture ideas → plan → execute → done.
+Pipeline: define goals → create tasks → plan → approval → execute → done.
 
-Ideas (ideas_view/ideas_add/ideas_update/ideas_delete/ideas_create_plan): things worth doing. Lanes: now, next, later, done. Low threshold to create.
+Goals (goals_view/goals_add/goals_update/goals_delete): directional outcomes. Keep them concise and durable.
 
-Plans (plan_view/plan_add/plan_update/plan_start/plan_delete): concrete work from ideas. When picking up an existing plan, check what actually happened since last time (git log, diffs, errors). Do real work, not status reports. Keep plan_update current as you go. When done, move linked idea to done.
+Tasks (tasks_view/tasks_add/tasks_update/tasks_done/tasks_delete): concrete work under a goal (or orphan). \`planned\` is human approval stage. Keep tasks_update current as you go.
+
+For every task, maintain a substantial markdown execution plan in its PLAN.md file (task.planDocPath). Use \`tasks_update.plan\` to write/revise that full plan, not just a one-line summary.
 
 Schedule wake-ups (schedule tool) when there's something to come back to. Small stuff that doesn't need the pipeline, just do directly.`);
 
-    if (planLines.length > 0) {
-      sections.push(`## Active Plans
+    if (taskLines.length > 0) {
+      sections.push(`## Active Tasks
 
-${planLines.join('\n')}`);
+${taskLines.join('\n')}`);
     }
-    if (ideaLines.length > 0) {
-      sections.push(`## Ideas
+    if (goalLines.length > 0) {
+      sections.push(`## Active Goals
 
-${ideaLines.join('\n')}`);
+${goalLines.join('\n')}`);
     }
   } catch {
-    // plans/ideas not available, skip
+    // goals/tasks not available, skip
   }
 
   // workspace dir

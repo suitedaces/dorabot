@@ -21,8 +21,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import {
   MessageSquare, Radio, Zap, Brain, Settings2,
-  Sparkles, LayoutGrid, Map, Loader2, Star,
-  Sun, Moon, Clock, FileSearch, Plug
+  Sparkles, LayoutGrid, Loader2, Star,
+  Sun, Moon, Clock, FileSearch, Plug, Folder, FolderOpen, X
 } from 'lucide-react';
 
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
@@ -67,8 +67,7 @@ function playNotifSound() {
 
 const PRIMARY_NAV_ITEMS: { id: TabType; label: string; icon: React.ReactNode }[] = [
   { id: 'chat', label: 'Chat', icon: <MessageSquare className="w-3.5 h-3.5" /> },
-  { id: 'plans', label: 'Plans', icon: <LayoutGrid className="w-3.5 h-3.5" /> },
-  { id: 'ideas', label: 'Ideas', icon: <Map className="w-3.5 h-3.5" /> },
+  { id: 'goals', label: 'Goals', icon: <LayoutGrid className="w-3.5 h-3.5" /> },
   { id: 'research', label: 'Research', icon: <FileSearch className="w-3.5 h-3.5" /> },
   { id: 'settings', label: 'Settings', icon: <Settings2 className="w-3.5 h-3.5" /> },
 ];
@@ -83,7 +82,7 @@ const SECONDARY_NAV_ITEMS: { id: TabType; label: string; icon: React.ReactNode }
 const ALL_NAV_ITEMS = [...PRIMARY_NAV_ITEMS, ...SECONDARY_NAV_ITEMS];
 
 export default function App() {
-  const [showFiles, setShowFiles] = useState(true);
+  const [showFiles, setShowFiles] = useState(false);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState<SessionFilter>('all');
   const [selectedChannel, setSelectedChannel] = useState<'whatsapp' | 'telegram'>('whatsapp');
@@ -140,6 +139,18 @@ export default function App() {
       }
     });
     return cleanup;
+  }, []);
+
+  // keep dense side panes collapsed on smaller windows
+  useEffect(() => {
+    const onResize = () => {
+      if (window.innerWidth < 1200) {
+        setShowFiles(false);
+      }
+    };
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
   }, []);
 
   const sensors = useSensors(
@@ -237,11 +248,11 @@ export default function App() {
             playNotifSound();
           }
           break;
-        case 'plans.update':
-          if (!allowPing('plans.update')) break;
-          toast('plans updated', { description: 'new plan activity', duration: 4000 });
+        case 'goals.update':
+          if (!allowPing('goals.update')) break;
+          toast('goals updated', { description: 'new goal/task activity', duration: 4000 });
           if (!windowFocused) {
-            notify('plans updated');
+            notify('goals updated');
             playNotifSound();
           }
           break;
@@ -711,6 +722,17 @@ export default function App() {
         >
           {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
         </button>
+        {!layout.isMultiPane && (
+          <button
+            onClick={() => setShowFiles(v => !v)}
+            className="ml-1 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
+            style={{ WebkitAppRegion: 'no-drag' } as any}
+            title={showFiles ? 'Hide file explorer' : 'Show file explorer'}
+            aria-label={showFiles ? 'Hide file explorer' : 'Show file explorer'}
+          >
+            {showFiles ? <FolderOpen className="w-4 h-4" /> : <Folder className="w-4 h-4" />}
+          </button>
+        )}
       </div>
 
       {/* Update banner */}
@@ -929,6 +951,17 @@ export default function App() {
           <>
             <ResizableHandle withHandle />
             <ResizablePanel defaultSize="30%" minSize="15%" maxSize="45%" className="overflow-hidden flex flex-col">
+              <div className="flex items-center justify-between border-b border-border px-3 py-2">
+                <div className="text-xs font-medium text-muted-foreground">Explorer</div>
+                <button
+                  className="rounded p-1 text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                  onClick={() => setShowFiles(false)}
+                  title="Hide file explorer"
+                  aria-label="Hide file explorer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
               <Progress items={gw.progress} />
               <FileExplorer
                 rpc={gw.rpc}

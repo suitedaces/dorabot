@@ -3,7 +3,7 @@ import type { useGateway } from './useGateway';
 import type { useLayout } from './useLayout';
 import type { GroupId } from './useLayout';
 
-export type TabType = 'chat' | 'channels' | 'plans' | 'ideas' | 'automation' | 'extensions' | 'memory' | 'research' | 'settings';
+export type TabType = 'chat' | 'channels' | 'goals' | 'automation' | 'extensions' | 'memory' | 'research' | 'settings';
 
 export type ChatTab = {
   id: string;
@@ -51,20 +51,12 @@ function loadTabsFromStorage(): Tab[] {
     const parsed = JSON.parse(raw) as Tab[];
     if (!Array.isArray(parsed) || parsed.length === 0) return [];
     return parsed.map((tab) => {
-      if ((tab as any).type === 'goals') {
+      if ((tab as any).type === 'plans' || (tab as any).type === 'ideas' || (tab as any).type === 'roadmap') {
         return {
           ...(tab as any),
-          id: (tab as any).id === 'view:goals' ? 'view:plans' : (tab as any).id,
-          type: 'plans',
-          label: 'Plans',
-        } as Tab;
-      }
-      if ((tab as any).type === 'roadmap') {
-        return {
-          ...(tab as any),
-          id: 'view:ideas',
-          type: 'ideas',
-          label: 'Ideas',
+          id: 'view:goals',
+          type: 'goals',
+          label: 'Goals',
         } as Tab;
       }
       return tab;
@@ -76,8 +68,7 @@ function loadTabsFromStorage(): Tab[] {
 
 function loadActiveTabIdFromStorage(): string | null {
   const value = localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
-  if (value === 'view:goals') return 'view:plans';
-  if (value === 'view:roadmap') return 'view:ideas';
+  if (value === 'view:plans' || value === 'view:ideas' || value === 'view:roadmap') return 'view:goals';
   return value;
 }
 

@@ -5,15 +5,14 @@ import type { SessionState } from '../hooks/useGateway';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { cn } from '@/lib/utils';
 import {
-  MessageSquare, Radio, LayoutGrid, Map, Zap, Sparkles, Brain, Settings2,
+  MessageSquare, Radio, LayoutGrid, Zap, Sparkles, Brain, Settings2,
   Plus, X, Loader2,
 } from 'lucide-react';
 
 const VIEW_ICONS: Record<string, React.ReactNode> = {
   chat: <MessageSquare className="w-3 h-3" />,
   channels: <Radio className="w-3 h-3" />,
-  plans: <LayoutGrid className="w-3 h-3" />,
-  ideas: <Map className="w-3 h-3" />,
+  goals: <LayoutGrid className="w-3 h-3" />,
   automation: <Zap className="w-3 h-3" />,
   skills: <Sparkles className="w-3 h-3" />,
   memory: <Brain className="w-3 h-3" />,

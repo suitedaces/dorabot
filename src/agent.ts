@@ -33,6 +33,7 @@ function cleanEnvForSdk(): Record<string, string> {
     if (key.startsWith('VSCODE_')) continue;
     if (key === 'GIT_ASKPASS') continue;
     if (key === 'ELECTRON_RUN_AS_NODE') continue;
+    if (key === 'CLAUDECODE') continue;
     env[key] = val;
   }
   // use a clean tmpdir so SDK file watcher doesn't hit socket files

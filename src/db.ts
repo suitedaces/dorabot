@@ -48,59 +48,45 @@ export function getDb(): Database.Database {
       data TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS goals_tasks (
+    CREATE TABLE IF NOT EXISTS goals (
       id TEXT PRIMARY KEY,
       data TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS goals_meta (
+    CREATE TABLE IF NOT EXISTS goals_meta_v2 (
       key TEXT PRIMARY KEY,
       value TEXT
     );
 
-    CREATE TABLE IF NOT EXISTS plans_tasks (
+    CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,
       data TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS plans_meta (
+    CREATE TABLE IF NOT EXISTS tasks_meta (
       key TEXT PRIMARY KEY,
       value TEXT
     );
 
-    CREATE TABLE IF NOT EXISTS plans_logs (
+    CREATE TABLE IF NOT EXISTS tasks_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      plan_id TEXT,
+      task_id TEXT,
       event_type TEXT,
       message TEXT,
       data TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
-    CREATE INDEX IF NOT EXISTS idx_plans_logs_plan_id ON plans_logs(plan_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_logs_task_id ON tasks_logs(task_id);
 
-    CREATE TABLE IF NOT EXISTS ideas (
-      id TEXT PRIMARY KEY,
-      data TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS ideas_meta (
-      key TEXT PRIMARY KEY,
-      value TEXT
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_ideas_lane_sort ON ideas(
-      json_extract(data, '$.lane'),
-      json_extract(data, '$.sortOrder')
-    );
-
-    -- migrate from old roadmap tables if they exist
-    INSERT OR IGNORE INTO ideas SELECT * FROM roadmap_items WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='roadmap_items');
-    INSERT OR IGNORE INTO ideas_meta SELECT * FROM roadmap_meta WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='roadmap_meta');
-
-    -- migrate from old board tables if they exist
-    INSERT OR IGNORE INTO goals_tasks SELECT * FROM board_tasks WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='board_tasks');
-    INSERT OR IGNORE INTO goals_meta SELECT * FROM board_meta WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='board_meta');
+    -- reset deprecated planning tables (plans/ideas and pre-v2 goals schema)
+    DROP TABLE IF EXISTS plans_tasks;
+    DROP TABLE IF EXISTS plans_meta;
+    DROP TABLE IF EXISTS plans_logs;
+    DROP TABLE IF EXISTS ideas;
+    DROP TABLE IF EXISTS ideas_meta;
+    DROP TABLE IF EXISTS goals_tasks;
+    DROP TABLE IF EXISTS goals_meta;
 
     -- append-only event log for WebSocket stream replay on reconnect
     CREATE TABLE IF NOT EXISTS stream_events (

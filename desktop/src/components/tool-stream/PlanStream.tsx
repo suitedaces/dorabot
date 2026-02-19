@@ -1,5 +1,5 @@
 import { motion } from "motion/react"
-import { LayoutGrid, Plus, Pencil, Eye, ArrowRightCircle, Map } from "lucide-react"
+import { LayoutGrid, Plus, Pencil, Eye, Trash2, CheckCircle2 } from "lucide-react"
 import type { ToolUIProps } from "../tool-ui"
 import { safeParse } from "../../lib/safe-parse"
 
@@ -14,14 +14,15 @@ const COLUMN_COLORS: Record<string, string> = {
 }
 
 const TOOL_META: Record<string, { icon: typeof LayoutGrid; verb: string; color: string }> = {
-  plan_view: { icon: Eye, verb: "viewing", color: "text-violet-400" },
-  plan_add: { icon: Plus, verb: "adding", color: "text-blue-400" },
-  plan_update: { icon: Pencil, verb: "updating", color: "text-amber-400" },
-  plan_start: { icon: ArrowRightCircle, verb: "starting", color: "text-emerald-400" },
-  ideas_view: { icon: Eye, verb: "viewing", color: "text-violet-400" },
-  ideas_add: { icon: Plus, verb: "adding", color: "text-blue-400" },
-  ideas_update: { icon: Pencil, verb: "updating", color: "text-amber-400" },
-  ideas_create_plan: { icon: Map, verb: "creating plan", color: "text-emerald-400" },
+  goals_view: { icon: Eye, verb: "viewing", color: "text-violet-400" },
+  goals_add: { icon: Plus, verb: "adding", color: "text-blue-400" },
+  goals_update: { icon: Pencil, verb: "updating", color: "text-amber-400" },
+  goals_delete: { icon: Trash2, verb: "deleting", color: "text-red-400" },
+  tasks_view: { icon: Eye, verb: "viewing", color: "text-violet-400" },
+  tasks_add: { icon: Plus, verb: "adding", color: "text-blue-400" },
+  tasks_update: { icon: Pencil, verb: "updating", color: "text-amber-400" },
+  tasks_done: { icon: CheckCircle2, verb: "completing", color: "text-emerald-400" },
+  tasks_delete: { icon: Trash2, verb: "deleting", color: "text-red-400" },
 }
 
 function MiniBoard({ streaming }: { streaming?: boolean }) {
@@ -53,7 +54,7 @@ function MiniBoard({ streaming }: { streaming?: boolean }) {
 
 export function PlanStream({ name, input, output, isError, streaming }: ToolUIProps) {
   const parsed = safeParse(input)
-  const meta = TOOL_META[name] || TOOL_META.plan_view
+  const meta = TOOL_META[name] || TOOL_META.goals_view
   const Icon = meta.icon
   const done = !streaming && output != null
 
@@ -128,13 +129,13 @@ export function PlanStream({ name, input, output, isError, streaming }: ToolUIPr
           )}
 
           {/* view filter */}
-          {(name === "plan_view" || name === "ideas_view") && (parsed.status || parsed.lane) && (
+          {(name === "goals_view" || name === "tasks_view") && (parsed.status || parsed.goalId) && (
             <motion.div
               className="text-[10px] text-muted-foreground/60"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
             >
-              filter: {parsed.status || parsed.lane}
+              filter: {parsed.status || parsed.goalId}
             </motion.div>
           )}
         </div>
