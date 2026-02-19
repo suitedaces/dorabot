@@ -59,7 +59,6 @@ export function PlanDialog({ task, open, onOpenChange, gateway, onSaved }: Props
       setPath(res?.path || path);
       setMode('preview');
       onSaved?.();
-      toast.success('plan saved');
     } catch {
       toast.error('failed to save plan');
     } finally {

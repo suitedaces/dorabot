@@ -122,7 +122,6 @@ export function GoalsView({ gateway, onViewSession }: Props) {
       await gateway.rpc('tasks.approve', task.approvalRequestId
         ? { requestId: task.approvalRequestId, taskId: task.id }
         : { taskId: task.id });
-      toast.success('approved');
     });
   }, [gateway, wrap]);
 
