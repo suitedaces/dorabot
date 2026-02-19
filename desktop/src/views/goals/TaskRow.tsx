@@ -1,6 +1,12 @@
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
-import { Eye, Play, RotateCcw, Wrench } from 'lucide-react';
+import { Eye, Play, RotateCcw, Wrench, ChevronDown, Pencil } from 'lucide-react';
 import type { Task, TaskPresentation } from './helpers';
 import { getStatusBadge } from './helpers';
 
@@ -9,7 +15,7 @@ type Props = {
   presentation: TaskPresentation;
   goalTitle?: string;
   onClick: () => void;
-  onStart?: () => void;
+  onStart?: (mode?: 'plan' | 'execute') => void;
   onWatch?: () => void;
   onUnblock?: () => void;
   busy?: boolean;
@@ -45,10 +51,27 @@ export function TaskRow({ task, presentation, goalTitle, onClick, onStart, onWat
         onClick={e => e.stopPropagation()}
       >
         {presentation.action === 'start' && onStart && (
-          <Button variant="ghost" size="sm" className="h-6 text-[10px]" disabled={busy} onClick={onStart}>
-            <Play className="mr-1 h-2.5 w-2.5" />
-            Start
-          </Button>
+          <div className="flex items-center">
+            <Button variant="ghost" size="sm" className="h-6 rounded-r-none text-[10px]" disabled={busy} onClick={() => onStart('execute')}>
+              <Play className="mr-1 h-2.5 w-2.5" />
+              Start
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-6 w-5 rounded-l-none border-l border-border/30 p-0" disabled={busy}>
+                  <ChevronDown className="h-2.5 w-2.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => onStart('plan')}>
+                  <Pencil className="mr-2 h-3 w-3" /> Plan first
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onStart('execute')}>
+                  <Play className="mr-2 h-3 w-3" /> Execute now
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         )}
         {presentation.action === 'watch' && onWatch && (
           <Button variant="ghost" size="sm" className="h-6 text-[10px]" disabled={busy} onClick={onWatch}>

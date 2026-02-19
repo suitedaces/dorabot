@@ -10,6 +10,7 @@ import { EditApproval } from "./EditApproval"
 import { MessageApproval } from "./MessageApproval"
 import { BrowserApproval } from "./BrowserApproval"
 import { CronApproval } from "./CronApproval"
+import { TaskApproval } from "./TaskApproval"
 import { DefaultApproval } from "./DefaultApproval"
 
 export type ApprovalUIProps = {
@@ -27,6 +28,7 @@ const FORM_MAP: Record<string, React.ComponentType<ApprovalUIProps>> = {
   schedule_reminder: CronApproval,
   schedule_recurring: CronApproval,
   schedule_cron: CronApproval,
+  task_start: TaskApproval,
 }
 
 type Props = {

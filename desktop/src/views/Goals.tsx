@@ -133,9 +133,9 @@ export function GoalsView({ gateway, onViewSession }: Props) {
     });
   }, [gateway, wrap]);
 
-  const startTask = useCallback((taskId: string) => {
+  const startTask = useCallback((taskId: string, mode?: 'plan' | 'execute') => {
     void wrap(`task:${taskId}:start`, async () => {
-      const res = await gateway.rpc('tasks.start', { id: taskId }) as { sessionId?: string; chatId?: string } | null;
+      const res = await gateway.rpc('tasks.start', { id: taskId, mode: mode || 'execute' }) as { sessionId?: string; chatId?: string } | null;
       if (res?.sessionId && onViewSession) {
         onViewSession(res.sessionId, 'desktop', res.chatId, 'dm');
       }
@@ -303,7 +303,7 @@ export function GoalsView({ gateway, onViewSession }: Props) {
                     task={task}
                     presentation={presentations.get(task.id) || { label: '', dotClass: '', action: null }}
                     onClick={() => openTaskDetail(task)}
-                    onStart={() => startTask(task.id)}
+                    onStart={(mode) => startTask(task.id, mode)}
                     onWatch={() => watchTask(task)}
                     onUnblock={() => unblockTask(task.id)}
                     busy={!!saving && saving.startsWith(`task:${task.id}:`)}

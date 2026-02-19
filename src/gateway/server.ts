@@ -665,11 +665,27 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     ].filter(Boolean).join('\n');
   }
 
-  function buildTaskExecutionPrompt(task: Task, goal?: Goal): string {
+  function buildTaskExecutionPrompt(task: Task, goal?: Goal, mode: 'plan' | 'execute' = 'execute'): string {
     const goalLine = goal ? `Goal:\n#${goal.id} [${goal.status}] ${goal.title}\n${goal.description || ''}` : '';
     const planContent = readTaskPlanDoc(task);
     const planLine = planContent ? `Plan:\n${planContent}` : '';
     const reasonLine = task.reason ? `Reason:\n${task.reason}` : '';
+
+    if (mode === 'plan') {
+      return [
+        `Plan task #${task.id}: ${task.title}`,
+        '',
+        goalLine,
+        planLine,
+        reasonLine,
+        '',
+        'Research and write a detailed execution plan for this task.',
+        'Write the plan to the task PLAN.md using tasks_update with the plan param.',
+        'Include: objective, steps, risks, validation criteria.',
+        'Do NOT execute the task — only plan.',
+        'When the plan is complete, set status to planned with tasks_update.',
+      ].filter(Boolean).join('\n');
+    }
 
     return [
       `Execute task #${task.id}: ${task.title}`,
@@ -1676,7 +1692,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     }) as Promise<{ approved: boolean; reason?: string; modifiedInput?: Record<string, unknown> }>;
   }
 
-  async function startTaskExecution(taskId: string): Promise<{
+  async function startTaskExecution(taskId: string, mode: 'plan' | 'execute' = 'execute'): Promise<{
     started: boolean;
     taskId: string;
     sessionKey: string;
@@ -1723,9 +1739,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
     const goals = loadGoals();
     const goal = task.goalId ? goals.goals.find(g => g.id === task.goalId) : undefined;
-    const prompt = buildTaskExecutionPrompt(task, goal);
+    const prompt = buildTaskExecutionPrompt(task, goal, mode);
 
-    appendTaskLog(task.id, 'run_started', `Task started: ${task.title}`, { sessionKey });
+    appendTaskLog(task.id, 'run_started', `Task ${mode === 'plan' ? 'planning' : 'started'}: ${task.title}`, { sessionKey, mode });
     broadcast({ event: 'goals.update', data: { taskId: task.id, task } });
     broadcast({
       event: 'tasks.log',
@@ -1761,7 +1777,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     };
   }
 
-  async function handleTaskApprovalDecision(taskId: string, requestId: string, approved: boolean, reason?: string): Promise<{
+  async function handleTaskApprovalDecision(taskId: string, requestId: string, approved: boolean, reason?: string, mode: 'plan' | 'execute' = 'execute'): Promise<{
     started: boolean;
     taskId: string;
     sessionKey: string;
@@ -1795,7 +1811,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     broadcast({ event: 'goals.update', data: { taskId: task.id, task } });
     void sendTelegramOwnerStatus(`✅ Task #${task.id} approved: ${task.title}`);
     try {
-      return await startTaskExecution(task.id);
+      return await startTaskExecution(task.id, mode);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       appendTaskLog(task.id, 'run_error', errMsg);
@@ -3624,6 +3640,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'tasks.start': {
           const taskId = params?.id as string;
           if (!taskId) return { id, error: 'id required' };
+          const mode = (params?.mode as 'plan' | 'execute') || 'execute';
 
           const tasks = loadTasks();
           const task = tasks.tasks.find(t => t.id === taskId);
@@ -3631,12 +3648,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (task.status === 'planned' || task.approvalRequestId) {
             const requestId = task.approvalRequestId || randomUUID();
             pendingTaskApprovals.delete(requestId);
-            const startedFromApproval = await handleTaskApprovalDecision(task.id, requestId, true);
+            const startedFromApproval = await handleTaskApprovalDecision(task.id, requestId, true, undefined, mode);
             if (!startedFromApproval) return { id, error: 'task approval failed' };
             return { id, result: startedFromApproval };
           }
 
-          const started = await startTaskExecution(task.id);
+          const started = await startTaskExecution(task.id, mode);
           return { id, result: started };
         }
 

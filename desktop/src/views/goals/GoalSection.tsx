@@ -20,7 +20,7 @@ type Props = {
   presentations: Map<string, TaskPresentation>;
   defaultOpen?: boolean;
   onTaskClick: (task: Task) => void;
-  onStartTask: (taskId: string) => void;
+  onStartTask: (taskId: string, mode?: 'plan' | 'execute') => void;
   onWatchTask: (task: Task) => void;
   onUnblockTask: (taskId: string) => void;
   onToggleGoalStatus: (goal: Goal) => void;
@@ -151,7 +151,7 @@ export function GoalSection({
                   task={task}
                   presentation={presentations.get(task.id) || { label: '', dotClass: '', action: null }}
                   onClick={() => onTaskClick(task)}
-                  onStart={() => onStartTask(task.id)}
+                  onStart={(mode) => onStartTask(task.id, mode)}
                   onWatch={() => onWatchTask(task)}
                   onUnblock={() => onUnblockTask(task.id)}
                   busy={!!busy && busy.startsWith(`task:${task.id}:`)}
@@ -174,7 +174,7 @@ export function GoalSection({
                   task={task}
                   presentation={presentations.get(task.id) || { label: 'done', dotClass: 'bg-muted-foreground/20', action: null }}
                   onClick={() => onTaskClick(task)}
-                  onStart={() => onStartTask(task.id)}
+                  onStart={(mode) => onStartTask(task.id, mode)}
                   onWatch={() => onWatchTask(task)}
                   onUnblock={() => onUnblockTask(task.id)}
                   busy={!!busy && busy.startsWith(`task:${task.id}:`)}
