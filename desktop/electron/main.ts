@@ -73,6 +73,7 @@ function setupAutoUpdater(): void {
   });
 
   ipcMain.on('update-install', () => {
+    isQuitting = true;
     autoUpdater.quitAndInstall(false, true);
   });
 

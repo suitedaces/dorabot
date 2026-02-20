@@ -749,8 +749,8 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             <div className={cn('w-full mx-auto', compact ? 'space-y-3 px-4' : 'space-y-6 max-w-2xl px-6')}>
               {/* greeting */}
               <div className="text-center space-y-2">
-                <div className="relative mx-auto" style={{ width: compact ? 56 : 96, height: compact ? 77 : 131 }}>
-                  <div className="absolute inset-0 rounded-full bg-success/30 blur-xl animate-pulse" />
+                <div className="relative mx-auto flex items-center justify-center" style={{ width: compact ? 80 : 136, height: compact ? 80 : 136 }}>
+                  <div className="absolute rounded-full bg-success/30 blur-xl animate-pulse" style={{ width: compact ? 56 : 96, height: compact ? 56 : 96 }} />
                   <DorabotSprite size={compact ? 56 : 96} className="relative dorabot-alive" />
                 </div>
                 <h1 className={cn('font-semibold text-foreground', compact ? 'text-sm' : 'text-lg')}>{getGreeting()}</h1>
