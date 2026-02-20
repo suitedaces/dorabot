@@ -13,6 +13,7 @@ import { CronTool } from "./CronTool"
 import { PlanTool } from "./PlanTool"
 import { TaskTool } from "./TaskTool"
 import { DefaultTool } from "./DefaultTool"
+import { AskUserQuestionTool } from "./AskUserQuestionTool"
 
 export type ToolUIProps = {
   name: string
@@ -50,6 +51,7 @@ const TOOL_MAP: Record<string, React.ComponentType<ToolUIProps>> = {
   tasks_done: PlanTool,
   tasks_delete: PlanTool,
   Task: TaskTool,
+  AskUserQuestion: AskUserQuestionTool,
 }
 
 export function ToolUI(props: ToolUIProps) {
