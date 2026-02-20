@@ -695,7 +695,7 @@ export default function App() {
 
       {/* titlebar — pure drag chrome */}
       <div className="h-11 bg-card glass border-b border-border flex items-center pl-[78px] pr-4 shrink-0" style={{ WebkitAppRegion: 'drag' } as any}>
-        <img src={dorabotImg} alt="dorabot" className="w-10 h-10 mr-1 dorabot-alive" />
+        <img src={dorabotImg} alt="dorabot" className="h-8 mr-1 dorabot-alive" style={{ imageRendering: 'pixelated' }} />
         <span className="text-base text-muted-foreground font-medium">dorabot</span>
         <a
           href="https://github.com/suitedaces/dorabot"
