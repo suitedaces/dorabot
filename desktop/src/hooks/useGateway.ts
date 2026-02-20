@@ -597,6 +597,10 @@ export function useGateway(url = 'wss://localhost:18789') {
   const streamFlushTimerRef = useRef<number | null>(null);
   const streamQueueStartedAtRef = useRef<number>(0);
   const streamQueueMaxDepthRef = useRef<number>(0);
+
+  // stash for tool results that arrive before their tool_use (server batching race)
+  type PendingToolResult = { toolUseId: string; content: string; imageData?: string; is_error?: boolean; toolName?: string; parentToolUseId?: string | null };
+  const pendingToolResultsRef = useRef<Map<string, PendingToolResult>>(new Map());
   const STREAM_FLUSH_INTERVAL_MS = 16;
   const STREAM_FLUSH_MAX_DELAY_MS = 50;
   const STREAM_QUEUE_OVERLOAD = 250;
@@ -628,6 +632,31 @@ export function useGateway(url = 'wss://localhost:18789') {
         } else {
           next = updateSessionChatItems(next, sk, items => applyStreamEvent(items, evt));
         }
+      }
+      // apply any stashed tool results that now have matching tool_use items
+      const pending = pendingToolResultsRef.current;
+      if (pending.size > 0) {
+        const applied = new Set<string>();
+        for (const [sessionKey, state] of Object.entries(next)) {
+          let items = state.chatItems;
+          let changed = false;
+          for (const [toolUseId, result] of pending) {
+            for (let i = items.length - 1; i >= 0; i--) {
+              const it = items[i];
+              if (it.type === 'tool_use' && it.id === toolUseId) {
+                if (!changed) items = [...items];
+                items[i] = { ...it, output: result.content, imageData: result.imageData, is_error: result.is_error, streaming: false };
+                changed = true;
+                applied.add(toolUseId);
+                break;
+              }
+            }
+          }
+          if (changed) {
+            next = { ...next, [sessionKey]: { ...state, chatItems: items } };
+          }
+        }
+        for (const id of applied) pending.delete(id);
       }
       return next;
     });
@@ -942,6 +971,11 @@ export function useGateway(url = 'wss://localhost:18789') {
             updated[idx] = { ...item, output: d.content, imageData: d.imageData, is_error: d.is_error, streaming: false };
             return updated;
           }
+          // tool_use not created yet (stream batch race) — stash for later
+          pendingToolResultsRef.current.set(d.tool_use_id, {
+            toolUseId: d.tool_use_id, content: d.content, imageData: d.imageData,
+            is_error: d.is_error, toolName: d.toolName, parentToolUseId: d.parentToolUseId,
+          });
           return items;
         }));
         break;
@@ -1455,10 +1489,17 @@ export function useGateway(url = 'wss://localhost:18789') {
   }, [rpc]);
 
   const abortAgent = useCallback(async (sessionKey?: string) => {
+    const sk = sessionKey || activeSessionKeyRef.current;
     try {
-      await rpc('agent.abort', { sessionKey: sessionKey || activeSessionKeyRef.current });
-    } catch (err) {
-      console.error('failed to abort:', err);
+      // try graceful interrupt first (stops generation, keeps session alive)
+      await rpc('agent.interrupt', { sessionKey: sk });
+    } catch {
+      // fall back to hard abort if interrupt not supported
+      try {
+        await rpc('agent.abort', { sessionKey: sk });
+      } catch (err) {
+        console.error('failed to abort:', err);
+      }
     }
   }, [rpc]);
 

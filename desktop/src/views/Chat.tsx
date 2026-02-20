@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, type KeyboardEvent } from 'react';
-import { dorabotComputerImg } from '../assets';
+import { DorabotSprite } from '../components/DorabotSprite';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { useGateway, ChatItem, AskUserQuestion } from '../hooks/useGateway';
@@ -22,7 +22,7 @@ import {
   FileText, FilePlus, Pencil, FolderSearch, FileSearch, Terminal,
   Globe, Search, Bot, MessageCircle, ListChecks, FileCode,
   MessageSquare, Camera, Monitor, Clock, Wrench, ArrowUp, LayoutGrid,
-  Smile, Image,
+  Smile, Image, Brain, MapPin, PenLine, GitPullRequest, Radio,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -206,6 +206,32 @@ function ModelSelector({ gateway, disabled }: { gateway: ReturnType<typeof useGa
         </Select>
       )}
     </div>
+  );
+}
+
+function ThinkingItem({ item }: { item: Extract<ChatItem, { type: 'thinking' }> }) {
+  const [open, setOpen] = useState(true);
+  const wasStreaming = useRef(true);
+
+  useEffect(() => {
+    if (wasStreaming.current && !item.streaming) setOpen(false);
+    wasStreaming.current = !!item.streaming;
+  }, [item.streaming]);
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors py-0.5 group">
+        <Brain className="w-3 h-3" />
+        <span>{item.streaming ? 'Thinking...' : 'Thought'}</span>
+        <ChevronRight className="w-3 h-3 transition-transform group-data-[state=open]:rotate-90" />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="text-muted-foreground text-xs pl-[18px] my-0.5 break-words min-w-0">
+          {item.content}
+          {item.streaming && <span className="streaming-cursor" />}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -466,12 +492,12 @@ function AskUserQuestionPanel({
 }
 
 const SUGGESTIONS: { icon: LucideIcon; label: string; prompt: string }[] = [
-  { icon: Sparkles, label: 'personalize dorabot', prompt: 'help me personalize you' },
-  { icon: Globe, label: 'browse the web', prompt: 'open https://news.ycombinator.com and summarize the top stories' },
-  { icon: Image, label: 'generate an image', prompt: 'generate a cool image for me' },
-  { icon: Smile, label: 'make a meme', prompt: 'make me a funny meme' },
-  { icon: Clock, label: 'set a reminder', prompt: 'remind me in 30 minutes to take a break' },
-  { icon: Camera, label: 'take a screenshot', prompt: 'take a screenshot of my screen' },
+  { icon: Search, label: 'scan my competitors', prompt: 'research the latest AI coding tools on GitHub and Hacker News, summarize what\'s new' },
+  { icon: MapPin, label: 'plan my weekend', prompt: 'help me plan a trip this weekend, find restaurants, activities, and keep it under budget' },
+  { icon: PenLine, label: 'draft a launch post', prompt: 'write a Reddit launch post for my project, make it authentic and not too salesy' },
+  { icon: GitPullRequest, label: 'review my latest PR', prompt: 'review the most recent pull request on this repo' },
+  { icon: Brain, label: 'what did we do this week?', prompt: 'summarize everything we worked on this week from your memory' },
+  { icon: Radio, label: 'set up a research agent', prompt: 'every morning, scan Hacker News and Twitter for AI agent news and send me a summary on Telegram' },
 ];
 
 const SHORTCUTS: { keys: string; label: string }[] = [
@@ -594,12 +620,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         }
         return <div key={i} className="my-1.5"><InlineErrorBoundary><ToolUseItem item={item} /></InlineErrorBoundary></div>;
       case 'thinking':
-        return (
-          <div key={i} className="text-muted-foreground italic text-xs border-l-2 border-border pl-2 my-1 break-words min-w-0">
-            {item.content}
-            {item.streaming && <span className="streaming-cursor" />}
-          </div>
-        );
+        return <ThinkingItem key={i} item={item} />;
       case 'result':
         return (
           <div key={i} className="flex gap-2 text-[10px] text-muted-foreground py-1 mt-1 border-t border-border">
@@ -629,9 +650,9 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             <div className="w-full max-w-2xl px-6 space-y-6">
               {/* greeting */}
               <div className="text-center space-y-2">
-                <div className="relative w-24 h-24 mx-auto">
+                <div className="relative mx-auto" style={{ width: 96, height: 131 }}>
                   <div className="absolute inset-0 rounded-full bg-success/30 blur-xl animate-pulse" />
-                  <img src={dorabotComputerImg} alt="dorabot" className="relative w-24 h-24 dorabot-alive" />
+                  <DorabotSprite size={96} className="relative" />
                 </div>
                 <h1 className="text-lg font-semibold text-foreground">{getGreeting()}</h1>
                 <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
@@ -647,7 +668,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                   value={input}
                   onChange={e => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder={!connected ? 'waiting for gateway...' : !authenticated ? 'set up your AI provider to get started' : 'what can i help with?'}
+                  placeholder={!connected ? 'waiting for gateway...' : !authenticated ? 'set up your AI provider to get started' : 'what are we building?'}
                   disabled={!isReady}
                   className="w-full min-h-[80px] max-h-[200px] resize-none text-sm border-0 rounded-2xl bg-transparent shadow-none focus-visible:ring-0"
                   rows={2}
@@ -683,10 +704,10 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
               )}
 
               {/* keyboard shortcuts */}
-              <div className="flex flex-wrap justify-center gap-x-4 gap-y-1.5 text-[10px] text-muted-foreground/60 pt-2">
+              <div className="flex flex-wrap justify-center gap-x-4 gap-y-1.5 text-[10px] text-muted-foreground/80 pt-2">
                 {SHORTCUTS.map(s => (
                   <span key={s.keys} className="flex items-center gap-1">
-                    <kbd className="px-1 py-0.5 rounded bg-muted/50 text-[9px] font-mono">{s.keys}</kbd>
+                    <kbd className="px-1.5 py-0.5 rounded border border-border/50 bg-muted/60 text-[10px] font-mono">{s.keys}</kbd>
                     <span>{s.label}</span>
                   </span>
                 ))}

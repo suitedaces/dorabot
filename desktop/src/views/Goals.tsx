@@ -10,7 +10,7 @@ import { getTaskPresentation, sortTasks, parseSessionKey, errorText } from './go
 import { ApprovalBanner } from './goals/ApprovalBanner';
 import { SummaryStrip, type TaskFilter } from './goals/SummaryStrip';
 import { GoalSection } from './goals/GoalSection';
-import { GoalCreation } from './goals/GoalCreation';
+import { GoalCreationTrigger, GoalCreationForm } from './goals/GoalCreation';
 import { TaskDetailSheet } from './goals/TaskDetailSheet';
 import { PlanDialog } from './goals/PlanDialog';
 import { TaskRow } from './goals/TaskRow';
@@ -32,6 +32,7 @@ export function GoalsView({ gateway, onViewSession, onSetupChat }: Props) {
   const [planTask, setPlanTask] = useState<Task | null>(null);
   const [planOpen, setPlanOpen] = useState(false);
   const [taskFilter, setTaskFilter] = useState<TaskFilter>(null);
+  const [showGoalForm, setShowGoalForm] = useState(false);
 
   const taskRuns = gateway.taskRuns as Record<string, TaskRun>;
 
@@ -290,6 +291,7 @@ export function GoalsView({ gateway, onViewSession, onSetupChat }: Props) {
             <div className="flex items-center gap-2">
               <Target className="h-4 w-4 text-muted-foreground" />
               <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Goals</span>
+              <GoalCreationTrigger onClick={() => setShowGoalForm(v => !v)} />
             </div>
             {taskFilter && (
               <button
@@ -301,6 +303,14 @@ export function GoalsView({ gateway, onViewSession, onSetupChat }: Props) {
               </button>
             )}
           </div>
+
+          {showGoalForm && (
+            <GoalCreationForm
+              onCreate={createGoal}
+              busy={saving === 'goal:create'}
+              onClose={() => setShowGoalForm(false)}
+            />
+          )}
 
           {activeGoals.map(goal => (
             <GoalSection
@@ -321,7 +331,7 @@ export function GoalsView({ gateway, onViewSession, onSetupChat }: Props) {
           ))}
 
           {orphanTasks.length > 0 && (
-            <div className="rounded-lg border border-dashed border-border/60">
+            <div className="rounded-lg border border-dashed border-border/60 bg-card">
               <div className="flex items-center gap-2 px-4 py-3 text-[10px] uppercase tracking-wider text-muted-foreground">
                 <Wrench className="h-3 w-3" />
                 work items without a goal
@@ -372,10 +382,6 @@ export function GoalsView({ gateway, onViewSession, onSetupChat }: Props) {
             </>
           )}
 
-          <GoalCreation
-            onCreate={createGoal}
-            busy={saving === 'goal:create'}
-          />
         </div>
       </ScrollArea>
 

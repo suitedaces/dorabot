@@ -55,7 +55,7 @@ export function GoalSection({
   };
 
   return (
-    <div className={cn('rounded-lg border border-border border-l-2', getGoalColor(goal.id).border)}>
+    <div className={cn('rounded-lg border border-border border-l-2 bg-card', getGoalColor(goal.id).border)}>
       <Collapsible open={open} onOpenChange={setOpen}>
         <div className="group">
           {/* goal header — visually distinct from tasks */}
@@ -71,7 +71,7 @@ export function GoalSection({
                   )} />
                 </div>
                 {goal.description && (
-                  <div className="mt-0.5 text-xs text-muted-foreground line-clamp-2">{goal.description}</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">{goal.description}</div>
                 )}
                 <div className="mt-1.5 flex items-center gap-3 text-[10px] text-muted-foreground">
                   <span>{activeTasks.length} active{dismissedTasks.length > 0 ? ` · ${dismissedTasks.length} closed` : ''}</span>

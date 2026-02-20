@@ -67,7 +67,7 @@ export function SettingsView({ gateway }: Props) {
       </div>
 
       {settingsTab === 'config' && <ScrollArea className="flex-1 min-h-0">
-        <div className="p-4 space-y-4 max-w-lg">
+        <div className="p-4 space-y-4 max-w-2xl">
 
           {/* appearance */}
           <Card>

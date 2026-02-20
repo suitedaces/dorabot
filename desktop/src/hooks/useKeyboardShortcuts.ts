@@ -20,16 +20,25 @@ type ShortcutActions = {
   focusGroupDown: () => void;
 };
 
-export function useKeyboardShortcuts(actions: ShortcutActions) {
+type ShortcutOptions = {
+  isAgentRunning?: boolean;
+};
+
+export function useKeyboardShortcuts(actions: ShortcutActions, options: ShortcutOptions = {}) {
+  const { isAgentRunning } = options;
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
 
       if (!mod) {
-        // Escape — abort agent (only when not typing in an input/textarea)
+        // Escape — abort agent
+        // When agent is running: always abort (even from textarea)
+        // When idle: only abort if not focused on an input/textarea
         if (e.key === 'Escape') {
           const tag = (e.target as HTMLElement)?.tagName;
-          if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
+          if (isAgentRunning || (tag !== 'INPUT' && tag !== 'TEXTAREA')) {
+            e.preventDefault();
             actions.abortAgent();
           }
         }
@@ -140,5 +149,5 @@ export function useKeyboardShortcuts(actions: ShortcutActions) {
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [actions]);
+  }, [actions, isAgentRunning]);
 }

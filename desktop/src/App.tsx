@@ -394,7 +394,14 @@ export default function App() {
     focusGroupDown: () => { focusInputOnGroupSwitch.current = true; layout.focusGroupDirection('down'); },
   }), [tabState, gw, handleNavClick, layout]);
 
-  useKeyboardShortcuts(shortcutActions);
+  const isAgentRunning = useMemo(() => {
+    const tab = tabState.activeTab;
+    if (!tab || !isChatTab(tab)) return false;
+    const status = gw.sessionStates[tab.sessionKey]?.agentStatus;
+    return !!status && status !== 'idle';
+  }, [tabState.activeTab, gw.sessionStates]);
+
+  useKeyboardShortcuts(shortcutActions, { isAgentRunning });
 
   // Cmd+W via Electron IPC (before-input-event blocks DOM keydown, so main process sends IPC instead)
   useEffect(() => {
