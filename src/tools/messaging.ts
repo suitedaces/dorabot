@@ -56,13 +56,14 @@ export const messageTool = tool(
     try {
       switch (args.action) {
         case 'send': {
-          if (!args.target || !args.message) {
+          const target = args.target || args.chatId;
+          if (!target || !args.message) {
             return {
               content: [{ type: 'text', text: 'Error: target and message required for send' }],
               isError: true,
             };
           }
-          const result = await handler.send(args.target, args.message, {
+          const result = await handler.send(target, args.message, {
             media: args.media,
             replyTo: args.replyTo,
           });
