@@ -108,6 +108,7 @@ function createWindow(): void {
     height: 900,
     minWidth: 800,
     minHeight: 600,
+    show: false,
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0d1117',
     icon: getIconPath(),
@@ -118,6 +119,26 @@ function createWindow(): void {
       sandbox: false,
       backgroundThrottling: false,
     },
+  });
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show();
+    mainWindow?.focus();
+  });
+
+  // if renderer fails to load (e.g. after update restart), retry once
+  mainWindow.webContents.on('did-fail-load', (_event, _code, _desc, url) => {
+    console.error(`[main] Failed to load: ${url}`);
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        console.log('[main] Retrying load...');
+        if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+          mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']);
+        } else {
+          mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+        }
+      }
+    }, 1000);
   });
 
   // Intercept Cmd+W: prevent window close, tell renderer to close a tab instead
