@@ -3,131 +3,126 @@
 
   # dorabot
 
-  **Turn Claude Code into your personal AI agent.**
+  **Your personal AI agent that actually does things.**
 
+  [![GitHub stars](https://img.shields.io/github/stars/suitedaces/dorabot)](https://github.com/suitedaces/dorabot)
   [![GitHub release](https://img.shields.io/github/v/release/suitedaces/dorabot)](https://github.com/suitedaces/dorabot/releases/latest)
   [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
   [![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)](https://github.com/suitedaces/dorabot/releases/latest)
 
-  You're already paying for Claude Pro/Max or an API key. dorabot wraps that same model in an agent harness that gives it memory, messaging, goals, a scheduler, browser control, and a desktop app. It runs locally on your Mac, keeps everything on-device, and works while you sleep.
+  Your personal AI agent that codes, plans, researches, and runs your life. Memory, goals, scheduling, browser automation, multi-channel messaging. Runs locally on your Mac.
 
-  [Download for macOS](https://github.com/suitedaces/dorabot/releases/latest) · [Website](https://dora.so)
+  [**Download for macOS**](https://github.com/suitedaces/dorabot/releases/latest) · [Website](https://dora.so)
 
 </div>
 
-<img width="4336" height="2644" alt="Desktop app" src="https://github.com/user-attachments/assets/8ebfb9cf-0e41-45b9-9fed-26b5a9d14d5c" />
+<!-- TODO: Replace with demo GIF when ready -->
+<img width="100%" alt="Desktop app" src="https://github.com/user-attachments/assets/8ebfb9cf-0e41-45b9-9fed-26b5a9d14d5c" />
 
-## How It Works
+## What You Get
 
-dorabot is an **agent harness**. It doesn't train a model or host an API. It takes the model you already have (Claude, Codex, or MiniMax) and wraps it in the infrastructure a real agent needs:
+🤖 **It works while you sleep.** Set pulse intervals and the agent wakes up on its own: monitors repos, reviews PRs, researches competitors, plans your weekend, messages you when something needs your attention.
 
-<img src="public/architecture.svg" width="800" alt="Agent harness architecture" />
+💬 **Talk to it from anywhere.** WhatsApp, Telegram, Slack, or the desktop app. Same agent, same memory, every channel. Ask it to book a restaurant, debug your API, or check your calendar. It doesn't sit in a terminal waiting for you to come back.
 
-The model does the thinking. dorabot gives it hands, eyes, a calendar, and a way to reach you.
+🧠 **Memory that compounds.** It remembers what you discussed last week, what decisions were made, your preferences, your schedule. Full-text search across every past conversation. Context builds over time and carries across sessions.
 
-## What Makes It Different
-
-**It's autonomous.** Set pulse intervals (every 30 minutes, hour etc) and the agent wakes up on its own, checks what needs doing, proposes new goals, picks up approved tasks, and messages you when it's done. You approve with a click, it ships the work.
-
-**It reaches you anywhere.** WhatsApp, Telegram, Slack, or the desktop app. Same agent, same memory, every channel. It doesn't sit in a terminal waiting for you to come back.
-
-**It remembers everything.** Full-text search across every past conversation. Daily journals. Research notes. Context that builds over time and carries across sessions.
-
-**It's local and private.** Runs on your Mac. No cloud relay. Your conversations, memory, and browser sessions stay on-device. 
+🔒 **100% local, 100% private.** No cloud relay. Your conversations, memory, and browser sessions stay on your Mac. You own everything.
 
 ## Quick Start
 
 ### Download (recommended)
 
-[Download the macOS app](https://github.com/suitedaces/dorabot/releases/latest). Open the DMG, drag to Applications, done. The onboarding flow walks you through connecting your model, setting up channels, and personalizing the agent.
+[**Download the macOS app**](https://github.com/suitedaces/dorabot/releases/latest) — open the DMG, drag to Applications, done. The onboarding flow walks you through connecting your model, channels, and personalizing the agent.
 
-**Requirements:** macOS, a Claude API key or Pro/Max subscription (or OpenAI/MiniMax API key). Chrome/Brave/Edge optional for browser features.
+**Requirements:** macOS, Claude API key or Pro/Max subscription (or OpenAI/MiniMax key). Chrome/Brave/Edge optional for browser features.
 
 ### Build from source
 
 ```bash
-git clone https://github.com/suitedaces/dorabot.git
-cd dorabot
-npm install
-npm run build
-npm link
+git clone https://github.com/suitedaces/dorabot.git && cd dorabot
+npm install && npm run build && npm link
 ```
 
 ```bash
 npm run dev           # gateway + desktop with HMR
-npm run dev:gateway   # gateway only with watch mode
-npm run dev:cli       # interactive CLI mode
-
 dorabot -g            # production gateway mode
 dorabot -i            # interactive terminal
 dorabot -m "message"  # one-off question
 ```
 
-## The Desktop App
+## How It Works
 
-<img alt="Goals Kanban board" src="public/desktop-goals.jpeg" width="800" />
+dorabot is an **agent harness**, not a model. It takes the model you already have (Claude, Codex, MiniMax) and wraps it in everything a personal AI agent needs:
 
-> The Kanban board where the agent proposes goals autonomously and you drag them through Proposed → Approved → In Progress → Done.
+<img src="public/architecture.svg" width="800" alt="Agent workspace architecture" />
 
-- **Chat** with streaming responses and inline tool use
-- **Goals** on a drag-and-drop Kanban board. The agent proposes, you approve, it executes.
-- **Automations** for pulse intervals, scheduled tasks, and recurring check-ins
-- **Channels** to connect WhatsApp (QR scan), Telegram (bot token), Slack (app tokens)
-- **Soul** editor for personality (SOUL.md), profile (USER.md), and memory (MEMORY.md)
+The model does the thinking. dorabot gives it hands, eyes, a calendar, and a way to reach you.
 
-## Channels
+## Features
 
-| Channel | Setup |
-|---------|-------|
-| **WhatsApp** | `dorabot --whatsapp-login` to scan QR, or connect from the desktop app |
-| **Telegram** | Create a bot with [@BotFather](https://t.me/BotFather), paste the token |
-| **Slack** | Create a Socket Mode app, add bot + app-level tokens |
-| **Desktop** | Just open the app |
+<table>
+<tr>
+<td width="50%">
 
-All channels share the same agent and memory. Text, photos, videos, audio, documents, voice messages, and inline approval buttons on Telegram.
+### 🖥️ Desktop App
+Chat with streaming responses and inline tool use. Goals on a drag-and-drop Kanban board: the agent proposes, you approve, it executes. Plans, research, automations, and channel setup all in one place.
 
-<img alt="Telegram chat" src="public/image.png" width="400" />
+</td>
+<td width="50%">
 
-> Telegram: the agent reports progress, pushes branches, and follows up, all without leaving the chat.
+### 📋 Goals & Tasks
+The agent proposes goals autonomously. You drag them through Proposed, Approved, In Progress, Done. Every task gets a written plan you review before execution starts. It's your agent's project manager.
 
-## Providers
+</td>
+</tr>
+<tr>
+<td width="50%">
 
-Use the model you're already paying for.
+### 📡 Channels
+Connect WhatsApp (QR scan), Telegram (bot token), or Slack (app tokens). All channels share the same agent and memory. Text, photos, videos, documents, voice messages, and inline approval buttons on Telegram.
 
-| Provider | Auth |
-|----------|------|
-| **Claude** (default) | API key or Pro/Max subscription via [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) |
-| **OpenAI Codex** | API key or ChatGPT Plus/Pro OAuth |
-| **MiniMax** | API key (OpenAI-compatible endpoint) |
+</td>
+<td width="50%">
 
-Switch from the desktop Settings page or via gateway RPC.
+### 🌐 Browser Automation
+90+ browser actions with persistent login sessions. The agent can navigate, click, fill forms, take screenshots, and extract data from any website using your existing Chrome sessions.
 
-## Skills
+</td>
+</tr>
+<tr>
+<td width="50%">
 
-9 built-in (GitHub, email, macOS control, image gen, memes, onboarding, Polymarket, Remotion, agent swarms) plus three ways to add more:
+### 🧠 Memory & Research
+Persistent memory across every session: daily journals, research notes, full-text search. The agent remembers what you discussed last week, what decisions were made, and what it learned.
 
-- **Gallery**: Browse and one-click install from 56k+ community skills on [skills.sh](https://skills.sh)
-- **Manual**: Drop a `SKILL.md` in `~/.dorabot/skills/your-skill/`
-- **Agent-created**: Ask "make me a skill for deploying to Vercel" and the agent writes it on the spot
+</td>
+<td width="50%">
 
-## Connectors (MCP)
+### ⚡ Skills & MCP
+9 built-in skills (GitHub, email, macOS control, image gen, memes, agent swarms). Browse and install from 56k+ community skills on [skills.sh](https://skills.sh). Connect 7,300+ MCP servers via [Smithery](https://smithery.ai).
 
-Add external tools via the [Model Context Protocol](https://modelcontextprotocol.io/). Browse the [Smithery](https://smithery.ai) registry in the desktop app, or configure manually:
+</td>
+</tr>
+<tr>
+<td width="50%">
 
-```json
-{
-  "mcpServers": {
-    "postgres": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://..."]
-    }
-  }
-}
-```
+### ⏰ Scheduler
+Pulse check-ins at any interval, cron tasks, iCal RRULE scheduling. The agent wakes up, scans for work, proposes new goals, executes approved tasks, and reports back. Fully autonomous when you want it to be.
+
+</td>
+<td width="50%">
+
+### 🔌 Multi-Provider
+Use the model you're already paying for. Claude (API key or Pro/Max subscription), OpenAI Codex (API key or ChatGPT Plus/Pro OAuth), or MiniMax. Switch from Settings or via RPC.
+
+</td>
+</tr>
+</table>
 
 ## Personalization
 
-The first time you open the app, the onboarding flow helps you set up your model, channels, and profile. After that, the `onboard` skill does a deeper interview to build your:
+The onboarding flow sets up your model, channels, and profile. The `onboard` skill does a deeper interview to build:
 
 | File | Purpose |
 |------|---------|
@@ -139,13 +134,49 @@ All workspace files live in `~/.dorabot/workspace/`. Edit them directly or let t
 
 ## Security
 
-- Runs locally. No cloud relay, no remote servers.
-- Scoped file access (default: `~/`, `/tmp`). Sensitive dirs always blocked (`~/.ssh`, `~/.gnupg`, `~/.aws`).
-- Token-authenticated gateway (256-bit hex).
-- Configurable tool approval tiers: auto-allow, notify, or require-approval.
-- Channel-level security policies.
-- macOS app sandbox for native permission management.
+- **Local-only.** No cloud relay, no remote servers, no telemetry.
+- **Scoped file access.** Default: `~/`, `/tmp`. Sensitive dirs always blocked (`~/.ssh`, `~/.gnupg`, `~/.aws`).
+- **Token-authenticated gateway.** 256-bit hex token.
+- **Configurable tool approval.** Auto-allow, notify, or require-approval per tool.
+- **Channel-level policies.** Different security rules per channel.
+- **macOS sandbox.** Native permission management via Apple's security model.
+
+## FAQ
+
+<details>
+<summary><strong>Do I need an API key?</strong></summary>
+
+You need either a Claude API key, a Claude Pro/Max subscription (via the Claude Agent SDK), an OpenAI API key, or a MiniMax API key. dorabot doesn't include its own model; it wraps yours.
+</details>
+
+<details>
+<summary><strong>Is my data sent anywhere?</strong></summary>
+
+No. dorabot runs entirely on your Mac. Conversations, memory, browser sessions, and files stay on-device. The only network calls are to your chosen AI provider's API.
+</details>
+
+<details>
+<summary><strong>Can I use this for work?</strong></summary>
+
+Yes. dorabot monitors repos, reviews PRs, proposes goals, tracks tasks, sends you updates on Slack or Telegram. But it's not just for work: it plans trips, manages your calendar, researches anything, and messages you proactively when things need attention.
+</details>
+
+<details>
+<summary><strong>How is this different from Claude Code / Cursor / Windsurf?</strong></summary>
+
+Those are coding tools you use in a terminal. dorabot is a personal AI agent that lives on your Mac and reaches you on WhatsApp, Telegram, or Slack. It has persistent memory, autonomous goals, scheduling, and browser automation. It works while you sleep, not just while your terminal is open.
+</details>
+
+<details>
+<summary><strong>How is this different from OpenClaw?</strong></summary>
+
+OpenClaw is a cloud-hosted agent platform. dorabot is local-first: your data stays on your Mac, you control the model, and there's no cloud relay. It also has a native desktop app, goal/task management, and multi-channel messaging built in.
+</details>
+
+## Contributing
+
+Contributions welcome. Open an issue or PR on [GitHub](https://github.com/suitedaces/dorabot).
 
 ## License
 
-MIT
+[MIT](LICENSE)

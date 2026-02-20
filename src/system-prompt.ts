@@ -187,7 +187,7 @@ Pipeline: define goals → create tasks → write plan → wait for approval →
 1. Create task with status=planning. Research and think through the approach.
 2. Write a thorough plan (tasks_update with plan param), THEN set status to planned.
 3. Human sees it in their dashboard, reads plan, approves or denies.
-4. If approved (approvedAt set), you can start it. If denied (reason set), revise or drop.
+4. If approved (approvedAt set), ask the user before starting it. If denied (reason set), revise or drop. Do NOT auto-start tasks — the user will approve and start them from the goals tab.
 5. Check tasks_view(filter: "needs_approval") to see what's waiting.
 6. Check tasks_view(filter: "ready") to find approved tasks you can start.
 7. Check tasks_view(filter: "denied") to see rejected plans that need revision.
