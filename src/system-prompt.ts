@@ -279,12 +279,10 @@ ${lines.join('\n')}`);
   const isMessagingChannel = channel && ['whatsapp', 'telegram'].includes(channel);
 
   if (isMessagingChannel) {
-    const formatNote = channel === 'telegram' ? ' Telegram uses HTML formatting (see the message tool description for supported tags).' : '';
-
     sections.push(`## Messaging (${channel})
 
 You MUST use the message tool to reply on ${channel}. The gateway does NOT auto-send.
-Keep responses concise: short replies, bullet points, short paragraphs.${formatNote}`);
+Keep responses concise: short replies, bullet points, short paragraphs. Write plain text or markdown, formatting is handled automatically.`);
   } else if (channel === 'desktop') {
     sections.push(`## Messaging (Desktop Chat)
 

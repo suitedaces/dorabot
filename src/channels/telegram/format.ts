@@ -81,3 +81,38 @@ function escapeHtml(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 }
+
+// Telegram-supported tags
+const SUPPORTED_TAGS = new Set(['b', 'i', 'u', 's', 'code', 'pre', 'a', 'blockquote', 'tg-spoiler']);
+
+// Sanitize HTML for Telegram: close unclosed tags, strip unsupported tags, fix nesting
+export function sanitizeTelegramHtml(html: string): string {
+  const stack: string[] = [];
+  // match opening/closing/self-closing tags
+  return html.replace(/<(\/?)([a-z][a-z0-9-]*)([^>]*?)(\/?)\s*>/gi, (match, slash, tag, attrs, selfClose) => {
+    const t = tag.toLowerCase();
+    if (!SUPPORTED_TAGS.has(t)) {
+      // strip unsupported tags entirely
+      return '';
+    }
+    if (selfClose) return match; // self-closing, fine
+    if (slash) {
+      // closing tag: pop from stack if matched
+      const idx = stack.lastIndexOf(t);
+      if (idx >= 0) {
+        // close any intervening unclosed tags
+        let extra = '';
+        for (let i = stack.length - 1; i > idx; i--) {
+          extra += `</${stack[i]}>`;
+        }
+        stack.length = idx;
+        return extra + `</${t}>`;
+      }
+      // no matching open tag, drop it
+      return '';
+    }
+    // opening tag
+    stack.push(t);
+    return match;
+  }) + stack.reverse().map(t => `</${t}>`).join('');
+}

@@ -44,7 +44,7 @@ export const messageTool = tool(
     action: z.enum(['send', 'edit', 'delete']),
     channel: z.string().describe('Channel name: whatsapp, telegram, discord, slack, signal, console'),
     target: z.string().optional().describe('Recipient ID, chat ID, or channel ID'),
-    message: z.string().optional().describe('Message content (for send/edit). Telegram uses HTML parse mode — supported tags: <b>, <i>, <u>, <s>, <code>, <pre>, <pre><code class="language-x">, <a href="url">, <blockquote>, <tg-spoiler>. Escape &, <, > as &amp; &lt; &gt;. Nest tags freely. Do NOT use markdown syntax for Telegram.'),
+    message: z.string().optional().describe('Message content (for send/edit). Write plain text or markdown. Formatting is converted automatically per channel.'),
     messageId: z.string().optional().describe('Message ID to edit or delete'),
     chatId: z.string().optional().describe('Chat ID (required for edit/delete on some channels)'),
     media: z.string().optional().describe('Path to media file to attach'),
@@ -53,54 +53,63 @@ export const messageTool = tool(
   async (args) => {
     const handler = getHandler(args.channel);
 
-    switch (args.action) {
-      case 'send': {
-        if (!args.target || !args.message) {
+    try {
+      switch (args.action) {
+        case 'send': {
+          if (!args.target || !args.message) {
+            return {
+              content: [{ type: 'text', text: 'Error: target and message required for send' }],
+              isError: true,
+            };
+          }
+          const result = await handler.send(args.target, args.message, {
+            media: args.media,
+            replyTo: args.replyTo,
+          });
           return {
-            content: [{ type: 'text', text: 'Error: target and message required for send' }],
-            isError: true,
+            content: [{ type: 'text', text: `Message sent. ID: ${result.id}` }],
           };
         }
-        const result = await handler.send(args.target, args.message, {
-          media: args.media,
-          replyTo: args.replyTo,
-        });
-        return {
-          content: [{ type: 'text', text: `Message sent. ID: ${result.id}` }],
-        };
-      }
 
-      case 'edit': {
-        if (!args.messageId || !args.message) {
+        case 'edit': {
+          if (!args.messageId || !args.message) {
+            return {
+              content: [{ type: 'text', text: 'Error: messageId and message required for edit' }],
+              isError: true,
+            };
+          }
+          await handler.edit(args.messageId, args.message, args.chatId || args.target);
           return {
-            content: [{ type: 'text', text: 'Error: messageId and message required for edit' }],
-            isError: true,
+            content: [{ type: 'text', text: `Message ${args.messageId} edited` }],
           };
         }
-        await handler.edit(args.messageId, args.message, args.chatId || args.target);
-        return {
-          content: [{ type: 'text', text: `Message ${args.messageId} edited` }],
-        };
-      }
 
-      case 'delete': {
-        if (!args.messageId) {
+        case 'delete': {
+          if (!args.messageId) {
+            return {
+              content: [{ type: 'text', text: 'Error: messageId required for delete' }],
+              isError: true,
+            };
+          }
+          await handler.delete(args.messageId, args.chatId || args.target);
           return {
-            content: [{ type: 'text', text: 'Error: messageId required for delete' }],
-            isError: true,
+            content: [{ type: 'text', text: `Message ${args.messageId} deleted` }],
           };
         }
-        await handler.delete(args.messageId, args.chatId || args.target);
-        return {
-          content: [{ type: 'text', text: `Message ${args.messageId} deleted` }],
-        };
-      }
 
-      default:
-        return {
-          content: [{ type: 'text', text: `Unknown action: ${args.action}` }],
-          isError: true,
-        };
+        default:
+          return {
+            content: [{ type: 'text', text: `Unknown action: ${args.action}` }],
+            isError: true,
+          };
+      }
+    } catch (err: any) {
+      const msg = err?.description || err?.message || String(err);
+      console.error(`[message tool] ${args.action} on ${args.channel} failed:`, msg);
+      return {
+        content: [{ type: 'text', text: `Error: ${msg}` }],
+        isError: true,
+      };
     }
   }
 );
