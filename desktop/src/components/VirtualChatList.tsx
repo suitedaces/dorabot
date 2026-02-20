@@ -46,7 +46,7 @@ export function VirtualChatList<T>({
     const height = Math.ceil(element.getBoundingClientRect().height);
     const prev = heightsRef.current.get(index);
     if (prev === height) return;
-    heightsRef.current.set(index, Math.max(20, height));
+    heightsRef.current.set(index, height);
     queueMeasureRecalc();
   }, [queueMeasureRecalc]);
 
@@ -60,7 +60,7 @@ export function VirtualChatList<T>({
           const height = Math.ceil(entry.borderBoxSize?.[0]?.blockSize ?? el.getBoundingClientRect().height);
           const prev = heightsRef.current.get(idx);
           if (prev !== height && height > 0) {
-            heightsRef.current.set(idx, Math.max(20, height));
+            heightsRef.current.set(idx, height);
             queueMeasureRecalc();
           }
         }

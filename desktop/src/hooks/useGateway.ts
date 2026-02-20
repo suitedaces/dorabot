@@ -971,7 +971,9 @@ export function useGateway(url = 'wss://localhost:18789') {
           if (idx >= 0) {
             const updated = [...items];
             const item = updated[idx] as Extract<ChatItem, { type: 'tool_use' }>;
-            updated[idx] = { ...item, output: d.content, imageData: d.imageData, is_error: d.is_error, streaming: false };
+            // For AskUserQuestion, keep our pre-set answer summary instead of the SDK's generic result
+            const output = (item.name === 'AskUserQuestion' && item.output) ? item.output : d.content;
+            updated[idx] = { ...item, output, imageData: d.imageData, is_error: d.is_error, streaming: false };
             return updated;
           }
           // tool_use not created yet (stream batch race) — stash for later
@@ -1453,20 +1455,22 @@ export function useGateway(url = 'wss://localhost:18789') {
       console.error('failed to answer question:', err);
     }
     const sk = sessionKey || activeSessionKeyRef.current;
-    // Build a readable summary from the answers
-    const answerSummary = (() => {
-      const entries = Object.entries(answers).filter(([, v]) => v);
-      if (entries.length === 0) return 'answered';
-      if (entries.length === 1) return entries[0][1];
-      return entries.map(([, v]) => v).join(', ');
-    })();
     setSessionStates(prev => {
       const state = prev[sk];
       if (!state) return prev;
-      const chatItems = state.chatItems.map(it =>
-        it.type === 'tool_use' && it.name === 'AskUserQuestion' && it.streaming
-          ? { ...it, streaming: false, output: answerSummary }
-          : it
+      const chatItems = state.chatItems.map(it => {
+        if (it.type === 'tool_use' && it.name === 'AskUserQuestion' && it.streaming) {
+          // Merge answers into the input JSON so the component can render Q&A pairs
+          let updatedInput = it.input;
+          try {
+            const parsed = JSON.parse(it.input);
+            updatedInput = JSON.stringify({ ...parsed, answers });
+          } catch {}
+          const summary = Object.values(answers).filter(Boolean).join(', ') || 'answered';
+          return { ...it, streaming: false, input: updatedInput, output: summary };
+        }
+        return it;
+      }
       );
       return { ...prev, [sk]: { ...state, chatItems, pendingQuestion: null, ...(success ? { agentStatus: 'thinking...' } : {}) } };
     });

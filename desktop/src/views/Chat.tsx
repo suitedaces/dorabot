@@ -243,12 +243,13 @@ function ToolUseItem({ item }: { item: Extract<ChatItem, { type: 'tool_use' }> }
   const displayName = toolText(item.name, isPending ? 'pending' : 'done');
   const useStreamCard = hasStreamCard(item.name);
 
-  // Read/Grep/Glob are fast — start collapsed to avoid flicker
-  const startCollapsed = item.name === 'Read' || item.name === 'Grep' || item.name === 'Glob';
+  // Read/Grep/Glob are fast, AskUserQuestion shows answered state collapsed
+  const startCollapsed = item.name === 'Read' || item.name === 'Grep' || item.name === 'Glob' || item.name === 'AskUserQuestion';
   const isOpen = manualOpen !== null ? manualOpen : (isPending && !startCollapsed);
 
   const inputDetail = (() => {
     const p = safeParse(item.input);
+    if (item.name === 'AskUserQuestion' && item.output) return item.output;
     return p.command?.split('\n')[0] || p.file_path || p.pattern || p.url || p.query || p.description || '';
   })();
 
@@ -400,94 +401,111 @@ function AskUserQuestionPanel({
     (useOther[q.question] && otherTexts[q.question]) || selections[q.question];
   const isLast = step === total - 1;
 
+  // Countdown timer (5 min timeout from gateway)
+  const [secondsLeft, setSecondsLeft] = useState(300);
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    const interval = setInterval(() => setSecondsLeft(s => Math.max(0, s - 1)), 1000);
+    return () => clearInterval(interval);
+  }, []);
+  const mins = Math.floor(secondsLeft / 60);
+  const secs = secondsLeft % 60;
+
   return (
-    <div className="p-3 border-t border-primary bg-card shrink-0 space-y-3">
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <Badge variant="outline" className="text-[10px] text-primary">{q.header}</Badge>
+    <div className="border-t border-primary bg-card shrink-0">
+      {/* Collapsible header - always visible */}
+      <button
+        className="flex items-center justify-between w-full px-3 py-1.5 hover:bg-secondary/30 transition-colors"
+        onClick={() => setCollapsed(c => !c)}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <MessageCircle className="w-3 h-3 text-primary shrink-0" />
+          <span className="text-xs font-medium truncate">{q.header}: {q.question}</span>
           {total > 1 && (
-            <div className="flex items-center gap-1">
-              {question.questions.map((_, i) => (
-                <div
-                  key={i}
+            <span className="text-[10px] text-muted-foreground shrink-0">{step + 1}/{total}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className={cn('text-[10px] tabular-nums', secondsLeft < 60 ? 'text-destructive' : 'text-muted-foreground')}>
+            {mins}:{secs.toString().padStart(2, '0')}
+          </span>
+          {collapsed ? <ChevronRight className="w-3 h-3 text-muted-foreground" /> : <ChevronDown className="w-3 h-3 text-muted-foreground" />}
+        </div>
+      </button>
+
+      {/* Expandable content */}
+      {!collapsed && (
+        <div className="px-3 pb-2 space-y-1.5">
+          <div className="flex flex-col gap-1">
+            {options.map((opt, oi) => {
+              const selected = q.multiSelect
+                ? (selections[q.question] || '').split(', ').includes(opt.label)
+                : selections[q.question] === opt.label && !useOther[q.question];
+              return (
+                <button
+                  key={oi}
                   className={cn(
-                    'h-1.5 rounded-full transition-all',
-                    i === step ? 'w-4 bg-primary' : i < step ? 'w-1.5 bg-primary/50' : 'w-1.5 bg-muted-foreground/30'
+                    'flex flex-col items-start px-2.5 py-1.5 rounded-md border text-left w-full transition-colors',
+                    selected
+                      ? 'border-primary bg-primary/10'
+                      : 'border-border bg-background hover:border-primary/50'
                   )}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-        <p className="text-[13px]">{q.question}</p>
-        <div className="flex flex-col gap-1">
-          {options.map((opt, oi) => {
-            const selected = q.multiSelect
-              ? (selections[q.question] || '').split(', ').includes(opt.label)
-              : selections[q.question] === opt.label && !useOther[q.question];
-            return (
-              <button
-                key={oi}
-                className={cn(
-                  'flex flex-col items-start px-3 py-2 rounded-md border text-left w-full transition-colors',
-                  selected
-                    ? 'border-primary bg-primary/10'
-                    : 'border-border bg-background hover:border-primary/50'
-                )}
-                onClick={() => handleSelect(q.question, opt.label, q.multiSelect)}
-              >
-                <span className="text-xs font-semibold">{opt.label}</span>
-                <span className="text-[11px] text-muted-foreground">{opt.description}</span>
-              </button>
-            );
-          })}
-          <button
-            className={cn(
-              'flex flex-col items-start px-3 py-2 rounded-md border text-left w-full transition-colors',
-              useOther[q.question]
-                ? 'border-primary bg-primary/10'
-                : 'border-border bg-background hover:border-primary/50'
-            )}
-            onClick={() => {
-              setUseOther(prev => ({ ...prev, [q.question]: true }));
-              setSelections(prev => ({ ...prev, [q.question]: '' }));
-            }}
-          >
-            <span className="text-xs font-semibold">Other</span>
-            <span className="text-[11px] text-muted-foreground">type your own answer</span>
-          </button>
-        </div>
-        {useOther[q.question] && (
-          <input
-            className="w-full mt-1 px-3 py-2 bg-background border border-primary rounded-md text-xs outline-none placeholder:text-muted-foreground"
-            placeholder="type your answer..."
-            value={otherTexts[q.question] || ''}
-            onChange={e => setOtherTexts(prev => ({ ...prev, [q.question]: e.target.value }))}
-            autoFocus
-          />
-        )}
-      </div>
-      <div className="flex justify-between">
-        <div>
-          {step > 0 && (
-            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setStep(s => s - 1)}>back</Button>
-          )}
-        </div>
-        <div className="flex gap-2">
-          {streaming ? (
-            <span className="text-[10px] text-muted-foreground animate-pulse">loading options...</span>
-          ) : (
-            <>
-              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={isLast ? handleSubmit : () => setStep(s => s + 1)}>skip</Button>
-              {isLast ? (
-                <Button size="sm" className="h-7 text-xs" onClick={handleSubmit} disabled={!currentAnswered}>answer</Button>
-              ) : (
-                <Button size="sm" className="h-7 text-xs" onClick={() => setStep(s => s + 1)} disabled={!currentAnswered}>next</Button>
+                  onClick={() => handleSelect(q.question, opt.label, q.multiSelect)}
+                >
+                  <span className="text-xs font-medium">{opt.label}</span>
+                  {opt.description && <span className="text-[10px] text-muted-foreground leading-tight">{opt.description}</span>}
+                </button>
+              );
+            })}
+            <button
+              className={cn(
+                'flex flex-col items-start px-2.5 py-1.5 rounded-md border text-left w-full transition-colors',
+                useOther[q.question]
+                  ? 'border-primary bg-primary/10'
+                  : 'border-border bg-background hover:border-primary/50'
               )}
-            </>
+              onClick={() => {
+                setUseOther(prev => ({ ...prev, [q.question]: true }));
+                setSelections(prev => ({ ...prev, [q.question]: '' }));
+              }}
+            >
+              <span className="text-xs font-medium">Other</span>
+              <span className="text-[10px] text-muted-foreground">type your own answer</span>
+            </button>
+          </div>
+          {useOther[q.question] && (
+            <input
+              className="w-full px-2.5 py-1.5 bg-background border border-primary rounded-md text-xs outline-none placeholder:text-muted-foreground"
+              placeholder="type your answer..."
+              value={otherTexts[q.question] || ''}
+              onChange={e => setOtherTexts(prev => ({ ...prev, [q.question]: e.target.value }))}
+              onKeyDown={e => { if (e.key === 'Enter' && isLast) handleSubmit(); else if (e.key === 'Enter') setStep(s => s + 1); }}
+              autoFocus
+            />
           )}
+          <div className="flex justify-between pt-0.5">
+            <div>
+              {step > 0 && (
+                <Button variant="outline" size="sm" className="h-6 text-[11px] px-2" onClick={() => setStep(s => s - 1)}>back</Button>
+              )}
+            </div>
+            <div className="flex gap-1.5">
+              {streaming ? (
+                <span className="text-[10px] text-muted-foreground animate-pulse">loading...</span>
+              ) : (
+                <>
+                  <Button variant="outline" size="sm" className="h-6 text-[11px] px-2" onClick={isLast ? handleSubmit : () => setStep(s => s + 1)}>skip</Button>
+                  {isLast ? (
+                    <Button size="sm" className="h-6 text-[11px] px-2" onClick={handleSubmit} disabled={!currentAnswered}>answer</Button>
+                  ) : (
+                    <Button size="sm" className="h-6 text-[11px] px-2" onClick={() => setStep(s => s + 1)} disabled={!currentAnswered}>next</Button>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -698,14 +716,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             </div>
           );
         }
-        if (item.name === 'AskUserQuestion') {
-          return (
-            <div key={i} className="flex items-center gap-2 text-[10px] text-muted-foreground py-0.5">
-              <MessageCircle className="w-3 h-3" />
-              <span className="truncate max-w-xs">{item.streaming ? 'asking...' : item.output ? item.output : 'waiting for answer'}</span>
-            </div>
-          );
-        }
+        if (item.name === 'AskUserQuestion' && !item.output) return <div key={i} style={{ height: 0, overflow: 'hidden' }} />;
         return <div key={i} className="my-1.5"><InlineErrorBoundary><ToolUseItem item={item} /></InlineErrorBoundary></div>;
       case 'thinking':
         return <ThinkingItem key={i} item={item} />;
