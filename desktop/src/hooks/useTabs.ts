@@ -87,6 +87,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
 
   const initializedRef = useRef(false);
   const migratedRef = useRef(false);
+  const closingRef = useRef(false);
   const subscribedSessionKeysRef = useRef<Set<string>>(new Set());
   const streamCountRef = useRef<Record<string, number>>({});
   const [unreadBySession, setUnreadBySession] = useState<Record<string, number>>({});
@@ -264,6 +265,11 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
   // Reactively fill empty visible groups with new tabs (handles splits)
   // Runs after render with fresh state — no stale closure issues
   useEffect(() => {
+    // skip during closeTab — collapse will remove the empty group
+    if (closingRef.current) {
+      closingRef.current = false;
+      return;
+    }
     if (!layout.isMultiPane) return;
     const emptyGroups = layout.visibleGroups.filter(g => g.tabIds.length === 0);
     if (emptyGroups.length === 0) return;
@@ -330,6 +336,8 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
   }, [tabs, gw, layout]);
 
   const closeTab = useCallback((tabId: string) => {
+    closingRef.current = true;
+
     // Remove from layout group (reads current state, queues layout update)
     const { groupId, neighborTabId } = layout.removeTabFromGroup(tabId);
 

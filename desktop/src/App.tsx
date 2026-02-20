@@ -619,7 +619,7 @@ export default function App() {
 
     if (mode === '2-col') {
       return (
-        <ResizablePanelGroup orientation="horizontal" className="h-full">
+        <ResizablePanelGroup key="2-col" orientation="horizontal" className="h-full">
           <ResizablePanel defaultSize="50%" minSize="20%">
             <EditorGroupPanel
               group={visibleGroups[0]}
@@ -641,7 +641,7 @@ export default function App() {
 
     if (mode === '2-row') {
       return (
-        <ResizablePanelGroup orientation="vertical" className="h-full">
+        <ResizablePanelGroup key="2-row" orientation="vertical" className="h-full">
           <ResizablePanel defaultSize="50%" minSize="20%">
             <EditorGroupPanel
               group={visibleGroups[0]}
@@ -663,7 +663,7 @@ export default function App() {
 
     // 2x2
     return (
-      <ResizablePanelGroup orientation="horizontal" className="h-full">
+      <ResizablePanelGroup key="2x2" orientation="horizontal" className="h-full">
         <ResizablePanel defaultSize="50%" minSize="20%">
           <ResizablePanelGroup orientation="vertical">
             <ResizablePanel defaultSize="50%" minSize="20%">
