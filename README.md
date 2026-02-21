@@ -20,7 +20,7 @@
 
 The agent manages its own goals, tracks research, messages you on Telegram and WhatsApp, runs scheduled tasks, and remembers everything across sessions.
 
-https://github.com/suitedaces/dorabot/releases/download/v0.2.3/annotated-demo-telegram.mp4
+https://github.com/user-attachments/assets/dc3deffe-2514-40ef-9b90-2bc21de5f87e
 
 ## Persistent Memory & Self-Learning
 
