@@ -440,7 +440,14 @@ function updateSessionChatItems(
   return { ...prev, [sk]: { ...state, chatItems: newItems } };
 }
 
-export function useGateway(url = 'wss://localhost:18789') {
+function getDefaultGatewayUrl(): string {
+  const fromEnv = import.meta.env.VITE_GATEWAY_URL?.trim();
+  if (fromEnv) return fromEnv;
+  const isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI;
+  return isElectron ? 'wss://localhost:18789' : 'ws://localhost:18789';
+}
+
+export function useGateway(url = getDefaultGatewayUrl()) {
   const gatewayClientRef = useRef(getGatewayClient(url));
   const [connectionState, setConnectionState] = useState<ConnectionState>(() => gatewayClientRef.current.connectionState);
 

@@ -50,6 +50,15 @@ function getToken(): string {
     return consumed;
   }
 
+  // Browser/web mode fallback: inject via Vite env.
+  // Keep this before localStorage so stale cached tokens cannot break auth.
+  const envToken = import.meta.env.VITE_GATEWAY_TOKEN?.trim() || '';
+  if (envToken) {
+    cachedToken = envToken;
+    try { localStorage.setItem('dorabot:gateway-token', envToken); } catch {}
+    return envToken;
+  }
+
   // Fall back to localStorage (may have been pushed by main process after gateway ready)
   const stored = localStorage.getItem('dorabot:gateway-token') || '';
   if (stored) {
