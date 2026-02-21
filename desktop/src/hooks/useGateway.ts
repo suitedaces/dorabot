@@ -440,8 +440,8 @@ function updateSessionChatItems(
   return { ...prev, [sk]: { ...state, chatItems: newItems } };
 }
 
-export function useGateway(url = 'wss://localhost:18789') {
-  const gatewayClientRef = useRef(getGatewayClient(url));
+export function useGateway() {
+  const gatewayClientRef = useRef(getGatewayClient());
   const [connectionState, setConnectionState] = useState<ConnectionState>(() => gatewayClientRef.current.connectionState);
 
   // Multi-session state: all tracked sessions' state keyed by sessionKey
@@ -1311,7 +1311,7 @@ export function useGateway(url = 'wss://localhost:18789') {
   }, [flushStreamQueue, markSeqIfNew, scheduleStreamFlush]);
 
   useEffect(() => {
-    const client = getGatewayClient(url);
+    const client = getGatewayClient();
     gatewayClientRef.current = client;
     const unsubscribe = client.subscribe((notification) => {
       if (notification.type === 'connection') {
@@ -1356,12 +1356,12 @@ export function useGateway(url = 'wss://localhost:18789') {
     };
     window.addEventListener('dorabot:gateway-error', onGatewayError);
 
-    client.connect(url);
+    client.connect();
     return () => {
       unsubscribe();
       window.removeEventListener('dorabot:gateway-error', onGatewayError);
     };
-  }, [url, handleEvent, markSeqIfNew]);
+  }, [handleEvent, markSeqIfNew]);
 
   useEffect(() => {
     if (connectionState !== 'connected') return;
@@ -1810,7 +1810,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     channelMessages,
     channelStatuses,
     sessions,
-    ws: gatewayClientRef.current.socket,
+    ws: null, // WebSocket is in main process now
     rpc,
     sendMessage,
     abortAgent,

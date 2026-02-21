@@ -2,9 +2,10 @@ import { app, BrowserWindow, Tray, Menu, nativeImage, session, ipcMain, Notifica
 import { autoUpdater } from 'electron-updater';
 import { is } from '@electron-toolkit/utils';
 import * as path from 'path';
-import { readFileSync, existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { GatewayManager } from './gateway-manager';
-import { GATEWAY_TOKEN_PATH, GATEWAY_LOG_PATH } from './dorabot-paths';
+import { GatewayBridge } from './gateway-bridge';
+import { GATEWAY_LOG_PATH } from './dorabot-paths';
 
 function readGatewayLogs(): string {
   try {
@@ -21,6 +22,7 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 let gatewayManager: GatewayManager | null = null;
+let gatewayBridge: GatewayBridge | null = null;
 let updateCheckInterval: ReturnType<typeof setInterval> | null = null;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -179,7 +181,11 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    gatewayBridge?.setWindow(null);
   });
+
+  // Wire up gateway bridge to this window
+  gatewayBridge?.setWindow(mainWindow);
 }
 
 function createTray(): void {
@@ -222,47 +228,31 @@ function updateTrayTitle(status: string): void {
   }
 }
 
-// Trust the self-signed gateway TLS cert for localhost connections
-app.on('certificate-error', (event, _webContents, url, _error, _cert, callback) => {
-  const parsed = new URL(url);
-  if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
-    event.preventDefault();
-    callback(true);
-  } else {
-    callback(false);
-  }
-});
-
 app.on('ready', async () => {
-  // Accept self-signed gateway cert for localhost WebSocket connections
-  session.defaultSession.setCertificateVerifyProc((request, callback) => {
-    if (request.hostname === 'localhost' || request.hostname === '127.0.0.1') {
-      callback(0); // trust
-    } else {
-      callback(-3); // use default verification
-    }
-  });
-
   if (app.dock) {
     app.dock.setIcon(getIconPath());
   }
+
+  // Create gateway bridge (main process WebSocket to gateway)
+  gatewayBridge = new GatewayBridge();
+
+  // IPC: renderer sends messages through the bridge
+  ipcMain.on('gateway:send', (_event, data: string) => {
+    gatewayBridge?.send(data);
+  });
+
+  // IPC: renderer requests current bridge state
+  ipcMain.handle('gateway:state', () => {
+    return gatewayBridge?.getState() ?? { state: 'disconnected', reconnectCount: 0 };
+  });
 
   // Start gateway server before creating UI
   gatewayManager = new GatewayManager({
     onReady: () => {
       console.log('[main] Gateway ready');
       updateTrayTitle('online');
-      // Push token to renderer in case preload missed it (fresh install race)
-      try {
-        if (existsSync(GATEWAY_TOKEN_PATH)) {
-          const token = readFileSync(GATEWAY_TOKEN_PATH, 'utf-8').trim();
-          if (token && mainWindow) {
-            mainWindow.webContents.send('gateway-token', token);
-          }
-        }
-      } catch (err) {
-        console.error('[main] Failed to push token to renderer:', err);
-      }
+      // Gateway is listening, now connect the bridge
+      gatewayBridge?.connect();
     },
     onError: (error) => {
       console.error('[main] Gateway error:', error);
@@ -316,5 +306,6 @@ app.on('activate', () => {
 app.on('before-quit', () => {
   isQuitting = true;
   if (updateCheckInterval) clearInterval(updateCheckInterval);
+  gatewayBridge?.disconnect();
   gatewayManager?.stop();
 });

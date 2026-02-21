@@ -1,26 +1,6 @@
 import { contextBridge, shell, ipcRenderer } from 'electron';
-import { readFileSync, existsSync } from 'fs';
-import { GATEWAY_TOKEN_PATH } from './dorabot-paths';
 
-// Read token once at preload time — not exposed as a re-callable function.
-// This prevents malicious scripts from repeatedly extracting the token.
-const tokenPath = GATEWAY_TOKEN_PATH;
-const gatewayToken = existsSync(tokenPath)
-  ? readFileSync(tokenPath, 'utf-8').trim()
-  : null;
-
-let tokenDelivered = false;
-
-// Listen for token push from main process (handles fresh install race condition)
-ipcRenderer.on('gateway-token', (_event, token: string) => {
-  if (token) {
-    try { localStorage.setItem('dorabot:gateway-token', token); } catch {}
-    // Dispatch a custom event so the gateway client can retry connection
-    window.dispatchEvent(new CustomEvent('dorabot:token-available'));
-  }
-});
-
-// Listen for gateway errors from main process
+// Listen for gateway errors from main process (gateway failed to start)
 ipcRenderer.on('gateway-error', (_event, payload: { error: string; logs: string }) => {
   window.dispatchEvent(new CustomEvent('dorabot:gateway-error', { detail: payload }));
 });
@@ -28,11 +8,6 @@ ipcRenderer.on('gateway-error', (_event, payload: { error: string; logs: string 
 const electronAPI = {
   platform: process.platform,
   appVersion: (() => { try { return require('electron').app?.getVersion?.() || process.env.npm_package_version || '0.0.0'; } catch { return '0.0.0'; } })(),
-  consumeGatewayToken: (): string | null => {
-    if (tokenDelivered) return null;
-    tokenDelivered = true;
-    return gatewayToken;
-  },
   openExternal: (url: string) => shell.openExternal(url),
   dockBounce: (type: 'critical' | 'informational') => ipcRenderer.send('dock-bounce', type),
   notify: (title: string, body: string) => ipcRenderer.send('notify', { title, body }),
@@ -48,6 +23,19 @@ const electronAPI = {
     const handler = (_e: any, status: any) => cb(status);
     ipcRenderer.on('update-status', handler);
     return () => { ipcRenderer.removeListener('update-status', handler); };
+  },
+  // Gateway bridge IPC (WebSocket runs in main process, renderer talks via IPC)
+  gatewaySend: (data: string) => ipcRenderer.send('gateway:send', data),
+  gatewayState: (): Promise<{ state: string; reconnectCount: number; connectId?: string }> => ipcRenderer.invoke('gateway:state'),
+  onGatewayMessage: (cb: (data: string) => void) => {
+    const handler = (_e: any, data: string) => cb(data);
+    ipcRenderer.on('gateway:message', handler);
+    return () => { ipcRenderer.removeListener('gateway:message', handler); };
+  },
+  onGatewayState: (cb: (state: { state: string; reason?: string; reconnectInMs?: number; reconnectCount: number; connectId?: string }) => void) => {
+    const handler = (_e: any, state: any) => cb(state);
+    ipcRenderer.on('gateway:state', handler);
+    return () => { ipcRenderer.removeListener('gateway:state', handler); };
   },
 };
 

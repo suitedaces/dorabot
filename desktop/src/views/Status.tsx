@@ -20,7 +20,7 @@ export function StatusView({ gateway }: Props) {
       .catch(() => {});
   }, [gateway.connectionState, gateway.rpc]);
 
-  const hasToken = gateway.connectionState === 'connected' || !!localStorage.getItem('dorabot:gateway-token');
+  const hasToken = gateway.connectionState === 'connected';
 
   return (
     <div className="flex flex-col h-full min-h-0">
