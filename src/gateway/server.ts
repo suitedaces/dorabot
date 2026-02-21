@@ -5028,16 +5028,29 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const certPath = TLS_CERT_PATH;
   const keyPath = TLS_KEY_PATH;
 
-  if (useTls && (!existsSync(certPath) || !existsSync(keyPath))) {
+  const certExists = existsSync(certPath) && existsSync(keyPath);
+  const certValid = certExists && statSync(certPath).size > 0 && statSync(keyPath).size > 0;
+  if (useTls && !certValid) {
+    try { unlinkSync(certPath); } catch {}
+    try { unlinkSync(keyPath); } catch {}
     console.log('[gateway] generating self-signed TLS certificate...');
     mkdirSync(tlsDir, { recursive: true });
-    execSync(
-      `openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 ` +
+    const baseCmd = `openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 ` +
       `-keyout "${keyPath}" -out "${certPath}" -days 3650 -nodes ` +
-      `-subj "/CN=dorabot-gateway" ` +
-      `-addext "subjectAltName=DNS:localhost,IP:127.0.0.1"`,
-      { stdio: 'ignore' },
-    );
+      `-subj "/CN=dorabot-gateway"`;
+    try {
+      // OpenSSL 1.1.1+ supports -addext
+      execSync(`${baseCmd} -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"`, { stdio: 'ignore' });
+    } catch {
+      // LibreSSL (macOS default) doesn't support -addext; use -extfile instead
+      const extFile = join(tlsDir, 'san.cnf');
+      writeFileSync(extFile, 'subjectAltName=DNS:localhost,IP:127.0.0.1\n');
+      try {
+        execSync(`${baseCmd} -extfile "${extFile}"`, { stdio: 'ignore' });
+      } finally {
+        try { unlinkSync(extFile); } catch {}
+      }
+    }
     chmodSync(keyPath, 0o600);
     chmodSync(certPath, 0o600);
     console.log(`[gateway] TLS cert created at ${tlsDir}`);
