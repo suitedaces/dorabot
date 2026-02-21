@@ -762,8 +762,8 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                   <DorabotSprite size={compact ? 56 : 96} className="relative dorabot-alive" />
                 </div>
                 <h1 className={cn('font-semibold text-foreground', compact ? 'text-sm' : 'text-lg')}>{getGreeting()}</h1>
-                <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground max-w-sm">
-                  <div className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', isReady ? 'bg-success' : connected && !authenticated ? 'bg-warning' : connected ? 'bg-success' : 'bg-destructive')} />
+                <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
+                  <div className={cn('w-1.5 h-1.5 rounded-full', isReady ? 'bg-success' : connected && !authenticated ? 'bg-warning' : connected ? 'bg-success' : 'bg-destructive')} />
                   {gatewayFailed
                     ? <span className="text-destructive">{gateway.gatewayError?.error || 'gateway failed to start'}</span>
                     : !connected ? 'connecting...'
