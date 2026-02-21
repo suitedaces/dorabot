@@ -1,53 +1,38 @@
 "use client"
 
-import { useRef, useState, useEffect } from "react"
+import { useRef, useEffect } from "react"
 
-export function LazyVideo({
-  src,
-  className,
-}: {
-  src: string
-  className?: string
-}) {
-  const ref = useRef<HTMLDivElement>(null)
-  const [load, setLoad] = useState(false)
-  const [isMobile, setIsMobile] = useState(false)
+export function LazyVideo({ src, className }: { src: string; className?: string }) {
+  const ref = useRef<HTMLVideoElement>(null)
 
   useEffect(() => {
-    setIsMobile(window.matchMedia("(max-width: 767px)").matches)
-  }, [])
+    const video = ref.current
+    if (!video) return
 
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
+    const isMobile = window.matchMedia("(max-width: 767px)").matches
+
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          const t = setTimeout(() => setLoad(true), 150)
+          if (isMobile) {
+            video.preload = "metadata"
+            video.src = src + "#t=0.001"
+          } else {
+            video.src = src
+            video.play()
+          }
           observer.disconnect()
-          return () => clearTimeout(t)
         }
       },
       { rootMargin: "300px" }
     )
-    observer.observe(el)
+    observer.observe(video)
     return () => observer.disconnect()
-  }, [])
+  }, [src])
 
   return (
-    <div ref={ref} className="aspect-video bg-surface-base/30">
-      {load && (
-        <video
-          src={src}
-          autoPlay={!isMobile}
-          loop
-          muted
-          playsInline
-          preload={isMobile ? "metadata" : "none"}
-          controls={isMobile}
-          className={className}
-        />
-      )}
+    <div className="aspect-video bg-surface-base/30">
+      <video ref={ref} loop muted playsInline className={className} />
     </div>
   )
 }
