@@ -209,7 +209,7 @@ export function Hero() {
                 className="w-full"
                 poster="/gifs/memory.gif"
               >
-                <source src="https://github.com/suitedaces/dorabot/releases/download/v0.2.3/annotated-demo-telegram.mp4" type="video/mp4" />
+                <source src="https://github.com/suitedaces/dorabot/releases/download/v0.2.3/dorabot-demo-annotated.mp4#t=4" type="video/mp4" />
               </video>
             </div>
           </motion.div>
