@@ -9,7 +9,7 @@ const Also = dynamic(() => import("./sections/Also").then(m => m.Also), { ssr: f
 const CTA = dynamic(() => import("./sections/CTA").then(m => m.CTA), { ssr: false })
 const Footer = dynamic(() => import("./sections/Footer").then(m => m.Footer), { ssr: false })
 
-function LazySection({ children }: { children: ReactNode }) {
+function LazySection({ children, minH = "20rem" }: { children: ReactNode; minH?: string }) {
   const ref = useRef<HTMLDivElement>(null)
   const [visible, setVisible] = useState(false)
 
@@ -30,14 +30,14 @@ function LazySection({ children }: { children: ReactNode }) {
   }, [])
 
   if (visible) return <>{children}</>
-  return <div ref={ref} />
+  return <div ref={ref} style={{ minHeight: minH }} />
 }
 
 export function BelowFold() {
   return (
     <>
-      <LazySection><DemoVideo /></LazySection>
-      <LazySection><Features /></LazySection>
+      <DemoVideo />
+      <LazySection minH="60rem"><Features /></LazySection>
       <LazySection><Also /></LazySection>
       <LazySection><CTA /></LazySection>
       <Footer />
