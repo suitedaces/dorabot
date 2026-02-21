@@ -11,6 +11,11 @@ export function LazyVideo({
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [load, setLoad] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
+
+  useEffect(() => {
+    setIsMobile(window.matchMedia("(max-width: 767px)").matches)
+  }, [])
 
   useEffect(() => {
     const el = ref.current
@@ -18,7 +23,6 @@ export function LazyVideo({
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          // small delay so we don't fire all at once during fast scroll
           const t = setTimeout(() => setLoad(true), 150)
           observer.disconnect()
           return () => clearTimeout(t)
@@ -35,11 +39,12 @@ export function LazyVideo({
       {load && (
         <video
           src={src}
-          autoPlay
+          autoPlay={!isMobile}
           loop
           muted
           playsInline
-          preload="none"
+          preload={isMobile ? "metadata" : "none"}
+          controls={isMobile}
           className={className}
         />
       )}

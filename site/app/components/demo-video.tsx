@@ -64,7 +64,7 @@ export function DemoVideo() {
                 <img
                   src="/demo-poster.jpg"
                   alt="dorabot demo"
-                  loading="lazy"
+                  loading="eager"
                   className="h-full w-full object-cover"
                 />
               </picture>
