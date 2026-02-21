@@ -46,6 +46,7 @@ export function Navbar() {
             alt="dorabot"
             width={67}
             height={91}
+            decoding="async"
             className="h-10 w-auto sm:h-11 dorabot-alive"
             style={{ imageRendering: "pixelated" }}
           />

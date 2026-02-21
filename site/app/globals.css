@@ -137,7 +137,13 @@ body {
 }
 
 .dorabot-alive {
-  animation: dorabot-float 3s ease-in-out infinite, dorabot-glow 2s ease-in-out infinite;
+  animation: dorabot-float 3s ease-in-out infinite;
+}
+
+@media (min-width: 768px) {
+  .dorabot-alive {
+    animation: dorabot-float 3s ease-in-out infinite, dorabot-glow 2s ease-in-out infinite;
+  }
 }
 
 /* Streaming cursor - matches desktop */
