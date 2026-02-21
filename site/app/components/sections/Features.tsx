@@ -34,37 +34,37 @@ const features = [
     title: "Persistent Memory & Self-Learning",
     description:
       "Daily journals, curated memory, personality config. The agent remembers decisions, preferences, and context across every session. It gets better the more you use it.",
-    gif: "/gifs/memory.gif",
+    video: "https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev/gifs/memory.mp4",
   },
   {
     title: "Automations & Scheduling",
     description:
       "Cron jobs, scheduled pulses, recurring tasks. The agent wakes up, does work, and messages you. iCal RRULE support, Apple Calendar sync.",
-    gif: "/gifs/automations.gif",
+    video: "https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev/gifs/automations.mp4",
   },
   {
     title: "Goals & Tasks",
     description:
       "The agent proposes goals, writes plans, and executes them. You approve from the desktop app or Telegram. Full pipeline: research, plan, review, execute, done.",
-    gif: "/gifs/goals.gif",
+    video: "https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev/gifs/goals.mp4",
   },
   {
     title: "Research & Knowledge",
     description:
       "The agent creates and maintains its own research for you. Topics tracked, categorized, and searchable. Point it at anything and it keeps the knowledge organized.",
-    gif: "/gifs/research.gif",
+    video: "https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev/gifs/research.mp4",
   },
   {
     title: "Multi-Channel Messaging",
     description:
       "Same agent on WhatsApp, Telegram, and Slack. Send text, photos, voice, documents. It responds with full context from every past conversation.",
-    gif: "/gifs/channels.gif",
+    video: "https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev/gifs/channels.mp4",
   },
   {
     title: "Skills & MCP Servers",
     description:
       "Built-in skills for GitHub, email, macOS, PR review, agent swarms. Browse 56k+ community skills. Connect 7,300+ MCP servers via Smithery.",
-    gif: "/gifs/extensions.gif",
+    video: "https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev/gifs/extensions.mp4",
   },
 ]
 
@@ -120,11 +120,13 @@ export function Features() {
             >
               {/* GIF */}
               <div className="w-full md:w-7/12 rounded-xl border border-border overflow-hidden bg-surface-base/30">
-                <img
-                  src={f.gif}
-                  alt={f.title}
+                <video
+                  src={f.video}
+                  autoPlay
+                  loop
+                  muted
+                  playsInline
                   className="w-full"
-                  loading="lazy"
                 />
               </div>
               {/* Text */}
