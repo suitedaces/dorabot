@@ -92,6 +92,9 @@ export function SettingsView({ gateway }: Props) {
           {/* openai provider */}
           <OpenAICard gateway={gateway} disabled={disabled} />
 
+          {/* openai-compatible provider */}
+          <OpenAICompatibleCard gateway={gateway} disabled={disabled} />
+
           {/* gateway approval — shared across providers */}
           <Card>
             <CardContent className="p-4">
@@ -585,6 +588,251 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
           {sandboxMode === 'danger-full-access' && approvalPolicy === 'never' && (
             <div className="text-[10px] text-warning bg-warning/10 rounded px-2 py-1.5">
               Codex has full system access with no approval — use caution
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function OpenAICompatibleCard({ gateway, disabled }: { gateway: ReturnType<typeof useGateway>; disabled: boolean }) {
+  const [showAuth, setShowAuth] = useState(false);
+  const [authStatus, setAuthStatus] = useState<ProviderAuthView | null>(null);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const cfg = gateway.configData as Record<string, any> | null;
+  const compatModel = cfg?.provider?.openaiCompatible?.model || 'gpt-5.2';
+  const compatBaseUrl = (cfg?.provider?.openaiCompatible?.baseUrl as string | undefined) || '';
+  const reasoningEffort = cfg?.reasoningEffort as string | null;
+  const sandboxMode = cfg?.provider?.openaiCompatible?.sandboxMode || 'danger-full-access';
+  const approvalPolicy = cfg?.provider?.openaiCompatible?.approvalPolicy || 'never';
+  const webSearch = cfg?.provider?.openaiCompatible?.webSearch || 'disabled';
+  const [baseUrlInput, setBaseUrlInput] = useState(compatBaseUrl);
+
+  useEffect(() => {
+    gateway.getProviderAuth('openai-compatible').then(setAuthStatus).catch(() => {});
+  }, [gateway]);
+
+  const providerInfo = gateway.providerInfo;
+  const providerName = cfg?.provider?.name || 'claude';
+  useEffect(() => {
+    if (providerName === 'openai-compatible' && providerInfo?.auth) setAuthStatus(providerInfo.auth);
+  }, [providerName, providerInfo]);
+
+  useEffect(() => {
+    setBaseUrlInput(compatBaseUrl);
+  }, [compatBaseUrl]);
+
+  const authenticated = authStatus?.authenticated ?? false;
+  const storageBackend = authStatus?.storageBackend || 'file';
+  const tokenHealth = authStatus?.tokenHealth || (authenticated ? 'valid' : 'expired');
+
+  const handleAuthSuccess = useCallback(() => {
+    setShowAuth(false);
+    gateway.getProviderAuth('openai-compatible').then(setAuthStatus).catch(() => {});
+    if (providerName === 'openai-compatible') gateway.getProviderStatus();
+  }, [gateway, providerName]);
+
+  const set = useCallback(async (key: string, value: unknown) => {
+    try { await gateway.setConfig(key, value); } catch (err) { console.error(`failed to set ${key}:`, err); }
+  }, [gateway]);
+
+  const loadAvailableModels = useCallback(async () => {
+    if (!compatBaseUrl) {
+      setAvailableModels([]);
+      setModelsError(null);
+      return;
+    }
+
+    setModelsLoading(true);
+    setModelsError(null);
+    try {
+      const res = await gateway.listProviderModels('openai-compatible');
+      const models = Array.isArray(res.models) ? res.models.filter(Boolean) : [];
+      setAvailableModels(models);
+      if (models.length > 0 && !models.includes(compatModel)) {
+        await set('provider.openaiCompatible.model', models[0]);
+      }
+      if (models.length === 0) {
+        setModelsError('No models returned from this endpoint');
+      }
+    } catch (err) {
+      setAvailableModels([]);
+      setModelsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setModelsLoading(false);
+    }
+  }, [compatBaseUrl, compatModel, gateway, set]);
+
+  useEffect(() => {
+    if (!compatBaseUrl) {
+      setAvailableModels([]);
+      setModelsError(null);
+      return;
+    }
+    if (!authenticated) return;
+    loadAvailableModels().catch(() => {});
+  }, [compatBaseUrl, authenticated, loadAvailableModels]);
+
+  const modelOptions = availableModels.length > 0
+    ? availableModels
+    : (compatModel ? [compatModel] : []);
+
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="flex items-center gap-2 mb-4">
+          <img src="./openai-icon.svg" alt="OpenAI-compatible" className="w-4 h-4" />
+          <span className="text-xs font-semibold">OpenAI-Compatible</span>
+        </div>
+
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-[11px] font-medium text-foreground flex items-center gap-1.5">
+                  authentication
+                  {authenticated ? (
+                    <Check className="w-3 h-3 text-success" />
+                  ) : null}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  {authenticated
+                    ? authStatus?.identity?.startsWith('local OpenAI-compatible endpoint')
+                      ? 'connected to local endpoint (no API key)'
+                      : 'connected via API key'
+                    : 'not authenticated'}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  storage: {storageBackend} · token: {tokenHealth}
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 text-[10px] px-2"
+                onClick={() => setShowAuth(!showAuth)}
+              >
+                {showAuth ? 'cancel' : authenticated ? 'change' : 'set up'}
+              </Button>
+            </div>
+
+            {showAuth && (
+              <div className="border border-border rounded-lg p-3 bg-secondary/30">
+                <ProviderSetup
+                  provider="openai-compatible"
+                  gateway={gateway}
+                  onSuccess={handleAuthSuccess}
+                  compact
+                />
+              </div>
+            )}
+          </div>
+
+          <SettingRow label="base url" description="OpenAI-compatible endpoint (example: http://localhost:11434/v1)">
+            <Input
+              value={baseUrlInput}
+              onChange={e => setBaseUrlInput(e.target.value)}
+              onBlur={() => set('provider.openaiCompatible.baseUrl', baseUrlInput.trim() || null)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.currentTarget.blur();
+              }}
+              placeholder="http://localhost:11434/v1"
+              disabled={disabled}
+              className="h-7 w-56 !text-[11px] md:!text-[11px]"
+            />
+          </SettingRow>
+
+          <SettingRow label="model" description="loaded from /models on the configured endpoint">
+            <Select
+              value={compatModel}
+              onValueChange={v => set('provider.openaiCompatible.model', v)}
+              disabled={disabled || !compatBaseUrl || modelsLoading || modelOptions.length === 0}
+            >
+              <SelectTrigger className="h-7 w-44 text-[11px]">
+                <SelectValue placeholder={modelsLoading ? 'loading models...' : 'select model'} />
+              </SelectTrigger>
+              <SelectContent>
+                {modelOptions.map((model) => (
+                  <SelectItem key={model} value={model} className="text-[11px]">{model}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </SettingRow>
+          {modelsLoading && (
+            <div className="text-[10px] text-muted-foreground">Loading models from endpoint...</div>
+          )}
+          {modelsError && (
+            <div className="text-[10px] text-warning bg-warning/10 rounded px-2 py-1.5">
+              {modelsError}
+            </div>
+          )}
+
+          <SettingRow label="reasoning effort" description="how much the model reasons before responding">
+            <Select
+              value={reasoningEffort || 'off'}
+              onValueChange={v => set('reasoningEffort', v === 'off' ? null : v)}
+              disabled={disabled}
+            >
+              <SelectTrigger className="h-7 w-40 text-[11px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="off" className="text-[11px]">auto (default)</SelectItem>
+                <SelectItem value="minimal" className="text-[11px]">minimal</SelectItem>
+                <SelectItem value="low" className="text-[11px]">low</SelectItem>
+                <SelectItem value="medium" className="text-[11px]">medium</SelectItem>
+                <SelectItem value="high" className="text-[11px]">high</SelectItem>
+                <SelectItem value="max" className="text-[11px]">xhigh</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingRow>
+
+          <SettingRow label="sandbox" description="execution isolation for agent runs">
+            <Select value={sandboxMode} onValueChange={v => set('provider.openaiCompatible.sandboxMode', v)} disabled={disabled}>
+              <SelectTrigger className="h-7 w-40 text-[11px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="read-only" className="text-[11px]">read-only</SelectItem>
+                <SelectItem value="workspace-write" className="text-[11px]">workspace write</SelectItem>
+                <SelectItem value="danger-full-access" className="text-[11px]">full access</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingRow>
+
+          <SettingRow label="approval" description="when to ask before acting">
+            <Select value={approvalPolicy} onValueChange={v => set('provider.openaiCompatible.approvalPolicy', v)} disabled={disabled}>
+              <SelectTrigger className="h-7 w-40 text-[11px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="never" className="text-[11px]">never (auto)</SelectItem>
+                <SelectItem value="on-request" className="text-[11px]">on request</SelectItem>
+                <SelectItem value="on-failure" className="text-[11px]">on failure</SelectItem>
+                <SelectItem value="untrusted" className="text-[11px]">untrusted</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingRow>
+
+          <SettingRow label="web search" description="allow web search in runs">
+            <Select value={webSearch} onValueChange={v => set('provider.openaiCompatible.webSearch', v)} disabled={disabled}>
+              <SelectTrigger className="h-7 w-40 text-[11px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="disabled" className="text-[11px]">disabled</SelectItem>
+                <SelectItem value="cached" className="text-[11px]">cached</SelectItem>
+                <SelectItem value="live" className="text-[11px]">live</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingRow>
+
+          {!compatBaseUrl && (
+            <div className="text-[10px] text-warning bg-warning/10 rounded px-2 py-1.5">
+              Set base URL to use this provider
             </div>
           )}
         </div>

@@ -113,7 +113,7 @@ export type SecurityConfig = {
   tools?: ToolPolicyConfig;
 };
 
-export type ProviderName = 'claude' | 'codex' | 'minimax';
+export type ProviderName = 'claude' | 'codex' | 'openai-compatible' | 'minimax';
 
 export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'max';
 
@@ -132,9 +132,19 @@ export type CodexProviderConfig = {
   webSearch?: CodexWebSearchMode;
 };
 
+export type OpenAICompatibleProviderConfig = {
+  model?: string;
+  baseUrl?: string;
+  sandboxMode?: CodexSandboxMode;
+  approvalPolicy?: CodexApprovalPolicy;
+  networkAccess?: boolean;
+  webSearch?: CodexWebSearchMode;
+};
+
 export type ProviderConfig = {
   name: ProviderName;
   codex?: CodexProviderConfig;
+  openaiCompatible?: OpenAICompatibleProviderConfig;
 };
 
 export type McpServerEntry = {
