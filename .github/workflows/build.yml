@@ -1,9 +1,6 @@
 name: Build & Notarize
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 permissions:
