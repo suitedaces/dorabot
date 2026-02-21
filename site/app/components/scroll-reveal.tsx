@@ -18,12 +18,19 @@ export function ScrollReveal({
   useEffect(() => {
     const el = ref.current
     if (!el) return
+    // hide it now that JS is available
+    el.classList.add("pending")
+
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
           if (delay) {
-            setTimeout(() => el.classList.add("revealed"), delay * 1000)
+            setTimeout(() => {
+              el.classList.remove("pending")
+              el.classList.add("revealed")
+            }, delay * 1000)
           } else {
+            el.classList.remove("pending")
             el.classList.add("revealed")
           }
           observer.disconnect()
@@ -56,12 +63,18 @@ export function StaggerReveal({
   useEffect(() => {
     const el = ref.current
     if (!el) return
+    // hide items now that JS is available
+    const items = el.querySelectorAll(".stagger-item")
+    items.forEach((item) => item.classList.add("pending"))
+
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          const items = el.querySelectorAll(".stagger-item")
           items.forEach((item, i) => {
-            setTimeout(() => item.classList.add("revealed"), i * staggerDelay * 1000)
+            setTimeout(() => {
+              item.classList.remove("pending")
+              item.classList.add("revealed")
+            }, i * staggerDelay * 1000)
           })
           observer.disconnect()
         }

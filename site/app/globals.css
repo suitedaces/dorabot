@@ -203,11 +203,33 @@ body {
   transform: translateY(0);
 }
 
-/* scroll reveal */
+/* hero stagger entrance — pure CSS, no JS needed */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.hero-stagger {
+  opacity: 0;
+  animation: fade-up 0.5s ease forwards;
+}
+
+.hero-stagger-1 { animation-delay: 0s; }
+.hero-stagger-2 { animation-delay: 0.08s; }
+.hero-stagger-3 { animation-delay: 0.12s; }
+.hero-stagger-4 { animation-delay: 0.2s; }
+.hero-stagger-5 { animation-delay: 0.28s; }
+.hero-stagger-6 { animation-delay: 0.35s; }
+.hero-stagger-7 { animation-delay: 0.5s; }
+
+/* scroll reveal — visible by default, animate when scrolling */
 .scroll-reveal {
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+.scroll-reveal.pending {
   opacity: 0;
   transform: translateY(16px);
-  transition: opacity 0.4s ease, transform 0.4s ease;
 }
 
 .scroll-reveal.revealed {
@@ -216,9 +238,12 @@ body {
 }
 
 .stagger-item {
+  transition: opacity 0.35s ease, transform 0.35s ease;
+}
+
+.stagger-item.pending {
   opacity: 0;
   transform: translateY(12px);
-  transition: opacity 0.35s ease, transform 0.35s ease;
 }
 
 .stagger-item.revealed {
