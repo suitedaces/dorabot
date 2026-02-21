@@ -111,12 +111,6 @@ npm run dev:web
 - Open `http://localhost:5173`
 - Gateway runs at `ws://127.0.0.1:18889`
 
-LAN access example:
-
-```bash
-GATEWAY_HOST=0.0.0.0 GATEWAY_CLIENT_HOST=<server-ip> npm run dev:web
-```
-
 ### Ubuntu notes
 
 - Installer script includes Ubuntu deps: `libnotify-bin`, `gnome-screenshot`

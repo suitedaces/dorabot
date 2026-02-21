@@ -4,16 +4,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
-GATEWAY_HOST="${GATEWAY_HOST:-127.0.0.1}"
+GATEWAY_HOST="127.0.0.1"
 GATEWAY_PORT="${GATEWAY_PORT:-18889}"
-GATEWAY_CLIENT_HOST="${GATEWAY_CLIENT_HOST:-127.0.0.1}"
-WEB_HOST="${WEB_HOST:-0.0.0.0}"
+GATEWAY_CLIENT_HOST="localhost"
+WEB_HOST="127.0.0.1"
 WEB_PORT="${WEB_PORT:-5173}"
 TOKEN_PATH="${HOME}/.dorabot/gateway-token"
 
 CONFIG_FILE="$(mktemp /tmp/dorabot-web-config.XXXXXX.json)"
 GATEWAY_LOG="${HOME}/.dorabot/logs/gateway-web.log"
 GATEWAY_PID=""
+DESKTOP_ENV_FILE="${ROOT_DIR}/desktop/.env.local"
+DESKTOP_ENV_BACKUP=""
+RESTORE_DESKTOP_ENV=0
 
 log() {
   printf '[dev:web] %s\n' "$*"
@@ -28,6 +31,13 @@ cleanup() {
   if [[ -n "${GATEWAY_PID}" ]] && kill -0 "${GATEWAY_PID}" >/dev/null 2>&1; then
     kill "${GATEWAY_PID}" >/dev/null 2>&1 || true
     wait "${GATEWAY_PID}" 2>/dev/null || true
+  fi
+  if [[ "${RESTORE_DESKTOP_ENV}" -eq 1 ]]; then
+    if [[ -n "${DESKTOP_ENV_BACKUP}" && -f "${DESKTOP_ENV_BACKUP}" ]]; then
+      mv -f "${DESKTOP_ENV_BACKUP}" "${DESKTOP_ENV_FILE}" || true
+    else
+      rm -f "${DESKTOP_ENV_FILE}" || true
+    fi
   fi
   rm -f "${CONFIG_FILE}"
 }
@@ -75,23 +85,6 @@ wait_for_token() {
   return 1
 }
 
-build_allowed_origins_json() {
-  local origins=()
-  local ip
-  origins+=("http://localhost:${WEB_PORT}")
-  origins+=("http://127.0.0.1:${WEB_PORT}")
-
-  # Allow opening the web UI through local network IPs too.
-  if command -v hostname >/dev/null 2>&1; then
-    while read -r ip; do
-      [[ -z "${ip}" ]] && continue
-      origins+=("http://${ip}:${WEB_PORT}")
-    done < <(hostname -I 2>/dev/null | tr ' ' '\n' | awk 'NF')
-  fi
-
-  printf '%s\n' "${origins[@]}" | awk '!seen[$0]++' | sed 's/^/      "/; s/$/",/'
-}
-
 main() {
   cd "${ROOT_DIR}"
   require_cmd npm
@@ -101,9 +94,6 @@ main() {
   mkdir -p "${HOME}/.dorabot/logs"
 
   # Keep this config temporary: no TLS for browser compatibility in web mode.
-  local origins_json
-  origins_json="$(build_allowed_origins_json | sed '$ s/,$//')"
-
   cat > "${CONFIG_FILE}" <<EOF
 {
   "gateway": {
@@ -111,7 +101,8 @@ main() {
     "port": ${GATEWAY_PORT},
     "tls": false,
     "allowedOrigins": [
-${origins_json}
+      "http://localhost:${WEB_PORT}",
+      "http://127.0.0.1:${WEB_PORT}"
     ]
   }
 }
@@ -139,6 +130,16 @@ EOF
   local token
   token="$(tr -d '\r\n' < "${TOKEN_PATH}")"
   [[ -n "${token}" ]] || die "Gateway token is empty."
+
+  if [[ -f "${DESKTOP_ENV_FILE}" ]]; then
+    DESKTOP_ENV_BACKUP="$(mktemp /tmp/dorabot-desktop-env.XXXXXX)"
+    cp "${DESKTOP_ENV_FILE}" "${DESKTOP_ENV_BACKUP}"
+  fi
+  cat > "${DESKTOP_ENV_FILE}" <<EOF
+VITE_GATEWAY_URL=ws://${GATEWAY_CLIENT_HOST}:${GATEWAY_PORT}
+VITE_GATEWAY_TOKEN=${token}
+EOF
+  RESTORE_DESKTOP_ENV=1
 
   export VITE_GATEWAY_URL="ws://${GATEWAY_CLIENT_HOST}:${GATEWAY_PORT}"
   export VITE_GATEWAY_TOKEN="${token}"
