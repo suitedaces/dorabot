@@ -1,6 +1,5 @@
 import { Brain, Target, MousePointer2 } from "lucide-react"
 import { HoverBorderGradient } from "../aceternity/hover-border-gradient"
-import { DemoVideo } from "../demo-video"
 
 function GithubIcon() {
   return (
@@ -158,7 +157,6 @@ export function Hero() {
             </a>
           </div>
 
-          <DemoVideo />
         </div>
       </div>
     </section>
