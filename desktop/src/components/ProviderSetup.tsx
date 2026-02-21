@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { ArrowLeft, ExternalLink, Loader2, AlertCircle, ClipboardPaste } from 'lucide-react';
 
 type Props = {
-  provider: 'claude' | 'codex';
+  provider: 'claude' | 'codex' | 'openai-compatible';
   gateway: ReturnType<typeof useGateway>;
   onSuccess: () => void;
   onBack?: () => void;
@@ -17,7 +17,10 @@ export function ProviderSetup({ provider, gateway, onSuccess, onBack, compact, p
   if (provider === 'claude') {
     return <ClaudeSetup gateway={gateway} onSuccess={onSuccess} onBack={onBack} compact={compact} preferredMethod={preferredMethod} />;
   }
-  return <CodexSetup gateway={gateway} onSuccess={onSuccess} onBack={onBack} compact={compact} preferredMethod={preferredMethod} />;
+  if (provider === 'codex') {
+    return <CodexSetup gateway={gateway} onSuccess={onSuccess} onBack={onBack} compact={compact} preferredMethod={preferredMethod} />;
+  }
+  return <OpenAICompatibleSetup gateway={gateway} onSuccess={onSuccess} onBack={onBack} compact={compact} preferredMethod="apikey" />;
 }
 
 type ClaudeProps = Omit<Props, 'provider'> & { preferredMethod?: 'oauth' | 'apikey' };
@@ -526,6 +529,85 @@ function CodexSetup({ gateway, onSuccess, onBack, compact, preferredMethod }: Co
       {!compact && mode !== 'apikey' && (
         <div className="text-[10px] text-muted-foreground text-center">
           ChatGPT Plus subscription required for OAuth
+        </div>
+      )}
+    </div>
+  );
+}
+
+type OpenAICompatibleProps = Omit<Props, 'provider'>;
+
+function OpenAICompatibleSetup({ gateway, onSuccess, onBack, compact }: OpenAICompatibleProps) {
+  const [apiKey, setApiKey] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submitApiKey = useCallback(async () => {
+    if (!apiKey.startsWith('sk-') || apiKey.length < 20) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await gateway.authWithApiKey('openai-compatible', apiKey);
+      if (res.authenticated) {
+        onSuccess();
+      } else {
+        setError(res.error || 'Authentication failed');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to authenticate');
+    } finally {
+      setLoading(false);
+    }
+  }, [apiKey, gateway, onSuccess]);
+
+  return (
+    <div className="space-y-4">
+      {!compact && onBack && (
+        <button onClick={onBack} className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors">
+          <ArrowLeft className="w-3 h-3" />
+          back
+        </button>
+      )}
+
+      {!compact && (
+        <div className="text-center space-y-1">
+          <div className="text-sm font-semibold">OpenAI-Compatible</div>
+          <div className="text-[11px] text-muted-foreground">
+            enter an API key only if your endpoint requires authentication
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        <Input
+          type="password"
+          placeholder="sk-... (optional for local endpoints)"
+          value={apiKey}
+          onChange={e => { setApiKey(e.target.value); setError(null); }}
+          onKeyDown={e => e.key === 'Enter' && submitApiKey()}
+          className="h-8 text-[11px] font-mono"
+          disabled={loading}
+          autoFocus
+        />
+        <Button
+          size="sm"
+          className="h-7 text-[11px] w-full"
+          onClick={submitApiKey}
+          disabled={!apiKey.startsWith('sk-') || apiKey.length < 20 || loading}
+        >
+          {loading ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : null}
+          {loading ? 'connecting...' : 'save API key'}
+        </Button>
+      </div>
+
+      <div className="text-[10px] text-muted-foreground text-center">
+        if your local endpoint does not require a key, set base URL in Settings and skip this
+      </div>
+
+      {error && (
+        <div className="flex items-center gap-1.5 text-[10px] text-destructive">
+          <AlertCircle className="w-3 h-3 shrink-0" />
+          {error}
         </div>
       )}
     </div>
