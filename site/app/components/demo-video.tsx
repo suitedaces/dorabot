@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, useCallback, useEffect } from "react"
+import { useState, useRef, useCallback } from "react"
 
 const PREVIEW_URL = "https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev/demo-preview.mp4"
 const FULL_VIDEO_URL = "https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev/dorabot-demo-annotated.mp4"
@@ -8,14 +8,7 @@ const POSTER_URL = "https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev/demo-pos
 
 export function DemoVideo() {
   const [playing, setPlaying] = useState(false)
-  const [previewReady, setPreviewReady] = useState(false)
   const fullVideoRef = useRef<HTMLVideoElement>(null)
-
-  // delay loading the preview video so it doesn't compete with initial page load
-  useEffect(() => {
-    const t = setTimeout(() => setPreviewReady(true), 1500)
-    return () => clearTimeout(t)
-  }, [])
 
   const playFull = useCallback(() => {
     setPlaying(true)
@@ -27,21 +20,16 @@ export function DemoVideo() {
       <div className="relative overflow-hidden rounded-xl border border-border bg-surface-base/50 shadow-2xl shadow-black/20" style={{ aspectRatio: "3200/2160" }}>
         {!playing ? (
           <div className="absolute inset-0 cursor-pointer" onClick={playFull}>
-            {previewReady ? (
-              <video
-                autoPlay
-                loop
-                muted
-                playsInline
-                preload="none"
-                poster={POSTER_URL}
-                className="h-full w-full object-cover"
-              >
-                <source src={PREVIEW_URL} type="video/mp4" />
-              </video>
-            ) : (
-              <img src={POSTER_URL} alt="" className="h-full w-full object-cover" />
-            )}
+            <video
+              autoPlay
+              loop
+              muted
+              playsInline
+              poster={POSTER_URL}
+              className="h-full w-full object-cover"
+            >
+              <source src={PREVIEW_URL} type="video/mp4" />
+            </video>
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/10 transition-colors hover:bg-black/20">
               <div className="flex h-16 w-16 items-center justify-center rounded-full bg-white/90 shadow-lg backdrop-blur-sm transition-transform hover:scale-110 sm:h-20 sm:w-20">
                 <svg className="h-7 w-7 translate-x-0.5 text-gray-900 sm:h-8 sm:w-8" fill="currentColor" viewBox="0 0 24 24">
