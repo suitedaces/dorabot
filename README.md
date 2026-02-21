@@ -20,7 +20,7 @@
 
 The agent manages its own goals, tracks research, messages you on Telegram and WhatsApp, runs scheduled tasks, and remembers everything across sessions.
 
-https://github.com/user-attachments/assets/dc3deffe-2514-40ef-9b90-2bc21de5f87e
+https://github.com/user-attachments/assets/2ec5dd22-7b47-4ec0-a60b-62380e560bd0
 
 ## Persistent Memory & Self-Learning
 
