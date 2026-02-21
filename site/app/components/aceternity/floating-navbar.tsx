@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { motion, useScroll, useMotionValueEvent, AnimatePresence } from "motion/react"
+import { LazyMotion, domAnimation, m, useScroll, useMotionValueEvent, AnimatePresence } from "motion/react"
 import { cn } from "@/lib/utils"
 
 export function FloatingNavbar({
@@ -37,8 +37,9 @@ export function FloatingNavbar({
   })
 
   return (
+    <LazyMotion features={domAnimation}>
     <AnimatePresence mode="wait">
-      <motion.nav
+      <m.nav
         initial={{ opacity: 1, y: 0 }}
         animate={{ y: visible ? 0 : -100, opacity: visible ? 1 : 0 }}
         transition={{ duration: 0.3 }}
@@ -83,7 +84,7 @@ export function FloatingNavbar({
         {/* mobile dropdown */}
         <AnimatePresence>
           {mobileOpen && (
-            <motion.div
+            <m.div
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: "auto", opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
@@ -107,10 +108,11 @@ export function FloatingNavbar({
                   </div>
                 )}
               </div>
-            </motion.div>
+            </m.div>
           )}
         </AnimatePresence>
-      </motion.nav>
+      </m.nav>
     </AnimatePresence>
+    </LazyMotion>
   )
 }

@@ -1,6 +1,5 @@
-"use client"
-
-import { motion } from "motion/react"
+import { ScrollReveal, StaggerReveal } from "../scroll-reveal"
+import { LazyVideo } from "../lazy-video"
 
 function WhatsAppLogo() {
   return (
@@ -68,68 +67,28 @@ const features = [
   },
 ]
 
-const containerVariants = {
-  hidden: {},
-  visible: {
-    transition: {
-      staggerChildren: 0.08,
-    },
-  },
-}
-
-const itemVariants = {
-  hidden: { opacity: 0, y: 16 },
-  visible: {
-    opacity: 1,
-    y: 0,
-    transition: { duration: 0.4 },
-  },
-}
-
 export function Features() {
   return (
     <section id="features" className="px-4 py-20 sm:px-8 sm:py-28 lg:px-12">
       <div className="mx-auto max-w-7xl">
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true, margin: "-100px" }}
-          transition={{ duration: 0.4 }}
-          className="text-center mb-14"
-        >
+        <ScrollReveal className="text-center mb-14">
           <h2 className="text-3xl font-bold sm:text-4xl lg:text-5xl tracking-tight">
             From model to autonomous operator
           </h2>
           <p className="mt-4 text-text-secondary text-base sm:text-lg max-w-2xl mx-auto">
             Bring your own API key or subscription. dorabot handles the rest.
           </p>
-        </motion.div>
+        </ScrollReveal>
 
-        <motion.div
-          variants={containerVariants}
-          initial="hidden"
-          whileInView="visible"
-          viewport={{ once: true, margin: "-50px" }}
-          className="space-y-8 lg:space-y-10"
-        >
+        <StaggerReveal className="space-y-8 lg:space-y-10">
           {features.map((f, i) => (
-            <motion.div
+            <div
               key={f.title}
-              variants={itemVariants}
-              className={`flex flex-col ${i % 2 === 0 ? "md:flex-row" : "md:flex-row-reverse"} gap-6 md:gap-12 lg:gap-16 items-center`}
+              className={`stagger-item flex flex-col ${i % 2 === 0 ? "md:flex-row" : "md:flex-row-reverse"} gap-6 md:gap-12 lg:gap-16 items-center`}
             >
-              {/* GIF */}
               <div className="w-full md:w-7/12 rounded-xl border border-border overflow-hidden bg-surface-base/30">
-                <video
-                  src={f.video}
-                  autoPlay
-                  loop
-                  muted
-                  playsInline
-                  className="w-full"
-                />
+                <LazyVideo src={f.video} className="w-full" />
               </div>
-              {/* Text */}
               <div className="w-full md:w-5/12">
                 <h3 className="text-xl sm:text-2xl font-semibold mb-3">{f.title}</h3>
                 {f.title === "Multi-Channel Messaging" && (
@@ -149,9 +108,9 @@ export function Features() {
                   {f.description}
                 </p>
               </div>
-            </motion.div>
+            </div>
           ))}
-        </motion.div>
+        </StaggerReveal>
       </div>
     </section>
   )

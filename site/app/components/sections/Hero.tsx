@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useRef, useCallback } from "react"
-import { motion } from "motion/react"
+import { LazyMotion, domAnimation, m } from "motion/react"
 import { HoverBorderGradient } from "../aceternity/hover-border-gradient"
 import { Brain, Target, MousePointer2 } from "lucide-react"
 
@@ -81,7 +81,7 @@ function DemoVideo() {
   }, [])
 
   return (
-    <motion.div
+    <m.div
       initial={{ opacity: 0, y: 24 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.6, delay: 0.5 }}
@@ -120,139 +120,134 @@ function DemoVideo() {
           </video>
         )}
       </div>
-    </motion.div>
+    </m.div>
   )
 }
 
 export function Hero() {
   return (
-    <section className="relative flex flex-col items-center justify-center overflow-hidden px-4 pt-20 pb-14 sm:px-8 sm:pt-24 sm:pb-16 lg:px-12 lg:pt-28">
-      {/* Subtle gradient background */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[400px] bg-accent/5 blur-[120px] rounded-full" />
-      </div>
+    <LazyMotion features={domAnimation}>
+      <section className="relative flex flex-col items-center justify-center overflow-hidden px-4 pt-20 pb-14 sm:px-8 sm:pt-24 sm:pb-16 lg:px-12 lg:pt-28">
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+          <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[400px] bg-accent/5 blur-[120px] rounded-full" />
+        </div>
 
-      <div className="relative z-10 mx-auto w-full max-w-7xl">
-        {/* Badge */}
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-          className="mb-4 flex justify-center"
-        >
-          <div className="inline-flex items-center gap-2 rounded-full border border-border bg-bg-card/40 px-3.5 py-2 text-xs text-text-secondary sm:px-5 sm:py-2.5 sm:text-sm">
-            <span className="inline-block h-2.5 w-2.5 rounded-full bg-green animate-pulse" />
-            Open-Source · 100% private · 100% local
-          </div>
-        </motion.div>
-
-        <div className="text-center">
-          <motion.div
-            initial={{ opacity: 0, y: 14 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.45, delay: 0.08 }}
-            className="mb-6 flex justify-center"
-          >
-            <img
-              src="/dorabot.png"
-              alt="dorabot"
-              className="h-28 w-auto dorabot-alive sm:h-32"
-              style={{ imageRendering: "pixelated" }}
-            />
-          </motion.div>
-
-          {/* Headline */}
-          <motion.h1
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.1 }}
-            className="mx-auto max-w-4xl text-center tracking-tight"
-          >
-            <span className="block bg-gradient-to-r from-accent via-purple to-accent bg-clip-text text-2xl font-bold leading-[1.08] text-transparent sm:text-4xl md:text-5xl">
-              Your 24x7 self-learning AI agent
-            </span>
-            <span className="mt-2 block text-lg font-medium text-text sm:text-xl md:text-2xl">
-              with a workspace that runs itself.
-            </span>
-          </motion.h1>
-
-          {/* Subtitle highlights */}
-          <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.2 }}
-            className="mx-auto mt-6 flex max-w-4xl flex-wrap items-center justify-center gap-2 sm:gap-3"
-          >
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-card/70 px-2.5 py-1.5 text-xs font-medium text-text sm:px-3 sm:text-base">
-              <Brain className="h-4 w-4 text-accent" />
-              Persistent memory
-            </span>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-card/70 px-2.5 py-1.5 text-xs font-medium text-text sm:px-3 sm:text-base">
-              <Target className="h-4 w-4 text-accent" />
-              Autonomous goals
-            </span>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-card/70 px-2.5 py-1.5 text-xs font-medium text-text sm:px-3 sm:text-base">
-              <MousePointer2 className="h-4 w-4 text-accent" />
-              Browser automation
-            </span>
-          </motion.div>
-
-          {/* Platform pills */}
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.28 }}
-            className="mt-6 flex flex-col items-center gap-3 sm:gap-4"
-          >
-            <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-text-secondary sm:text-sm">
-              <span>Available on</span>
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-card/50 px-2.5 py-1.5 text-text sm:px-3">
-                <TelegramLogo /> Telegram
-              </span>
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-card/50 px-2.5 py-1.5 text-text sm:px-3">
-                <WhatsAppLogo /> WhatsApp
-              </span>
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-card/50 px-2.5 py-1.5 text-text sm:px-3">
-                <SlackLogo /> Slack
-              </span>
-            </div>
-            <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-text-secondary sm:text-sm">
-              <span>Compatible with</span>
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-card/50 px-2.5 py-1.5 text-text sm:px-3">
-                <ClaudeLogo /> Claude Code
-              </span>
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-card/50 px-2.5 py-1.5 text-text sm:px-3">
-                <OpenAILogo /> Codex
-              </span>
-            </div>
-          </motion.div>
-
-          {/* CTA */}
-          <motion.div
+        <div className="relative z-10 mx-auto w-full max-w-7xl">
+          <m.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.35 }}
-            className="mt-10 flex w-full max-w-xl flex-col items-center gap-3 sm:max-w-none sm:flex-row sm:justify-center sm:gap-4"
+            transition={{ duration: 0.5 }}
+            className="mb-4 flex justify-center"
           >
-            <a href="/api/download">
-              <HoverBorderGradient containerClassName="w-full rounded-lg border border-white sm:w-auto" as="div">
-                <span className="flex w-full items-center justify-center gap-3 px-3 py-2 text-base font-medium text-text">
-                  <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
-                  Download for macOS
-                  <ArrowRight />
-                </span>
-              </HoverBorderGradient>
-            </a>
-            <a href="https://github.com/suitedaces/dorabot" className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-border bg-bg-card/50 px-4 text-sm text-text transition-colors hover:text-accent sm:h-auto sm:w-auto sm:border-0 sm:bg-transparent sm:px-0">
-              <GithubIcon />
-              View on GitHub
-            </a>
-          </motion.div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-border bg-bg-card/40 px-3.5 py-2 text-xs text-text-secondary sm:px-5 sm:py-2.5 sm:text-sm">
+              <span className="inline-block h-2.5 w-2.5 rounded-full bg-green animate-pulse" />
+              Open-Source · 100% private · 100% local
+            </div>
+          </m.div>
 
-          {/* Demo video */}
-          <DemoVideo />
+          <div className="text-center">
+            <m.div
+              initial={{ opacity: 0, y: 14 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.45, delay: 0.08 }}
+              className="mb-6 flex justify-center"
+            >
+              <img
+                src="/dorabot.png"
+                alt="dorabot"
+                className="h-28 w-auto dorabot-alive sm:h-32"
+                style={{ imageRendering: "pixelated" }}
+              />
+            </m.div>
+
+            <m.h1
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.1 }}
+              className="mx-auto max-w-4xl text-center tracking-tight"
+            >
+              <span className="block bg-gradient-to-r from-accent via-purple to-accent bg-clip-text text-2xl font-bold leading-[1.08] text-transparent sm:text-4xl md:text-5xl">
+                Your 24x7 self-learning AI agent
+              </span>
+              <span className="mt-2 block text-lg font-medium text-text sm:text-xl md:text-2xl">
+                with a workspace that runs itself.
+              </span>
+            </m.h1>
+
+            <m.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.2 }}
+              className="mx-auto mt-6 flex max-w-4xl flex-wrap items-center justify-center gap-2 sm:gap-3"
+            >
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-card/70 px-2.5 py-1.5 text-xs font-medium text-text sm:px-3 sm:text-base">
+                <Brain className="h-4 w-4 text-accent" />
+                Persistent memory
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-card/70 px-2.5 py-1.5 text-xs font-medium text-text sm:px-3 sm:text-base">
+                <Target className="h-4 w-4 text-accent" />
+                Autonomous goals
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-card/70 px-2.5 py-1.5 text-xs font-medium text-text sm:px-3 sm:text-base">
+                <MousePointer2 className="h-4 w-4 text-accent" />
+                Browser automation
+              </span>
+            </m.div>
+
+            <m.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.28 }}
+              className="mt-6 flex flex-col items-center gap-3 sm:gap-4"
+            >
+              <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-text-secondary sm:text-sm">
+                <span>Available on</span>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-card/50 px-2.5 py-1.5 text-text sm:px-3">
+                  <TelegramLogo /> Telegram
+                </span>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-card/50 px-2.5 py-1.5 text-text sm:px-3">
+                  <WhatsAppLogo /> WhatsApp
+                </span>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-card/50 px-2.5 py-1.5 text-text sm:px-3">
+                  <SlackLogo /> Slack
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-text-secondary sm:text-sm">
+                <span>Compatible with</span>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-card/50 px-2.5 py-1.5 text-text sm:px-3">
+                  <ClaudeLogo /> Claude Code
+                </span>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-card/50 px-2.5 py-1.5 text-text sm:px-3">
+                  <OpenAILogo /> Codex
+                </span>
+              </div>
+            </m.div>
+
+            <m.div
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.35 }}
+              className="mt-10 flex w-full max-w-xl flex-col items-center gap-3 sm:max-w-none sm:flex-row sm:justify-center sm:gap-4"
+            >
+              <a href="/api/download">
+                <HoverBorderGradient containerClassName="w-full rounded-lg border border-white sm:w-auto" as="div">
+                  <span className="flex w-full items-center justify-center gap-3 px-3 py-2 text-base font-medium text-text">
+                    <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+                    Download for macOS
+                    <ArrowRight />
+                  </span>
+                </HoverBorderGradient>
+              </a>
+              <a href="https://github.com/suitedaces/dorabot" className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-border bg-bg-card/50 px-4 text-sm text-text transition-colors hover:text-accent sm:h-auto sm:w-auto sm:border-0 sm:bg-transparent sm:px-0">
+                <GithubIcon />
+                View on GitHub
+              </a>
+            </m.div>
+
+            <DemoVideo />
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
+    </LazyMotion>
   )
 }

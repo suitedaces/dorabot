@@ -1,6 +1,4 @@
-"use client"
-
-import { motion } from "motion/react"
+import { ScrollReveal } from "../scroll-reveal"
 import { HoverBorderGradient } from "../aceternity/hover-border-gradient"
 
 function GithubIcon() {
@@ -18,37 +16,22 @@ function GithubIcon() {
 export function CTA() {
   return (
     <section className="relative overflow-hidden border-t border-border px-4 py-24 sm:px-8 sm:py-32 lg:px-12">
-      {/* Background glow */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[300px] bg-accent/5 blur-[120px] rounded-full" />
       </div>
 
       <div className="relative z-10 mx-auto max-w-5xl text-center">
-        <motion.h2
-          initial={{ opacity: 0, y: 12 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.4 }}
-          className="text-3xl font-bold sm:text-4xl lg:text-5xl tracking-tight"
-        >
-          Your data never leaves your machine
-        </motion.h2>
-        <motion.p
-          initial={{ opacity: 0 }}
-          whileInView={{ opacity: 1 }}
-          viewport={{ once: true }}
-          transition={{ delay: 0.2, duration: 0.4 }}
-          className="mt-5 text-text-secondary text-base sm:text-lg"
-        >
-          Open source. MIT licensed. One-click install.
-        </motion.p>
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ delay: 0.3, duration: 0.4 }}
-          className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center"
-        >
+        <ScrollReveal>
+          <h2 className="text-3xl font-bold sm:text-4xl lg:text-5xl tracking-tight">
+            Your data never leaves your machine
+          </h2>
+        </ScrollReveal>
+        <ScrollReveal delay={0.15}>
+          <p className="mt-5 text-text-secondary text-base sm:text-lg">
+            Open source. MIT licensed. One-click install.
+          </p>
+        </ScrollReveal>
+        <ScrollReveal delay={0.25} className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
           <a href="https://github.com/suitedaces/dorabot/releases/latest">
             <HoverBorderGradient containerClassName="rounded-lg" as="div">
               <span className="flex items-center gap-3 px-3 py-1.5 text-base font-medium text-text">
@@ -61,7 +44,7 @@ export function CTA() {
             <GithubIcon />
             View on GitHub
           </a>
-        </motion.div>
+        </ScrollReveal>
       </div>
     </section>
   )

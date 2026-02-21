@@ -1,7 +1,7 @@
 "use client"
 
 import { useRef, useState, useEffect } from "react"
-import { motion } from "motion/react"
+import { LazyMotion, domAnimation, m } from "motion/react"
 import { cn } from "@/lib/utils"
 
 export function HoverBorderGradient({
@@ -61,17 +61,19 @@ export function HoverBorderGradient({
       {...props}
     >
       <div className={cn("w-auto z-10 rounded-[inherit] px-6 py-2.5", className)}>{children}</div>
-      <motion.div
-        className="flex-none inset-0 overflow-hidden absolute z-0 rounded-[inherit]"
-        style={{ filter: "blur(2px)", position: "absolute", width: "100%", height: "100%" }}
-        initial={{ background: movingMap[direction] }}
-        animate={{
-          background: hovered
-            ? [movingMap[direction], highlight]
-            : movingMap[direction],
-        }}
-        transition={{ ease: "linear", duration: duration ?? 1 }}
-      />
+      <LazyMotion features={domAnimation}>
+        <m.div
+          className="flex-none inset-0 overflow-hidden absolute z-0 rounded-[inherit]"
+          style={{ filter: "blur(2px)", position: "absolute", width: "100%", height: "100%" }}
+          initial={{ background: movingMap[direction] }}
+          animate={{
+            background: hovered
+              ? [movingMap[direction], highlight]
+              : movingMap[direction],
+          }}
+          transition={{ ease: "linear", duration: duration ?? 1 }}
+        />
+      </LazyMotion>
       <div className="bg-bg-card absolute z-1 flex-none inset-[2px] rounded-[inherit]" />
     </Tag>
   )

@@ -1,6 +1,4 @@
-"use client"
-
-import { motion } from "motion/react"
+import { ScrollReveal, StaggerReveal } from "../scroll-reveal"
 
 const items = [
   {
@@ -29,54 +27,25 @@ const items = [
   },
 ]
 
-const containerVariants = {
-  hidden: {},
-  visible: {
-    transition: { staggerChildren: 0.05 },
-  },
-}
-
-const itemVariants = {
-  hidden: { opacity: 0, y: 8 },
-  visible: {
-    opacity: 1,
-    y: 0,
-    transition: { duration: 0.3 },
-  },
-}
-
 export function Also() {
   return (
     <section className="border-t border-border px-4 py-16 sm:px-8 sm:py-20 lg:px-12">
       <div className="mx-auto max-w-7xl">
-        <motion.div
-          initial={{ opacity: 0, y: 12 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true, margin: "-80px" }}
-          transition={{ duration: 0.4 }}
-          className="text-center mb-10"
-        >
+        <ScrollReveal className="text-center mb-10">
           <h2 className="text-2xl font-bold sm:text-3xl tracking-tight">Also</h2>
-        </motion.div>
+        </ScrollReveal>
 
-        <motion.div
-          variants={containerVariants}
-          initial="hidden"
-          whileInView="visible"
-          viewport={{ once: true, margin: "-50px" }}
-          className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
-        >
+        <StaggerReveal className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" staggerDelay={0.05}>
           {items.map((item) => (
-            <motion.div
+            <div
               key={item.label}
-              variants={itemVariants}
-              className="rounded-lg border border-border bg-bg-card/40 p-5"
+              className="stagger-item rounded-lg border border-border bg-bg-card/40 p-5"
             >
               <p className="font-medium text-text mb-1">{item.label}</p>
               <p className="text-sm text-text-secondary leading-relaxed">{item.detail}</p>
-            </motion.div>
+            </div>
           ))}
-        </motion.div>
+        </StaggerReveal>
       </div>
     </section>
   )

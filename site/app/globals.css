@@ -79,7 +79,7 @@ html {
 body {
   background-color: var(--color-bg);
   color: var(--color-text);
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  font-family: var(--font-jetbrains), ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
   font-size: 14px;
   line-height: 1.5;
 }
@@ -200,5 +200,28 @@ body {
 }
 
 .star-glow:active {
+  transform: translateY(0);
+}
+
+/* scroll reveal */
+.scroll-reveal {
+  opacity: 0;
+  transform: translateY(16px);
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+.scroll-reveal.revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.stagger-item {
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity 0.35s ease, transform 0.35s ease;
+}
+
+.stagger-item.revealed {
+  opacity: 1;
   transform: translateY(0);
 }
