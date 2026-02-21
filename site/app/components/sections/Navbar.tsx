@@ -44,6 +44,8 @@ export function Navbar() {
           <img
             src="/dorabot.png"
             alt="dorabot"
+            width={133}
+            height={182}
             className="h-10 sm:h-11 dorabot-alive"
             style={{ imageRendering: "pixelated" }}
           />

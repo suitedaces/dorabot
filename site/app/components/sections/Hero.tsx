@@ -85,6 +85,9 @@ export function Hero() {
             <img
               src="/dorabot.png"
               alt="dorabot"
+              width={133}
+              height={182}
+              fetchPriority="high"
               className="h-28 w-auto dorabot-alive sm:h-32"
               style={{ imageRendering: "pixelated" }}
             />

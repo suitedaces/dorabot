@@ -24,7 +24,7 @@ export function LazyVideo({
           return () => clearTimeout(t)
         }
       },
-      { rootMargin: "0px" }
+      { rootMargin: "300px" }
     )
     observer.observe(el)
     return () => observer.disconnect()
