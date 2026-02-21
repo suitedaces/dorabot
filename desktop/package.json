@@ -7,6 +7,7 @@
   "main": "out/main/main.js",
   "scripts": {
     "dev": "electron-vite dev",
+    "web": "vite",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "bundle-gateway": "cd .. && npm run build && bash scripts/bundle-gateway.sh",
