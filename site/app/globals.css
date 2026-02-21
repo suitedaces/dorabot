@@ -215,18 +215,24 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
-.hero-stagger {
-  opacity: 0;
-  animation: fade-up 0.5s ease forwards;
+/* Mobile: skip stagger, show everything instantly */
+@media (max-width: 767px) {
+  .hero-stagger { opacity: 1; }
 }
 
-.hero-stagger-1 { animation-delay: 0s; }
-.hero-stagger-2 { animation-delay: 0.08s; }
-.hero-stagger-3 { animation-delay: 0.12s; }
-.hero-stagger-4 { animation-delay: 0.2s; }
-.hero-stagger-5 { animation-delay: 0.28s; }
-.hero-stagger-6 { animation-delay: 0.35s; }
-.hero-stagger-7 { animation-delay: 0.5s; }
+@media (min-width: 768px) {
+  .hero-stagger {
+    opacity: 0;
+    animation: fade-up 0.5s ease forwards;
+  }
+  .hero-stagger-1 { animation-delay: 0s; }
+  .hero-stagger-2 { animation-delay: 0.08s; }
+  .hero-stagger-3 { animation-delay: 0.12s; }
+  .hero-stagger-4 { animation-delay: 0.2s; }
+  .hero-stagger-5 { animation-delay: 0.28s; }
+  .hero-stagger-6 { animation-delay: 0.35s; }
+  .hero-stagger-7 { animation-delay: 0.5s; }
+}
 
 /* scroll reveal — visible by default, animate when scrolling */
 .scroll-reveal {
@@ -265,7 +271,12 @@ body {
 
 .gradient-border-bg {
   background: conic-gradient(from 0deg, transparent 0 340deg, oklch(0.72 0.18 250) 360deg);
-  animation: border-spin 4s linear infinite;
+}
+
+@media (min-width: 768px) {
+  .gradient-border-bg {
+    animation: border-spin 4s linear infinite;
+  }
 }
 
 .group:hover .gradient-border-bg {

@@ -45,7 +45,7 @@ export function FloatingNavbar({
       className={cn(
         "fixed top-0 inset-x-0 z-[5000] transition-all duration-300",
         visible ? "translate-y-0 opacity-100" : "-translate-y-full opacity-0",
-        (!atTop || mobileOpen) && "backdrop-blur-xl bg-bg/80",
+        (!atTop || mobileOpen) && "sm:backdrop-blur-xl bg-bg sm:bg-bg/80",
         "border-b",
         atTop && !mobileOpen ? "border-transparent" : "border-border",
         className
