@@ -61,3 +61,15 @@ dmg:
       y: 220
       type: link
       path: /Applications
+
+linux:
+  category: Development
+  maintainer: dorabot team <hello@dora.so>
+  synopsis: dorabot desktop control center
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64

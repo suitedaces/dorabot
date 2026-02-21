@@ -1,17 +1,14 @@
 import { z } from 'zod';
 import { tool } from '@anthropic-ai/claude-agent-sdk';
-import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { constrainImageSize } from '../image-utils.js';
-
-const execFileAsync = promisify(execFile);
+import { platformAdapter } from '../platform/index.js';
 
 export const screenshotTool = tool(
   'screenshot',
-  'Take a screenshot of the current macOS screen and save it to a file. Returns the file path and the image inline so the agent can see it.',
+  'Take a screenshot of the current screen and save it to a file. Returns the file path and the image inline so the agent can see it.',
   {
     filename: z.string().optional().describe('Custom filename (without extension). Defaults to screenshot-<timestamp>'),
     display: z.number().optional().describe('Display number to capture (default: main display)'),
@@ -21,13 +18,11 @@ export const screenshotTool = tool(
     const outPath = join(tmpdir(), `${name}.png`);
 
     try {
-      const cmd = ['screencapture', '-x']; // -x = no sound
-      if (args.display) {
-        cmd.push('-D', String(args.display));
-      }
-      cmd.push(outPath);
-
-      await execFileAsync(cmd[0], cmd.slice(1), { timeout: 10_000 });
+      await platformAdapter.captureScreen({
+        outputPath: outPath,
+        display: args.display,
+        timeoutMs: 10_000,
+      });
 
       const raw = await readFile(outPath);
       const buffer = await constrainImageSize(raw);

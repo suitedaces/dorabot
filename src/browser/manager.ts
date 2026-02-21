@@ -3,8 +3,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { BROWSER_PROFILE_DIR } from '../workspace.js';
+import { platformAdapter, type BrowserInstallation } from '../platform/index.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -25,44 +25,30 @@ let context: BrowserContext | null = null;
 let activePage: Page | null = null;
 let browserProcess: ReturnType<typeof import('node:child_process').spawn> | null = null;
 
-// browser executable → real macOS user data dir
-const BROWSER_INFO: { exec: string; dataDir: string; appName: string }[] = [
-  {
-    exec: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    dataDir: join(homedir(), 'Library', 'Application Support', 'Google', 'Chrome'),
-    appName: 'Google Chrome',
-  },
-  {
-    exec: '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-    dataDir: join(homedir(), 'Library', 'Application Support', 'BraveSoftware', 'Brave-Browser'),
-    appName: 'Brave Browser',
-  },
-  {
-    exec: '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-    dataDir: join(homedir(), 'Library', 'Application Support', 'Microsoft Edge'),
-    appName: 'Microsoft Edge',
-  },
-  {
-    exec: '/Applications/Chromium.app/Contents/MacOS/Chromium',
-    dataDir: join(homedir(), 'Library', 'Application Support', 'Chromium'),
-    appName: 'Chromium',
-  },
-  {
-    exec: '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-    dataDir: join(homedir(), 'Library', 'Application Support', 'Google', 'Chrome Canary'),
-    appName: 'Google Chrome Canary',
-  },
-];
+function hasPathSeparator(value: string): boolean {
+  return value.includes('/') || value.includes('\\');
+}
 
-export function findChromium(override?: string): { exec: string; dataDir: string; appName: string } | null {
-  if (override && existsSync(override)) {
-    // custom path — check if it matches a known browser for profile dir
-    const known = BROWSER_INFO.find(b => b.exec === override);
-    return known || { exec: override, dataDir: join(homedir(), 'Library', 'Application Support', 'Google', 'Chrome'), appName: 'Google Chrome' };
+function isExecutableAvailable(executable: string): boolean {
+  if (!executable) return false;
+  if (hasPathSeparator(executable)) {
+    return existsSync(executable);
   }
-  for (const b of BROWSER_INFO) {
-    if (existsSync(b.exec)) return b;
+  return platformAdapter.hasCommand(executable);
+}
+
+export function findChromium(override?: string): BrowserInstallation | null {
+  const candidates = platformAdapter.getChromiumInstallations();
+
+  if (override && isExecutableAvailable(override)) {
+    const known = candidates.find((b) => b.exec === override || b.appName === override);
+    return known || { exec: override, dataDir: DEFAULT_PROFILE_DIR, appName: override };
   }
+
+  for (const browser of candidates) {
+    if (isExecutableAvailable(browser.exec)) return browser;
+  }
+
   return null;
 }
 
@@ -88,13 +74,10 @@ async function isAppRunning(appName: string): Promise<boolean> {
   }
 }
 
-// gracefully quit a macOS app and wait for it to exit
+// gracefully quit a browser app and wait for it to exit
 async function quitApp(appName: string, timeoutMs = 5000): Promise<void> {
-  try {
-    await execFileAsync('osascript', ['-e', `tell application "${appName}" to quit`]);
-  } catch {
-    // app might not be running or not respond to osascript
-  }
+  await platformAdapter.quitApplication(appName, timeoutMs);
+
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (!(await isAppRunning(appName))) return;

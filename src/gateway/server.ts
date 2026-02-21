@@ -49,6 +49,7 @@ import { randomUUID, randomBytes } from 'node:crypto';
 import { classifyToolCall, cleanToolName, isToolAllowed, type Tier } from './tool-policy.js';
 import { AUTONOMOUS_SCHEDULE_ID, buildAutonomousCalendarItem, PULSE_INTERVALS, DEFAULT_PULSE_INTERVAL, pulseIntervalToRrule, rruleToPulseInterval } from '../autonomous.js';
 import { ensureWorktreeForPlan, getWorktreeStats, mergeWorktreeBranch, pushWorktreePr, removeWorktree } from '../worktree/manager.js';
+import { platformAdapter } from '../platform/index.js';
 import {
   DORABOT_DIR,
   GATEWAY_TOKEN_PATH,
@@ -65,12 +66,8 @@ import {
 const DEFAULT_PORT = 18789;
 const DEFAULT_HOST = '127.0.0.1';
 
-function macNotify(title: string, body: string) {
-  try {
-    const t = title.replace(/"/g, '\\"');
-    const b = body.replace(/"/g, '\\"');
-    execSync(`osascript -e 'display notification "${b}" with title "${t}"'`, { stdio: 'ignore' });
-  } catch { /* ignore */ }
+function notifyUser(title: string, body: string) {
+  void platformAdapter.notify(title, body);
 }
 
 // ── Tool status display maps ──────────────────────────────────────────
@@ -1481,21 +1478,21 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       }),
       onItemStart: (item) => {
         if (item.id === AUTONOMOUS_SCHEDULE_ID) {
-          macNotify('Dora', 'Checking in... 👀');
+          notifyUser('Dora', 'Checking in... 👀');
           broadcast({ event: 'pulse:started', data: { timestamp: Date.now() } });
         } else {
-          macNotify('Dora', `Working on "${item.summary}"`);
+          notifyUser('Dora', `Working on "${item.summary}"`);
         }
       },
       onItemRun: (item, result) => {
         if (item.id === AUTONOMOUS_SCHEDULE_ID) {
           if (result.messaged) {
-            macNotify('Dora', 'Sent you a message 👀');
+            notifyUser('Dora', 'Sent you a message 👀');
           } else {
-            macNotify('Dora', result.status === 'ran' ? 'All caught up ✓' : 'Something went wrong, check logs');
+            notifyUser('Dora', result.status === 'ran' ? 'All caught up ✓' : 'Something went wrong, check logs');
           }
         } else {
-          macNotify('Dora', result.status === 'ran' ? `Done with "${item.summary}" ✓` : `"${item.summary}" failed`);
+          notifyUser('Dora', result.status === 'ran' ? `Done with "${item.summary}" ✓` : `"${item.summary}" failed`);
         }
         broadcast({ event: 'calendar.result', data: { item: item.id, summary: item.summary, ...result, timestamp: Date.now() } });
         if (item.id === AUTONOMOUS_SCHEDULE_ID) {
@@ -1760,7 +1757,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       data: { taskId: task.id, eventType: 'run_started', message: `Task started: ${task.title}`, timestamp: Date.now() },
     });
     markTaskRunStarted(taskId, sessionKey);
-    macNotify('Dora', `Task started: ${task.title}`);
+    notifyUser('Dora', `Task started: ${task.title}`);
     void sendTelegramOwnerStatus(`▶️ Task #${task.id} started: ${task.title}`);
 
     void handleAgentRun({
@@ -1809,7 +1806,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       saveTasks(tasks);
       appendTaskLog(task.id, 'approval_denied', task.reason);
       broadcast({ event: 'goals.update', data: { taskId: task.id, task } });
-      macNotify('Dora', `Task denied: ${task.title}`);
+      notifyUser('Dora', `Task denied: ${task.title}`);
       void sendTelegramOwnerStatus(`❌ Task #${task.id} not approved: ${task.title}\nReason: ${task.reason}`);
       return null;
     }
@@ -1827,7 +1824,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       appendTaskLog(task.id, 'run_error', errMsg);
-      macNotify('Dora', `Task start failed: ${task.title}`);
+      notifyUser('Dora', `Task start failed: ${task.title}`);
       return null;
     }
   }
@@ -1866,7 +1863,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       },
     });
     channelManager.sendApprovalRequest({ requestId, toolName: 'task_start', input, chatId: targetChatId }, targetChannel).catch(() => {});
-    macNotify('Dora', `Approval needed: ${task.title}`);
+    notifyUser('Dora', `Approval needed: ${task.title}`);
     void sendTelegramOwnerStatus(`🛡️ Task #${task.id} awaiting approval: ${task.title}`);
   }
 
@@ -2613,11 +2610,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 || t?.startsWith('mcp__dorabot-tools__ideas_')
               ))) {
                 broadcast({ event: 'goals.update', data: {} });
-                macNotify('Dora', 'Goals/tasks updated');
+                notifyUser('Dora', 'Goals/tasks updated');
               }
               if (allTools.some(t => t?.startsWith('research_') || t?.startsWith('mcp__dorabot-tools__research_'))) {
                 broadcast({ event: 'research.update', data: {} });
-                macNotify('Dora', 'Research updated');
+                notifyUser('Dora', 'Research updated');
               }
             }
 
@@ -3449,7 +3446,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           goals.goals.push(goal);
           saveGoals(goals);
           broadcast({ event: 'goals.update', data: { goalId: goal.id, goal } });
-          macNotify('Dora', `Goal created: ${goal.title}`);
+          notifyUser('Dora', `Goal created: ${goal.title}`);
           return { id, result: goal };
         }
 
@@ -3469,7 +3466,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           saveGoals(goals);
 
           broadcast({ event: 'goals.update', data: { goalId: goal.id, goal } });
-          macNotify('Dora', `Goal updated: ${goal.title}`);
+          notifyUser('Dora', `Goal updated: ${goal.title}`);
           return { id, result: goal };
         }
 
@@ -3496,7 +3493,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (changed) saveTasks(tasks);
 
           broadcast({ event: 'goals.update', data: { goalId, deleted: true } });
-          macNotify('Dora', `Goal deleted: #${goalId}`);
+          notifyUser('Dora', `Goal deleted: #${goalId}`);
           return { id, result: { deleted: true } };
         }
 
@@ -3537,7 +3534,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           saveTasks(tasks);
           appendTaskLog(task.id, 'rpc_add', `Task created: ${task.title}`);
           broadcast({ event: 'goals.update', data: { taskId: task.id, task } });
-          macNotify('Dora', `Task created: ${task.title}`);
+          notifyUser('Dora', `Task created: ${task.title}`);
           if (task.status === 'planned') {
             await requestTaskApproval(task.id);
           }
@@ -3584,7 +3581,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             goalId: task.goalId,
           });
           broadcast({ event: 'goals.update', data: { taskId: task.id, task } });
-          macNotify('Dora', `Task updated: ${task.title}`);
+          notifyUser('Dora', `Task updated: ${task.title}`);
 
           if (task.status === 'planned') {
             await requestTaskApproval(task.id);
@@ -3604,7 +3601,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           activeTaskRuns.delete(taskId);
           appendTaskLog(taskId, 'rpc_delete', `Task #${taskId} deleted`);
           broadcast({ event: 'goals.update', data: { taskId, deleted: true } });
-          macNotify('Dora', `Task deleted: #${taskId}`);
+          notifyUser('Dora', `Task deleted: #${taskId}`);
           return { id, result: { deleted: true } };
         }
 
@@ -3756,7 +3753,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             event: 'plans.log',
             data: { planId: plan.id, eventType: 'rpc_update', message: `Plan updated: ${plan.title}`, timestamp: Date.now() },
           });
-          macNotify('Dora', `Plan updated: ${plan.title}`);
+          notifyUser('Dora', `Plan updated: ${plan.title}`);
           return { id, result: plan };
         }
 
@@ -3770,7 +3767,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           savePlans(plans);
           activePlanRuns.delete(planId);
           broadcast({ event: 'plans.update', data: { planId, deleted: true } });
-          macNotify('Dora', `Plan deleted: #${planId}`);
+          notifyUser('Dora', `Plan deleted: #${planId}`);
           return { id, result: { deleted: true } };
         }
 
@@ -3846,7 +3843,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             data: { planId: plan.id, eventType: 'run_started', message: `Plan started: ${plan.title}`, timestamp: Date.now() },
           });
           markPlanRunStarted(planId, sessionKey);
-          macNotify('Dora', `Plan started: ${plan.title}`);
+          notifyUser('Dora', `Plan started: ${plan.title}`);
 
           void handleAgentRun({
             prompt,
@@ -4157,7 +4154,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
           saveResearch(research);
           broadcast({ event: 'research.update', data: {} });
-          macNotify('Dora', `Research updated: ${item.title}`);
+          notifyUser('Dora', `Research updated: ${item.title}`);
           return { id, result: item };
         }
 
@@ -4172,7 +4169,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           // clean up file
           try { if (existsSync(deleted.filePath)) unlinkSync(deleted.filePath); } catch {}
           broadcast({ event: 'research.update', data: {} });
-          macNotify('Dora', `Research deleted: ${deleted.title}`);
+          notifyUser('Dora', `Research deleted: ${deleted.title}`);
           return { id, result: { deleted: true } };
         }
 

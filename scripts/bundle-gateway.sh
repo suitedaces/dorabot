@@ -47,34 +47,61 @@ echo "  Electron version: $ELECTRON_VER"
 cd "$GATEWAY_BUNDLE"
 npx --yes @electron/rebuild -v "$ELECTRON_VER" -m . -w better-sqlite3 2>&1 | tail -5
 
-# 5. Strip non-macOS vendor binaries from Codex SDK (~330MB savings)
-echo "  Stripping non-macOS binaries from @openai/codex-sdk..."
+# 5. Strip non-target vendor binaries from Codex SDK (~330MB savings)
+echo "  Stripping non-target binaries from @openai/codex-sdk..."
 CODEX_VENDOR="$GATEWAY_BUNDLE/node_modules/@openai/codex-sdk/vendor"
 if [ -d "$CODEX_VENDOR" ]; then
-  # Detect current arch
+  OS="$(uname -s)"
   ARCH=$(uname -m)
-  if [ "$ARCH" = "arm64" ]; then
-    KEEP_DIR="aarch64-apple-darwin"
+  KEEP_DIR=""
+  case "$OS" in
+    Darwin)
+      if [ "$ARCH" = "arm64" ]; then
+        KEEP_DIR="aarch64-apple-darwin"
+      else
+        KEEP_DIR="x86_64-apple-darwin"
+      fi
+      ;;
+    Linux)
+      if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+        KEEP_DIR="aarch64-unknown-linux-musl"
+      else
+        KEEP_DIR="x86_64-unknown-linux-musl"
+      fi
+      ;;
+  esac
+
+  if [ -n "$KEEP_DIR" ]; then
+    for dir in "$CODEX_VENDOR"/*/; do
+      dirname=$(basename "$dir")
+      if [ "$dirname" != "$KEEP_DIR" ]; then
+        echo "    Removing vendor/$dirname"
+        rm -rf "$dir"
+      fi
+    done
   else
-    KEEP_DIR="x86_64-apple-darwin"
+    echo "    Unknown OS ($OS) — keeping all vendor binaries"
   fi
-  for dir in "$CODEX_VENDOR"/*/; do
-    dirname=$(basename "$dir")
-    if [ "$dirname" != "$KEEP_DIR" ]; then
-      echo "    Removing vendor/$dirname"
-      rm -rf "$dir"
-    fi
-  done
 fi
 
-# 6. Strip non-macOS sharp binaries
-echo "  Stripping non-macOS sharp binaries..."
+# 6. Strip non-target sharp binaries
+echo "  Stripping non-target sharp binaries..."
 SHARP_DIR="$GATEWAY_BUNDLE/node_modules/@img"
 if [ -d "$SHARP_DIR" ]; then
+  OS="$(uname -s)"
+  KEEP_PATTERN=""
+  case "$OS" in
+    Darwin) KEEP_PATTERN="darwin" ;;
+    Linux) KEEP_PATTERN="linux" ;;
+  esac
+
   for dir in "$SHARP_DIR"/*/; do
     dirname=$(basename "$dir")
+    if [ -z "$KEEP_PATTERN" ]; then
+      continue
+    fi
     case "$dirname" in
-      *darwin*|colour) ;; # keep macOS sharp packages + pure JS deps
+      *"$KEEP_PATTERN"*|colour) ;; # keep target platform packages + pure JS deps
       *) echo "    Removing @img/$dirname"; rm -rf "$dir" ;;
     esac
   done
