@@ -1,31 +1,74 @@
 @import "tailwindcss";
 
 @theme {
-  /* OKLch color system - matches desktop app dark mode */
-  --color-bg: oklch(0.14 0.005 270);
-  --color-bg-secondary: oklch(0.18 0.005 270);
-  --color-bg-card: oklch(0.18 0.005 270 / 0.7);
-  --color-border: oklch(0.28 0.008 270 / 0.5);
-  --color-border-hover: oklch(0.35 0.008 270 / 0.6);
-  --color-text: oklch(0.90 0 0);
-  --color-text-secondary: oklch(0.60 0 0);
-  --color-text-muted: oklch(0.45 0 0);
-  --color-primary: oklch(0.72 0.18 250);
-  --color-primary-hover: oklch(0.65 0.20 250);
-  --color-accent: oklch(0.72 0.18 250);
-  --color-accent-hover: oklch(0.65 0.20 250);
-  --color-green: oklch(0.70 0.24 145);
-  --color-purple: oklch(0.68 0.19 310);
-  --color-orange: oklch(0.74 0.19 80);
-  --color-destructive: oklch(0.65 0.24 27);
-  --color-ring: oklch(0.72 0.18 250);
+  /* Runtime theme variables (desktop-aligned) */
+  --color-bg: var(--bg);
+  --color-bg-secondary: var(--bg-secondary);
+  --color-bg-card: var(--bg-card);
+  --color-border: var(--border);
+  --color-border-hover: var(--border-hover);
+  --color-text: var(--text);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-primary: var(--accent);
+  --color-primary-hover: var(--accent-hover);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-green: var(--success);
+  --color-purple: var(--purple);
+  --color-orange: var(--warning);
+  --color-destructive: var(--destructive);
+  --color-ring: var(--accent);
 
-  /* Surface layers - matches desktop stream hierarchy */
-  --color-surface-deep: oklch(0.10 0.005 280);
-  --color-surface-base: oklch(0.12 0.005 280);
-  --color-surface-mid: oklch(0.14 0.005 280);
-  --color-surface-raised: oklch(0.16 0.005 280);
-  --color-surface-elevated: oklch(0.18 0.005 280);
+  --color-surface-deep: var(--surface-deep);
+  --color-surface-base: var(--surface-base);
+  --color-surface-mid: var(--surface-mid);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-elevated: var(--surface-elevated);
+}
+
+:root {
+  --bg: oklch(0.98 0.002 270);
+  --bg-secondary: oklch(0.95 0.004 270);
+  --bg-card: oklch(0.99 0.002 270 / 0.9);
+  --border: oklch(0.78 0.012 270 / 0.55);
+  --border-hover: oklch(0.68 0.012 270 / 0.65);
+  --text: oklch(0.20 0.01 270);
+  --text-secondary: oklch(0.42 0.01 270);
+  --text-muted: oklch(0.52 0.01 270);
+  --accent: oklch(0.50 0.18 250);
+  --accent-hover: oklch(0.45 0.2 250);
+  --success: oklch(0.45 0.22 145);
+  --purple: oklch(0.55 0.19 310);
+  --warning: oklch(0.55 0.19 80);
+  --destructive: oklch(0.55 0.24 27);
+  --surface-deep: oklch(0.98 0.003 270 / 0.85);
+  --surface-base: oklch(0.97 0.005 270 / 0.85);
+  --surface-mid: oklch(0.95 0.005 270 / 0.87);
+  --surface-raised: oklch(0.94 0.005 270 / 0.87);
+  --surface-elevated: oklch(0.92 0.005 270 / 0.9);
+}
+
+.dark {
+  --bg: oklch(0.13 0.005 270 / 0.92);
+  --bg-secondary: oklch(0.18 0.005 270);
+  --bg-card: oklch(0.16 0.005 270 / 0.75);
+  --border: oklch(0.35 0.008 270 / 0.35);
+  --border-hover: oklch(0.40 0.008 270 / 0.45);
+  --text: oklch(0.92 0 0);
+  --text-secondary: oklch(0.62 0 0);
+  --text-muted: oklch(0.48 0 0);
+  --accent: oklch(0.72 0.18 250);
+  --accent-hover: oklch(0.65 0.2 250);
+  --success: oklch(0.70 0.24 145);
+  --purple: oklch(0.68 0.19 310);
+  --warning: oklch(0.74 0.19 80);
+  --destructive: oklch(0.65 0.24 27);
+  --surface-deep: oklch(0.08 0.005 280 / 0.75);
+  --surface-base: oklch(0.10 0.005 280 / 0.78);
+  --surface-mid: oklch(0.12 0.005 280 / 0.8);
+  --surface-raised: oklch(0.14 0.005 280 / 0.8);
+  --surface-elevated: oklch(0.16 0.005 280 / 0.85);
 }
 
 html {

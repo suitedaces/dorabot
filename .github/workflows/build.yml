@@ -26,6 +26,13 @@ jobs:
         run: npm ci
         working-directory: desktop
 
+      - name: Sync desktop version
+        run: |
+          ROOT_VERSION=$(jq -r .version ../package.json)
+          jq --arg v "$ROOT_VERSION" '.version = $v' package.json > tmp.json && mv tmp.json package.json
+          echo "Synced desktop/package.json to $ROOT_VERSION"
+        working-directory: desktop
+
       - name: Build & Package
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}

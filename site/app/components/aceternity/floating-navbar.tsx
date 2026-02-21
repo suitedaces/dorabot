@@ -51,26 +51,27 @@ export function FloatingNavbar({
           className
         )}
       >
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3.5">
-          {logo}
-          {/* desktop nav */}
-          <div className="hidden sm:flex items-center gap-6">
-            {navItems.map((item) => (
-              <a
-                key={item.name}
-                href={item.link}
-                className="text-sm text-text-secondary hover:text-text transition-colors"
-              >
-                {item.name}
-              </a>
-            ))}
+        <div className="mx-auto flex w-full max-w-7xl items-center justify-between px-3 py-2.5 sm:px-8 sm:py-3.5 lg:px-12">
+          <div className="flex items-center gap-4 sm:gap-8">
+            {logo}
+            <div className="hidden sm:flex items-center gap-6">
+              {navItems.map((item) => (
+                <a
+                  key={item.name}
+                  href={item.link}
+                  className="text-sm text-text-secondary hover:text-text transition-colors"
+                >
+                  {item.name}
+                </a>
+              ))}
+            </div>
           </div>
-          <div className="flex items-center gap-3">
-            {action}
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="hidden sm:flex">{action}</div>
             {/* hamburger */}
             <button
               onClick={() => setMobileOpen((v) => !v)}
-              className="sm:hidden flex flex-col gap-1.5 p-2 -mr-2"
+              className="sm:hidden flex flex-col gap-1.5 p-2"
               aria-label="Toggle menu"
             >
               <span className={cn("block h-0.5 w-5 bg-text transition-all duration-200", mobileOpen && "rotate-45 translate-y-[4px]")} />
@@ -89,7 +90,7 @@ export function FloatingNavbar({
               transition={{ duration: 0.2 }}
               className="sm:hidden overflow-hidden border-t border-border"
             >
-              <div className="flex flex-col gap-1 px-6 py-4">
+              <div className="flex flex-col gap-1 px-4 py-4 sm:px-8 lg:px-12">
                 {navItems.map((item) => (
                   <a
                     key={item.name}
@@ -100,6 +101,11 @@ export function FloatingNavbar({
                     {item.name}
                   </a>
                 ))}
+                {action && (
+                  <div className="mt-2 border-t border-border pt-3">
+                    {action}
+                  </div>
+                )}
               </div>
             </motion.div>
           )}

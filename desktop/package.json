@@ -1,6 +1,6 @@
 {
   "name": "dorabot-desktop",
-  "version": "0.2.3",
+  "version": "0.2.5",
   "description": "Desktop control center for dorabot",
   "main": "out/main/main.js",
   "scripts": {

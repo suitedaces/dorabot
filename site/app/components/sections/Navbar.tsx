@@ -1,5 +1,6 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { FloatingNavbar } from "../aceternity/floating-navbar"
 
 function GithubIcon() {
@@ -15,28 +16,68 @@ function GithubIcon() {
 }
 
 export function Navbar() {
+  const [theme, setTheme] = useState<"dark" | "light">("dark")
+
+  useEffect(() => {
+    const saved = localStorage.getItem("dorabot-site-theme")
+    const initial: "dark" | "light" = saved === "light" ? "light" : "dark"
+    setTheme(initial)
+    document.documentElement.classList.toggle("dark", initial === "dark")
+  }, [])
+
+  const toggleTheme = () => {
+    setTheme((prev) => {
+      const next = prev === "dark" ? "light" : "dark"
+      document.documentElement.classList.toggle("dark", next === "dark")
+      localStorage.setItem("dorabot-site-theme", next)
+      return next
+    })
+  }
+
   return (
     <FloatingNavbar
       navItems={[
         { name: "Features", link: "#features" },
-        { name: "How It Works", link: "#how-it-works" },
-        { name: "Architecture", link: "#architecture" },
       ]}
       logo={
-        <div className="flex items-center gap-3">
-          <img src="/dorabot.png" alt="dorabot" className="h-12 w-12 sm:h-14 sm:w-14 dorabot-alive" />
-          <span className="text-base sm:text-lg font-bold tracking-tight text-text">dorabot</span>
+        <div className="flex items-center gap-1.5">
+          <img
+            src="/dorabot.png"
+            alt="dorabot"
+            className="h-10 sm:h-11 dorabot-alive"
+            style={{ imageRendering: "pixelated" }}
+          />
+          <span className="text-base text-text-secondary font-medium">dorabot</span>
         </div>
       }
       action={
-        <a
-          href="https://github.com/suitedaces/dorabot"
-          className="star-glow inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-bg-card px-4 py-2 text-sm font-medium text-text"
-        >
-          <GithubIcon />
-          <span className="hidden sm:inline">Star on GitHub</span>
-          <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4 text-yellow-400"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>
-        </a>
+        <div className="flex w-full items-center gap-2 sm:w-auto">
+          <button
+            onClick={toggleTheme}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-bg-card text-text-secondary transition-colors hover:text-text"
+            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          >
+            {theme === "dark" ? (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                <circle cx="12" cy="12" r="4" />
+                <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                <path d="M21 12.79A9 9 0 1111.21 3c0 .28.01.56.04.84A7 7 0 0021 12.79z" />
+              </svg>
+            )}
+          </button>
+          <a
+            href="https://github.com/suitedaces/dorabot"
+            className="star-glow inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-bg-card px-4 py-2 text-sm font-medium text-text"
+          >
+            <GithubIcon />
+            <span className="hidden sm:inline">Star on GitHub</span>
+            <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4 text-yellow-400"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>
+          </a>
+        </div>
       }
     />
   )

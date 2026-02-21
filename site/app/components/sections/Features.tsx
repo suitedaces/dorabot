@@ -1,188 +1,70 @@
 "use client"
 
 import { motion } from "motion/react"
-import { Spotlight } from "../aceternity/spotlight"
-import { SectionPlayer } from "../remotion/SectionPlayer"
-import { FeatureWave } from "../remotion/FeatureWave"
-import { FeatureCardPlayer } from "../remotion/FeatureCardPlayer"
-import { ChatCard } from "../remotion/card-demos/ChatCard"
-import { GoalsCard } from "../remotion/card-demos/GoalsCard"
-import { BrowserCard } from "../remotion/card-demos/BrowserCard"
-import { EmailCard } from "../remotion/card-demos/EmailCard"
-import { MacCard } from "../remotion/card-demos/MacCard"
-import { ScheduleCard } from "../remotion/card-demos/ScheduleCard"
-import { GitHubCard } from "../remotion/card-demos/GitHubCard"
-import { SkillsCard } from "../remotion/card-demos/SkillsCard"
-import { MemoryCard } from "../remotion/card-demos/MemoryCard"
-import { ComponentType } from "react"
 
-// SVG icon components for each feature
-function ChatIcon() {
+function WhatsAppLogo() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5 text-accent">
-      <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22z" />
-      <path d="M8 12h.01M12 12h.01M16 12h.01" strokeWidth={2.5} strokeLinecap="round" />
+    <svg viewBox="0 0 24 24" fill="#25D366" className="h-4 w-4">
+      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347" />
     </svg>
   )
 }
 
-function GoalsIcon() {
+function TelegramLogo() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5 text-accent">
-      <path d="M9 11l3 3L22 4" strokeWidth={2} />
-      <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
+    <svg viewBox="0 0 24 24" fill="#26A5E4" className="h-4 w-4">
+      <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
     </svg>
   )
 }
 
-function BrowserIcon() {
+function SlackLogo() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5 text-accent">
-      <rect x="2" y="3" width="20" height="18" rx="2" />
-      <path d="M2 9h20" />
-      <circle cx="6" cy="6" r="1" fill="currentColor" stroke="none" />
-      <circle cx="9.5" cy="6" r="1" fill="currentColor" stroke="none" />
+    <svg viewBox="0 0 24 24" className="h-4 w-4">
+      <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313z" fill="#E01E5A" />
+      <path d="M8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zm0 1.271a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312z" fill="#36C5F0" />
+      <path d="M18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zm-1.27 0a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.163 0a2.528 2.528 0 0 1 2.523 2.522v6.312z" fill="#2EB67D" />
+      <path d="M15.163 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.163 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zm0-1.27a2.527 2.527 0 0 1-2.52-2.523 2.527 2.527 0 0 1 2.52-2.52h6.315A2.528 2.528 0 0 1 24 15.163a2.528 2.528 0 0 1-2.522 2.523h-6.315z" fill="#ECB22E" />
     </svg>
   )
 }
 
-function EmailIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5 text-accent">
-      <rect x="2" y="4" width="20" height="16" rx="2" />
-      <path d="M22 7l-8.97 5.7a1.94 1.94 0 01-2.06 0L2 7" />
-    </svg>
-  )
-}
-
-function MacIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5 text-accent">
-      <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
-    </svg>
-  )
-}
-
-function ScheduleIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5 text-accent">
-      <circle cx="12" cy="12" r="10" />
-      <path d="M12 6v6l4 2" strokeWidth={2} strokeLinecap="round" />
-    </svg>
-  )
-}
-
-function GitHubIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5 text-accent">
-      <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
-    </svg>
-  )
-}
-
-function SkillsIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5 text-accent">
-      <path d="M12 2L2 7l10 5 10-5-10-5z" />
-      <path d="M2 17l10 5 10-5" />
-      <path d="M2 12l10 5 10-5" />
-    </svg>
-  )
-}
-
-function MemoryIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5 text-accent">
-      <path d="M12 2a3 3 0 00-3 3v1a3 3 0 006 0V5a3 3 0 00-3-3z" />
-      <path d="M19 9H5a2 2 0 00-2 2v1a2 2 0 002 2h14a2 2 0 002-2v-1a2 2 0 00-2-2z" />
-      <path d="M12 14v4" />
-      <path d="M8 14v2a2 2 0 002 2h4a2 2 0 002-2v-2" />
-      <path d="M7 22h10" />
-      <path d="M12 18v4" />
-    </svg>
-  )
-}
-
-interface Feature {
-  icon: React.ReactNode
-  title: string
-  description: string
-  demo: ComponentType
-  durationInFrames: number
-}
-
-const features: Feature[] = [
+const features = [
   {
-    icon: <ChatIcon />,
-    title: "Chat anywhere",
+    title: "Persistent Memory & Self-Learning",
     description:
-      "WhatsApp, Telegram, Slack, or the desktop app. Persistent memory across all channels.",
-    demo: ChatCard,
-    durationInFrames: 300,
+      "Daily journals, curated memory, personality config. The agent remembers decisions, preferences, and context across every session. It gets better the more you use it.",
+    gif: "/gifs/memory.gif",
   },
   {
-    icon: <GoalsIcon />,
-    title: "Proactive goals",
+    title: "Automations & Scheduling",
     description:
-      "The agent proposes goals on its own. Kanban board to approve. Tracks progress autonomously.",
-    demo: GoalsCard,
-    durationInFrames: 300,
+      "Cron jobs, scheduled pulses, recurring tasks. The agent wakes up, does work, and messages you. iCal RRULE support, Apple Calendar sync.",
+    gif: "/gifs/automations.gif",
   },
   {
-    icon: <BrowserIcon />,
-    title: "Browse the web",
+    title: "Goals & Tasks",
     description:
-      "Full browser automation via Playwright. Fill forms, click buttons, stay logged in. 90+ actions.",
-    demo: BrowserCard,
-    durationInFrames: 300,
+      "The agent proposes goals, writes plans, and executes them. You approve from the desktop app or Telegram. Full pipeline: research, plan, review, execute, done.",
+    gif: "/gifs/goals.gif",
   },
   {
-    icon: <EmailIcon />,
-    title: "Read and send email",
+    title: "Research & Knowledge",
     description:
-      "Via Himalaya CLI. IMAP/SMTP, no OAuth headaches. Read, reply, compose, attach files.",
-    demo: EmailCard,
-    durationInFrames: 300,
+      "The agent creates and maintains its own research for you. Topics tracked, categorized, and searchable. Point it at anything and it keeps the knowledge organized.",
+    gif: "/gifs/research.gif",
   },
   {
-    icon: <MacIcon />,
-    title: "Control your Mac",
+    title: "Multi-Channel Messaging",
     description:
-      "Move windows, launch apps, control Spotify, manage Calendar, system settings. All via AppleScript.",
-    demo: MacCard,
-    durationInFrames: 300,
+      "Same agent on WhatsApp, Telegram, and Slack. Send text, photos, voice, documents. It responds with full context from every past conversation.",
+    gif: "/gifs/channels.gif",
   },
   {
-    icon: <ScheduleIcon />,
-    title: "Schedule anything",
+    title: "Skills & MCP Servers",
     description:
-      "One-shot reminders, recurring tasks, full cron expressions with timezone support.",
-    demo: ScheduleCard,
-    durationInFrames: 300,
-  },
-  {
-    icon: <GitHubIcon />,
-    title: "GitHub workflows",
-    description:
-      "PRs, issues, CI checks, code review via gh CLI. Manage repos without leaving the chat.",
-    demo: GitHubCard,
-    durationInFrames: 300,
-  },
-  {
-    icon: <SkillsIcon />,
-    title: "56k+ skills",
-    description:
-      "9 built-in skills, 56k+ community skills from the gallery. Or create new ones on the fly.",
-    demo: SkillsCard,
-    durationInFrames: 300,
-  },
-  {
-    icon: <MemoryIcon />,
-    title: "Persistent memory",
-    description:
-      "SOUL.md for personality. USER.md for your profile. MEMORY.md for learned facts. Gets better over time.",
-    demo: MemoryCard,
-    durationInFrames: 300,
+      "Built-in skills for GitHub, email, macOS, PR review, agent swarms. Browse 56k+ community skills. Connect 7,300+ MCP servers via Smithery.",
+    gif: "/gifs/extensions.gif",
   },
 ]
 
@@ -190,27 +72,24 @@ const containerVariants = {
   hidden: {},
   visible: {
     transition: {
-      staggerChildren: 0.06,
+      staggerChildren: 0.08,
     },
   },
 }
 
 const itemVariants = {
-  hidden: { opacity: 0, y: 12 },
+  hidden: { opacity: 0, y: 16 },
   visible: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.35 },
+    transition: { duration: 0.4 },
   },
 }
 
 export function Features() {
   return (
-    <section id="features" className="relative px-6 py-20 sm:py-28 overflow-hidden">
-      {/* Remotion background */}
-      <SectionPlayer component={FeatureWave} opacity={0.25} />
-
-      <div className="relative z-10 mx-auto max-w-7xl">
+    <section id="features" className="px-4 py-20 sm:px-8 sm:py-28 lg:px-12">
+      <div className="mx-auto max-w-7xl">
         <motion.div
           initial={{ opacity: 0, y: 16 }}
           whileInView={{ opacity: 1, y: 0 }}
@@ -219,42 +98,55 @@ export function Features() {
           className="text-center mb-14"
         >
           <h2 className="text-3xl font-bold sm:text-4xl lg:text-5xl tracking-tight">
-            Everything your AI model can&apos;t do alone
+            From model to autonomous operator
           </h2>
           <p className="mt-4 text-text-secondary text-base sm:text-lg max-w-2xl mx-auto">
-            Bring your own API key. dorabot handles the rest.
+            Bring your own API key or subscription. dorabot handles the rest.
           </p>
         </motion.div>
+
         <motion.div
           variants={containerVariants}
           initial="hidden"
           whileInView="visible"
           viewport={{ once: true, margin: "-50px" }}
-          className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
+          className="space-y-8 lg:space-y-10"
         >
-          {features.map((f) => (
-            <motion.div key={f.title} variants={itemVariants}>
-              <Spotlight className="h-full border border-border bg-bg-card/50 glass rounded-xl overflow-hidden">
-                {/* Upper half: Remotion demo */}
-                <div className="border-b border-border">
-                  <FeatureCardPlayer
-                    component={f.demo}
-                    durationInFrames={f.durationInFrames}
-                  />
-                </div>
-                {/* Lower half: title + description */}
-                <div className="p-5 sm:p-6">
-                  <div className="flex items-center gap-2.5 mb-2">
-                    <div className="flex items-center justify-center h-8 w-8 rounded-md border border-border bg-surface-raised">
-                      {f.icon}
-                    </div>
-                    <h3 className="font-semibold text-base sm:text-lg">{f.title}</h3>
+          {features.map((f, i) => (
+            <motion.div
+              key={f.title}
+              variants={itemVariants}
+              className={`flex flex-col ${i % 2 === 0 ? "md:flex-row" : "md:flex-row-reverse"} gap-6 md:gap-12 lg:gap-16 items-center`}
+            >
+              {/* GIF */}
+              <div className="w-full md:w-7/12 rounded-xl border border-border overflow-hidden bg-surface-base/30">
+                <img
+                  src={f.gif}
+                  alt={f.title}
+                  className="w-full"
+                  loading="lazy"
+                />
+              </div>
+              {/* Text */}
+              <div className="w-full md:w-5/12">
+                <h3 className="text-xl sm:text-2xl font-semibold mb-3">{f.title}</h3>
+                {f.title === "Multi-Channel Messaging" && (
+                  <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+                    <span className="inline-flex items-center gap-1 rounded-full border border-border bg-bg-card/50 px-2 py-1">
+                      <WhatsAppLogo /> WhatsApp
+                    </span>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-border bg-bg-card/50 px-2 py-1">
+                      <TelegramLogo /> Telegram
+                    </span>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-border bg-bg-card/50 px-2 py-1">
+                      <SlackLogo /> Slack
+                    </span>
                   </div>
-                  <p className="text-sm text-text-secondary leading-relaxed">
-                    {f.description}
-                  </p>
-                </div>
-              </Spotlight>
+                )}
+                <p className="text-sm sm:text-base text-text-secondary leading-relaxed">
+                  {f.description}
+                </p>
+              </div>
             </motion.div>
           ))}
         </motion.div>
