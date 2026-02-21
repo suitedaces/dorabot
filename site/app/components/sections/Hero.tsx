@@ -95,7 +95,7 @@ function DemoVideo() {
               loop
               muted
               playsInline
-              poster="/demo-poster.jpg"
+              poster="https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev/demo-poster.jpg"
               className="h-full w-full object-cover"
             >
               <source src={PREVIEW_URL} type="video/mp4" />
