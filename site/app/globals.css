@@ -250,3 +250,19 @@ body {
   opacity: 1;
   transform: translateY(0);
 }
+
+/* Gradient border rotation for HoverBorderGradient (replaces motion) */
+@keyframes border-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.gradient-border-bg {
+  background: conic-gradient(from 0deg, transparent 0 340deg, oklch(0.72 0.18 250) 360deg);
+  animation: border-spin 4s linear infinite;
+}
+
+.group:hover .gradient-border-bg {
+  background: radial-gradient(75% 181.16% at 50% 50%, oklch(0.72 0.18 250) 0%, oklch(0.72 0.18 250 / 0) 100%);
+  animation: none;
+}

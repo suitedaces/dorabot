@@ -12,8 +12,10 @@ export function DemoVideo() {
   const previewRef = useRef<HTMLVideoElement>(null)
   const fullVideoRef = useRef<HTMLVideoElement>(null)
 
-  // Only start loading the preview video once the container is near viewport
+  // Auto-load preview only on desktop (mobile skips to save 2.1MB bandwidth)
   useEffect(() => {
+    if (window.innerWidth < 768) return
+
     const el = containerRef.current
     if (!el) return
     const observer = new IntersectionObserver(
