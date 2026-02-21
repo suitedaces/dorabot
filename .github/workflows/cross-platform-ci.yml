@@ -1,0 +1,57 @@
+name: Cross-Platform CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build-and-package-smoke:
+    name: Build + Package Smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: desktop
+
+      - name: Build gateway/CLI
+        run: npm run build
+
+      - name: Build desktop
+        run: npm -C desktop run build
+
+      - name: Bundle gateway resources
+        run: npm -C desktop run bundle-gateway
+
+      - name: Linux package smoke
+        if: runner.os == 'Linux'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx --yes electron-builder --projectDir desktop --linux --dir
+
+      - name: macOS package smoke
+        if: runner.os == 'macOS'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx --yes electron-builder --projectDir desktop --mac --dir --config.mac.notarize=false
