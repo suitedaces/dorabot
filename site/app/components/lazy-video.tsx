@@ -11,6 +11,8 @@ export function LazyVideo({ src, className }: { src: string; className?: string 
 
     const isMobile = window.matchMedia("(max-width: 767px)").matches
 
+    if (isMobile) video.controls = true
+
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
