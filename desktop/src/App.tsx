@@ -20,6 +20,16 @@ import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
   MessageSquare, Radio, Zap, Brain, Settings2,
   Sparkles, LayoutGrid, Loader2, Star,
   Sun, Moon, Clock, FileSearch, Plug, Folder, FolderOpen, X,
@@ -99,6 +109,8 @@ export default function App() {
   const [draggingTab, setDraggingTab] = useState<Tab | null>(null);
   const { theme, toggle: toggleTheme } = useTheme();
   const [updateState, setUpdateState] = useState<UpdateState>({ status: 'idle' });
+  const [sessionToDelete, setSessionToDelete] = useState<(typeof gw.sessions)[number] | null>(null);
+  const [deletingSession, setDeletingSession] = useState(false);
   const notify = useCallback((body: string) => {
     const api = (window as any).electronAPI;
     if (api?.notify) {
@@ -393,6 +405,47 @@ export default function App() {
       label,
     });
   }, [gw.sessions, tabState]);
+
+  const handleConfirmDeleteSession = useCallback(async () => {
+    if (!sessionToDelete || deletingSession) return;
+    setDeletingSession(true);
+    try {
+      const sessionKey = `${sessionToDelete.channel || 'desktop'}:${sessionToDelete.chatType || 'dm'}:${sessionToDelete.chatId || sessionToDelete.id}`;
+
+      const tabsToClose = tabState.tabs
+        .filter(t => isChatTab(t) && (t.sessionId === sessionToDelete.id || t.sessionKey === sessionKey))
+        .map(t => t.id);
+      for (const tabId of tabsToClose) tabState.closeTab(tabId);
+
+      const result = await gw.deleteSession(sessionToDelete.id);
+      if (!result?.deleted) {
+        throw new Error('Session was not deleted.');
+      }
+
+      // Drop in-memory routing for this chat so new traffic starts a fresh session.
+      if (sessionToDelete.chatId) {
+        try {
+          await gw.rpc('sessions.reset', {
+            channel: sessionToDelete.channel || 'desktop',
+            chatId: sessionToDelete.chatId,
+          });
+        } catch {
+          // best-effort cleanup only
+        }
+      }
+
+      toast.success('Session closed', {
+        description: `${sessionToDelete.senderName || sessionToDelete.chatId || sessionToDelete.id.slice(0, 8)} removed from history.`,
+      });
+      setSessionToDelete(null);
+    } catch (err) {
+      toast.error('Failed to close session', {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setDeletingSession(false);
+    }
+  }, [sessionToDelete, deletingSession, tabState, gw]);
 
   const handleNavClick = useCallback((navId: TabType) => {
     if (navId === 'chat') {
@@ -916,8 +969,10 @@ export default function App() {
                     const isVisible = !isActive && visibleSessionIds.has(s.id);
                     const unread = unreadBySessionId[s.id] || 0;
                     return (
-                      <button
+                      <div
                         key={s.id}
+                        role="button"
+                        tabIndex={0}
                         className={`flex items-center gap-1.5 w-full px-2.5 py-1 rounded-md text-[10px] transition-colors ${
                           isActive
                             ? 'bg-secondary text-foreground'
@@ -926,6 +981,12 @@ export default function App() {
                             : 'text-muted-foreground hover:bg-secondary/50'
                         }`}
                         onClick={() => handleViewSession(s.id, s.channel, s.chatId, s.chatType)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            handleViewSession(s.id, s.channel, s.chatId, s.chatType);
+                          }
+                        }}
                         title={`${s.channel || 'desktop'} | ${s.messageCount} msgs | ${new Date(s.updatedAt).toLocaleString()}`}
                       >
                         <span className="w-3 h-3 shrink-0 flex items-center justify-center">{channelIcon(s.channel)}</span>
@@ -944,7 +1005,22 @@ export default function App() {
                             {new Date(s.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                           </span>
                         )}
-                      </button>
+                        <button
+                          type="button"
+                          className="ml-0.5 shrink-0 rounded p-0.5 text-muted-foreground hover:text-destructive hover:bg-secondary/70 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          title={s.activeRun ? 'Cannot close while agent is running' : 'Close session'}
+                          aria-label={s.activeRun ? 'Cannot close while agent is running' : 'Close session'}
+                          disabled={!!s.activeRun}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (s.activeRun) return;
+                            setSessionToDelete(s);
+                          }}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
                     );
                   })}
                 </ScrollArea>
@@ -1033,6 +1109,43 @@ export default function App() {
           </>
         )}
       </ResizablePanelGroup>
+
+      <AlertDialog
+        open={!!sessionToDelete}
+        onOpenChange={(open) => {
+          if (!open && !deletingSession) setSessionToDelete(null);
+        }}
+      >
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-sm">Close this session?</AlertDialogTitle>
+            <AlertDialogDescription className="text-xs">
+              This will remove the session from saved history.
+            </AlertDialogDescription>
+            {sessionToDelete && (
+              <div className="w-full rounded border border-border bg-muted/40 px-2 py-1.5 text-[10px] text-muted-foreground">
+                {sessionToDelete.senderName || sessionToDelete.chatId || sessionToDelete.id.slice(0, 12)}
+              </div>
+            )}
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="h-7 text-xs" disabled={deletingSession}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="h-7 text-xs"
+              variant="destructive"
+              disabled={deletingSession}
+              onClick={(e) => {
+                e.preventDefault();
+                void handleConfirmDeleteSession();
+              }}
+            >
+              {deletingSession ? 'Closing...' : 'Close session'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </TooltipProvider>
   );
 }

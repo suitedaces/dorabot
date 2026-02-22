@@ -1553,6 +1553,26 @@ export function useGateway() {
     return { sessionKey: sk, chatId: newChatId };
   }, []);
 
+  const deleteSession = useCallback(async (sessionId: string) => {
+    const res = await rpc('sessions.delete', { sessionId }) as { deleted: boolean };
+    if (res?.deleted) {
+      setSessions(prev => prev.filter(s => s.id !== sessionId));
+      setSessionStates(prev => {
+        let changed = false;
+        const next: Record<string, SessionState> = {};
+        for (const [sessionKey, state] of Object.entries(prev)) {
+          if (state.sessionId === sessionId) {
+            changed = true;
+            continue;
+          }
+          next[sessionKey] = state;
+        }
+        return changed ? next : prev;
+      });
+    }
+    return res;
+  }, [rpc]);
+
   const changeModel = useCallback(async (newModel: string) => {
     await rpc('config.set', { key: 'model', value: newModel });
     setModel(newModel);
@@ -1827,6 +1847,7 @@ export function useGateway() {
     sendMessage,
     abortAgent,
     newSession,
+    deleteSession,
     loadSession,
     setCurrentSessionId: useCallback((id: string | undefined) => {
       const sk = activeSessionKeyRef.current;
