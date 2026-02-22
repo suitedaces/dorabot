@@ -109,7 +109,7 @@ npm run dev:web
 ```
 
 - Open `http://localhost:5173`
-- Gateway runs at `ws://127.0.0.1:18889`
+- Browser gateway endpoint is `ws://127.0.0.1:18889` (proxied from local Unix socket)
 
 ### Ubuntu notes
 

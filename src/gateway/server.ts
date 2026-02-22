@@ -5231,6 +5231,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const allowedOrigins = new Set([
     'http://localhost:5173',  // vite dev
     'https://localhost:5173',
+    'http://127.0.0.1:5173',  // vite dev via loopback IP
+    'https://127.0.0.1:5173',
     'file://',                // production Electron
     ...(config.gateway?.allowedOrigins || []),
   ]);
