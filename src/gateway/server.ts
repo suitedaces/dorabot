@@ -15,7 +15,7 @@ import { SessionRegistry } from './session-registry.js';
 import { ChannelManager } from './channel-manager.js';
 import { SessionManager } from '../session/manager.js';
 import { streamAgent, type AgentResult } from '../agent.js';
-import type { RunHandle } from '../providers/types.js';
+import type { ProviderAuthStatus, RunHandle } from '../providers/types.js';
 import { startScheduler, loadCalendarItems, migrateCronToCalendar, type SchedulerRunner } from '../calendar/scheduler.js';
 import { checkSkillEligibility, loadAllSkills, findSkillByName } from '../skills/loader.js';
 import type { InboundMessage } from '../channels/types.js';
@@ -44,11 +44,13 @@ import { loadResearch, saveResearch, readResearchContent, writeResearchFile, nex
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
 import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, getActiveAuthMethod, isOAuthTokenExpired, onClaudeAuthRequired } from '../providers/claude.js';
 import { isCodexInstalled, hasCodexAuth, onCodexAuthRequired } from '../providers/codex.js';
+import { hasOpenAICompatibleAuth, listOpenAICompatibleModels } from '../providers/openai-compatible.js';
 import type { ProviderName } from '../config.js';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { classifyToolCall, cleanToolName, isToolAllowed, type Tier } from './tool-policy.js';
 import { AUTONOMOUS_SCHEDULE_ID, buildAutonomousCalendarItem, PULSE_INTERVALS, DEFAULT_PULSE_INTERVAL, pulseIntervalToRrule, rruleToPulseInterval } from '../autonomous.js';
 import { ensureWorktreeForPlan, getWorktreeStats, mergeWorktreeBranch, pushWorktreePr, removeWorktree } from '../worktree/manager.js';
+import { platformAdapter } from '../platform/index.js';
 import {
   DORABOT_DIR,
   GATEWAY_SOCKET_PATH,
@@ -60,12 +62,44 @@ import {
   ensureWorkspace,
 } from '../workspace.js';
 
-function macNotify(title: string, body: string) {
+function notifyUser(title: string, body: string) {
+  void platformAdapter.notify(title, body);
+}
+
+function normalizeBaseUrl(input: unknown): string | undefined {
+  if (typeof input !== 'string') return undefined;
+  const trimmed = input.trim();
+  if (!trimmed) return undefined;
+  return trimmed.replace(/\/+$/, '');
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+}
+
+function isLocalBaseUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return false;
   try {
-    const t = title.replace(/"/g, '\\"');
-    const b = body.replace(/"/g, '\\"');
-    execSync(`osascript -e 'display notification "${b}" with title "${t}"'`, { stdio: 'ignore' });
-  } catch { /* ignore */ }
+    const parsed = new URL(baseUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    return isLoopbackHostname(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function resolveProviderAuthStatus(providerName: string, status: ProviderAuthStatus, config: Config): ProviderAuthStatus {
+  if (providerName !== 'openai-compatible' || status.authenticated) return status;
+  const baseUrl = normalizeBaseUrl(config.provider?.openaiCompatible?.baseUrl);
+  if (!isLocalBaseUrl(baseUrl)) return status;
+  return {
+    ...status,
+    authenticated: true,
+    identity: `local OpenAI-compatible endpoint (${baseUrl})`,
+    method: 'api_key',
+    error: undefined,
+  };
 }
 
 // ── Tool status display maps ──────────────────────────────────────────
@@ -1479,21 +1513,21 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       }),
       onItemStart: (item) => {
         if (item.id === AUTONOMOUS_SCHEDULE_ID) {
-          macNotify('Dora', 'Checking in... 👀');
+          notifyUser('Dora', 'Checking in... 👀');
           broadcast({ event: 'pulse:started', data: { timestamp: Date.now() } });
         } else {
-          macNotify('Dora', `Working on "${item.summary}"`);
+          notifyUser('Dora', `Working on "${item.summary}"`);
         }
       },
       onItemRun: (item, result) => {
         if (item.id === AUTONOMOUS_SCHEDULE_ID) {
           if (result.messaged) {
-            macNotify('Dora', 'Sent you a message 👀');
+            notifyUser('Dora', 'Sent you a message 👀');
           } else {
-            macNotify('Dora', result.status === 'ran' ? 'All caught up ✓' : 'Something went wrong, check logs');
+            notifyUser('Dora', result.status === 'ran' ? 'All caught up ✓' : 'Something went wrong, check logs');
           }
         } else {
-          macNotify('Dora', result.status === 'ran' ? `Done with "${item.summary}" ✓` : `"${item.summary}" failed`);
+          notifyUser('Dora', result.status === 'ran' ? `Done with "${item.summary}" ✓` : `"${item.summary}" failed`);
         }
         broadcast({ event: 'calendar.result', data: { item: item.id, summary: item.summary, ...result, timestamp: Date.now() } });
         if (item.id === AUTONOMOUS_SCHEDULE_ID) {
@@ -1758,7 +1792,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       data: { taskId: task.id, eventType: 'run_started', message: `Task started: ${task.title}`, timestamp: Date.now() },
     });
     markTaskRunStarted(taskId, sessionKey);
-    macNotify('Dora', `Task started: ${task.title}`);
+    notifyUser('Dora', `Task started: ${task.title}`);
     void sendTelegramOwnerStatus(`▶️ Task #${task.id} started: ${task.title}`);
 
     void handleAgentRun({
@@ -1807,7 +1841,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       saveTasks(tasks);
       appendTaskLog(task.id, 'approval_denied', task.reason);
       broadcast({ event: 'goals.update', data: { taskId: task.id, task } });
-      macNotify('Dora', `Task denied: ${task.title}`);
+      notifyUser('Dora', `Task denied: ${task.title}`);
       void sendTelegramOwnerStatus(`❌ Task #${task.id} not approved: ${task.title}\nReason: ${task.reason}`);
       return null;
     }
@@ -1825,7 +1859,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       appendTaskLog(task.id, 'run_error', errMsg);
-      macNotify('Dora', `Task start failed: ${task.title}`);
+      notifyUser('Dora', `Task start failed: ${task.title}`);
       return null;
     }
   }
@@ -1864,7 +1898,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       },
     });
     channelManager.sendApprovalRequest({ requestId, toolName: 'task_start', input, chatId: targetChatId }, targetChannel).catch(() => {});
-    macNotify('Dora', `Approval needed: ${task.title}`);
+    notifyUser('Dora', `Approval needed: ${task.title}`);
     void sendTelegramOwnerStatus(`🛡️ Task #${task.id} awaiting approval: ${task.title}`);
   }
 
@@ -2121,17 +2155,36 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     const { prompt, images, sessionKey, source, channel, cwd, extraContext, messageMetadata } = params;
     console.log(`[gateway] agent run: source=${source} sessionKey=${sessionKey} prompt="${prompt.slice(0, 80)}..."`);
 
-    // pre-run auth check: if dorabot_oauth token is expired, don't waste a run
-    const authMethod = getActiveAuthMethod();
-    if (authMethod === 'dorabot_oauth' && isOAuthTokenExpired()) {
-      console.log(`[gateway] token expired pre-run, triggering re-auth for ${source}`);
-      await startReauthFlow({ prompt, sessionKey, source, channel, chatId: messageMetadata?.chatId, messageMetadata }).catch(() => {});
-      return null;
-    }
-    if (authMethod === 'none') {
-      console.log(`[gateway] no auth configured, skipping run for ${source}`);
-      broadcast({ event: 'agent.error', data: { source, sessionKey, error: 'Not authenticated', timestamp: Date.now() } });
-      return null;
+    // pre-run auth check: validate auth against the currently selected provider
+    const activeProvider = config.provider?.name || 'claude';
+    if (activeProvider === 'claude') {
+      const authMethod = getActiveAuthMethod();
+      if (authMethod === 'dorabot_oauth' && isOAuthTokenExpired()) {
+        console.log(`[gateway] token expired pre-run, triggering re-auth for ${source}`);
+        await startReauthFlow({ prompt, sessionKey, source, channel, chatId: messageMetadata?.chatId, messageMetadata }).catch(() => {});
+        return null;
+      }
+      if (authMethod === 'none') {
+        console.log(`[gateway] no auth configured for provider=claude, skipping run for ${source}`);
+        broadcast({ event: 'agent.error', data: { source, sessionKey, error: 'Not authenticated', timestamp: Date.now() } });
+        return null;
+      }
+    } else {
+      try {
+        const provider = await getProviderByName(activeProvider);
+        const authStatus = resolveProviderAuthStatus(activeProvider, await provider.getAuthStatus(), config);
+        if (!authStatus.authenticated) {
+          const reason = authStatus.error || 'Not authenticated';
+          console.log(`[gateway] no auth configured for provider=${activeProvider}, skipping run for ${source}: ${reason}`);
+          broadcast({ event: 'agent.error', data: { source, sessionKey, error: reason, timestamp: Date.now() } });
+          return null;
+        }
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        console.log(`[gateway] provider auth check failed for provider=${activeProvider}, skipping run for ${source}: ${reason}`);
+        broadcast({ event: 'agent.error', data: { source, sessionKey, error: reason, timestamp: Date.now() } });
+        return null;
+      }
     }
 
     const prev = runQueues.get(sessionKey) || Promise.resolve();
@@ -2611,11 +2664,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 || t?.startsWith('mcp__dorabot-tools__ideas_')
               ))) {
                 broadcast({ event: 'goals.update', data: {} });
-                macNotify('Dora', 'Goals/tasks updated');
+                notifyUser('Dora', 'Goals/tasks updated');
               }
               if (allTools.some(t => t?.startsWith('research_') || t?.startsWith('mcp__dorabot-tools__research_'))) {
                 broadcast({ event: 'research.update', data: {} });
-                macNotify('Dora', 'Research updated');
+                notifyUser('Dora', 'Research updated');
               }
             }
 
@@ -3451,7 +3504,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           goals.goals.push(goal);
           saveGoals(goals);
           broadcast({ event: 'goals.update', data: { goalId: goal.id, goal } });
-          macNotify('Dora', `Goal created: ${goal.title}`);
+          notifyUser('Dora', `Goal created: ${goal.title}`);
           return { id, result: goal };
         }
 
@@ -3471,7 +3524,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           saveGoals(goals);
 
           broadcast({ event: 'goals.update', data: { goalId: goal.id, goal } });
-          macNotify('Dora', `Goal updated: ${goal.title}`);
+          notifyUser('Dora', `Goal updated: ${goal.title}`);
           return { id, result: goal };
         }
 
@@ -3498,7 +3551,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (changed) saveTasks(tasks);
 
           broadcast({ event: 'goals.update', data: { goalId, deleted: true } });
-          macNotify('Dora', `Goal deleted: #${goalId}`);
+          notifyUser('Dora', `Goal deleted: #${goalId}`);
           return { id, result: { deleted: true } };
         }
 
@@ -3539,7 +3592,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           saveTasks(tasks);
           appendTaskLog(task.id, 'rpc_add', `Task created: ${task.title}`);
           broadcast({ event: 'goals.update', data: { taskId: task.id, task } });
-          macNotify('Dora', `Task created: ${task.title}`);
+          notifyUser('Dora', `Task created: ${task.title}`);
           if (task.status === 'planned') {
             await requestTaskApproval(task.id);
           }
@@ -3586,7 +3639,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             goalId: task.goalId,
           });
           broadcast({ event: 'goals.update', data: { taskId: task.id, task } });
-          macNotify('Dora', `Task updated: ${task.title}`);
+          notifyUser('Dora', `Task updated: ${task.title}`);
 
           if (task.status === 'planned') {
             await requestTaskApproval(task.id);
@@ -3606,7 +3659,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           activeTaskRuns.delete(taskId);
           appendTaskLog(taskId, 'rpc_delete', `Task #${taskId} deleted`);
           broadcast({ event: 'goals.update', data: { taskId, deleted: true } });
-          macNotify('Dora', `Task deleted: #${taskId}`);
+          notifyUser('Dora', `Task deleted: #${taskId}`);
           return { id, result: { deleted: true } };
         }
 
@@ -3758,7 +3811,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             event: 'plans.log',
             data: { planId: plan.id, eventType: 'rpc_update', message: `Plan updated: ${plan.title}`, timestamp: Date.now() },
           });
-          macNotify('Dora', `Plan updated: ${plan.title}`);
+          notifyUser('Dora', `Plan updated: ${plan.title}`);
           return { id, result: plan };
         }
 
@@ -3772,7 +3825,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           savePlans(plans);
           activePlanRuns.delete(planId);
           broadcast({ event: 'plans.update', data: { planId, deleted: true } });
-          macNotify('Dora', `Plan deleted: #${planId}`);
+          notifyUser('Dora', `Plan deleted: #${planId}`);
           return { id, result: { deleted: true } };
         }
 
@@ -3848,7 +3901,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             data: { planId: plan.id, eventType: 'run_started', message: `Plan started: ${plan.title}`, timestamp: Date.now() },
           });
           markPlanRunStarted(planId, sessionKey);
-          macNotify('Dora', `Plan started: ${plan.title}`);
+          notifyUser('Dora', `Plan started: ${plan.title}`);
 
           void handleAgentRun({
             prompt,
@@ -4159,7 +4212,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
           saveResearch(research);
           broadcast({ event: 'research.update', data: {} });
-          macNotify('Dora', `Research updated: ${item.title}`);
+          notifyUser('Dora', `Research updated: ${item.title}`);
           return { id, result: item };
         }
 
@@ -4174,7 +4227,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           // clean up file
           try { if (existsSync(deleted.filePath)) unlinkSync(deleted.filePath); } catch {}
           broadcast({ event: 'research.update', data: {} });
-          macNotify('Dora', `Research deleted: ${deleted.title}`);
+          notifyUser('Dora', `Research deleted: ${deleted.title}`);
           return { id, result: { deleted: true } };
         }
 
@@ -4274,25 +4327,27 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
         // ── provider RPCs ─────────────────────────────────────────
         case 'provider.detect': {
-          const [claudeInstalled, codexInstalled, claudeOAuth, codexAuth, apiKey] =
+          const [claudeInstalled, codexInstalled, claudeOAuth, codexAuth, openaiCompatibleAuth, apiKey] =
             await Promise.all([
               isClaudeInstalled(),
               isCodexInstalled(),
               Promise.resolve(hasOAuthTokens()),
               Promise.resolve(hasCodexAuth()),
+              Promise.resolve(hasOpenAICompatibleAuth()),
               Promise.resolve(!!getClaudeApiKey()),
             ]);
 
           return { id, result: {
             claude: { installed: claudeInstalled, hasOAuth: claudeOAuth, hasApiKey: apiKey },
             codex: { installed: codexInstalled, hasAuth: codexAuth },
+            openaiCompatible: { installed: codexInstalled, hasApiKey: openaiCompatibleAuth },
           }};
         }
 
         case 'provider.get': {
           try {
             const provider = await getProvider(config);
-            const authStatus = await provider.getAuthStatus();
+            const authStatus = resolveProviderAuthStatus(config.provider.name, await provider.getAuthStatus(), config);
             return { id, result: { name: config.provider.name, auth: authStatus } };
           } catch (err) {
             return { id, error: err instanceof Error ? err.message : String(err) };
@@ -4301,8 +4356,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
         case 'provider.set': {
           const name = params?.name as ProviderName;
-          if (!name || !['claude', 'codex'].includes(name)) {
-            return { id, error: 'name must be "claude" or "codex"' };
+          if (!name || !['claude', 'codex', 'openai-compatible'].includes(name)) {
+            return { id, error: 'name must be "claude", "codex", or "openai-compatible"' };
           }
           config.provider.name = name;
           saveConfig(config);
@@ -4321,7 +4376,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           try {
             const providerName = (params?.provider as string) || config.provider.name;
             const p = await getProviderByName(providerName);
-            return { id, result: await p.getAuthStatus() };
+            const status = resolveProviderAuthStatus(providerName, await p.getAuthStatus(), config);
+            return { id, result: status };
           } catch (err) {
             return { id, error: err instanceof Error ? err.message : String(err) };
           }
@@ -4375,8 +4431,28 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'provider.check': {
           try {
             const providerName = (params?.provider as string) || config.provider.name;
+            if (providerName === 'openai-compatible' && isLocalBaseUrl(normalizeBaseUrl(config.provider?.openaiCompatible?.baseUrl))) {
+              const installed = await isCodexInstalled();
+              if (!installed) {
+                return { id, result: { ready: false, reason: 'codex binary not found. Install with: npm i -g @openai/codex' } };
+              }
+              return { id, result: { ready: true } };
+            }
             const p = await getProviderByName(providerName);
             return { id, result: await p.checkReady() };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'provider.models.list': {
+          try {
+            const providerName = (params?.provider as string) || config.provider.name;
+            if (providerName !== 'openai-compatible') {
+              return { id, error: `model listing is not supported for provider "${providerName}"` };
+            }
+            const models = await listOpenAICompatibleModels(config);
+            return { id, result: { models } };
           } catch (err) {
             return { id, error: err instanceof Error ? err.message : String(err) };
           }
@@ -4469,8 +4545,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
           // provider config keys
           if (key === 'provider.name' && typeof value === 'string') {
-            if (!['claude', 'codex', 'minimax'].includes(value)) {
-              return { id, error: 'provider.name must be "claude", "codex", or "minimax"' };
+            if (!['claude', 'codex', 'openai-compatible', 'minimax'].includes(value)) {
+              return { id, error: 'provider.name must be "claude", "codex", "openai-compatible", or "minimax"' };
             }
             config.provider.name = value as ProviderName;
             saveConfig(config);
@@ -4526,6 +4602,46 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             return { id, result: { key, value } };
           }
 
+          if (key === 'provider.openaiCompatible.model' && typeof value === 'string') {
+            if (!config.provider.openaiCompatible) config.provider.openaiCompatible = {};
+            config.provider.openaiCompatible.model = value;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          if (key === 'provider.openaiCompatible.baseUrl') {
+            if (!config.provider.openaiCompatible) config.provider.openaiCompatible = {};
+            if (value === null || value === undefined || value === '') {
+              delete config.provider.openaiCompatible.baseUrl;
+              saveConfig(config);
+              broadcast({ event: 'config.update', data: { key, value: null } });
+              return { id, result: { key, value: null } };
+            }
+            if (typeof value !== 'string') {
+              return { id, error: 'baseUrl must be a string URL or null to clear' };
+            }
+            const normalized = normalizeBaseUrl(value);
+            if (!normalized) {
+              delete config.provider.openaiCompatible.baseUrl;
+              saveConfig(config);
+              broadcast({ event: 'config.update', data: { key, value: null } });
+              return { id, result: { key, value: null } };
+            }
+            try {
+              const parsed = new URL(normalized);
+              if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+                return { id, error: 'baseUrl must start with http:// or https://' };
+              }
+            } catch {
+              return { id, error: 'baseUrl must be a valid absolute URL' };
+            }
+            config.provider.openaiCompatible.baseUrl = normalized;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value: normalized } });
+            return { id, result: { key, value: normalized } };
+          }
+
           if (key === 'provider.codex.approvalPolicy' && typeof value === 'string') {
             const valid = ['never', 'on-request', 'on-failure', 'untrusted'];
             if (!valid.includes(value)) return { id, error: `approvalPolicy must be one of: ${valid.join(', ')}` };
@@ -4559,6 +4675,44 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             if (!valid.includes(value)) return { id, error: `webSearch must be one of: ${valid.join(', ')}` };
             if (!config.provider.codex) config.provider.codex = {};
             config.provider.codex.webSearch = value as any;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          if (key === 'provider.openaiCompatible.approvalPolicy' && typeof value === 'string') {
+            const valid = ['never', 'on-request', 'on-failure', 'untrusted'];
+            if (!valid.includes(value)) return { id, error: `approvalPolicy must be one of: ${valid.join(', ')}` };
+            if (!config.provider.openaiCompatible) config.provider.openaiCompatible = {};
+            config.provider.openaiCompatible.approvalPolicy = value as any;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          if (key === 'provider.openaiCompatible.sandboxMode' && typeof value === 'string') {
+            const valid = ['read-only', 'workspace-write', 'danger-full-access'];
+            if (!valid.includes(value)) return { id, error: `sandboxMode must be one of: ${valid.join(', ')}` };
+            if (!config.provider.openaiCompatible) config.provider.openaiCompatible = {};
+            config.provider.openaiCompatible.sandboxMode = value as any;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          if (key === 'provider.openaiCompatible.networkAccess' && typeof value === 'boolean') {
+            if (!config.provider.openaiCompatible) config.provider.openaiCompatible = {};
+            config.provider.openaiCompatible.networkAccess = value;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          if (key === 'provider.openaiCompatible.webSearch' && typeof value === 'string') {
+            const valid = ['disabled', 'cached', 'live'];
+            if (!valid.includes(value)) return { id, error: `webSearch must be one of: ${valid.join(', ')}` };
+            if (!config.provider.openaiCompatible) config.provider.openaiCompatible = {};
+            config.provider.openaiCompatible.webSearch = value as any;
             saveConfig(config);
             broadcast({ event: 'config.update', data: { key, value } });
             return { id, result: { key, value } };
@@ -5077,6 +5231,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const allowedOrigins = new Set([
     'http://localhost:5173',  // vite dev
     'https://localhost:5173',
+    'http://127.0.0.1:5173',  // vite dev via loopback IP
+    'https://127.0.0.1:5173',
     'file://',                // production Electron
     ...(config.gateway?.allowedOrigins || []),
   ]);

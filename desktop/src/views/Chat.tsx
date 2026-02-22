@@ -122,6 +122,8 @@ const OPENAI_MODELS = [
   { value: 'gpt-5', label: 'gpt-5' },
 ];
 
+const OPENAI_COMPATIBLE_MODELS = [...OPENAI_MODELS];
+
 // Codex reasoning effort levels (SDK: minimal | low | medium | high | xhigh)
 // Our config uses 'max' → maps to 'xhigh' in the provider
 const EFFORT_LEVELS = [
@@ -136,22 +138,32 @@ function ModelSelector({ gateway, disabled }: { gateway: ReturnType<typeof useGa
   const providerName = (gateway.configData as any)?.provider?.name || 'claude';
   const claudeModel = gateway.model || 'claude-sonnet-4-5-20250929';
   const codexModel = (gateway.configData as any)?.provider?.codex?.model || 'gpt-5.3-codex';
-  const currentValue = providerName === 'codex' ? `codex:${codexModel}` : `claude:${claudeModel}`;
+  const openaiCompatibleModel = (gateway.configData as any)?.provider?.openaiCompatible?.model || 'gpt-5.2';
+  const currentValue = providerName === 'claude'
+    ? `claude:${claudeModel}`
+    : providerName === 'openai-compatible'
+      ? `openai-compatible:${openaiCompatibleModel}`
+      : `codex:${codexModel}`;
 
   const handleChange = async (encoded: string) => {
     const [provider, model] = encoded.split(':') as [string, string];
     if (provider === 'claude') {
       if (providerName !== 'claude') await gateway.setProvider('claude');
       gateway.changeModel(model);
-    } else {
+    } else if (provider === 'codex') {
       if (providerName !== 'codex') await gateway.setProvider('codex');
       await gateway.setConfig('provider.codex.model', model);
+    } else {
+      if (providerName !== 'openai-compatible') await gateway.setProvider('openai-compatible');
+      await gateway.setConfig('provider.openaiCompatible.model', model);
     }
   };
 
-  const currentLabel = providerName === 'codex'
-    ? OPENAI_MODELS.find(m => m.value === codexModel)?.label || codexModel
-    : ANTHROPIC_MODELS.find(m => m.value === claudeModel)?.label || claudeModel;
+  const currentLabel = providerName === 'claude'
+    ? ANTHROPIC_MODELS.find(m => m.value === claudeModel)?.label || claudeModel
+    : providerName === 'openai-compatible'
+      ? OPENAI_COMPATIBLE_MODELS.find(m => m.value === openaiCompatibleModel)?.label || openaiCompatibleModel
+      : OPENAI_MODELS.find(m => m.value === codexModel)?.label || codexModel;
 
   const reasoningEffort = (gateway.configData as any)?.reasoningEffort || null;
 
@@ -165,7 +177,7 @@ function ModelSelector({ gateway, disabled }: { gateway: ReturnType<typeof useGa
       <Select value={currentValue} onValueChange={handleChange} disabled={disabled}>
         <SelectTrigger size="sm" className="h-7 gap-1.5 text-[11px] rounded-lg shadow-none w-auto">
           <img
-            src={providerName === 'codex' ? './openai-icon.svg' : './claude-icon.svg'}
+            src={providerName === 'claude' ? './claude-icon.svg' : './openai-icon.svg'}
             alt=""
             className="w-3 h-3"
           />
@@ -190,9 +202,18 @@ function ModelSelector({ gateway, disabled }: { gateway: ReturnType<typeof useGa
               </span>
             </SelectItem>
           ))}
+          <div className="px-2 py-1 mt-1 text-[9px] font-semibold text-muted-foreground uppercase tracking-wider border-t border-border">OpenAI-Compatible</div>
+          {OPENAI_COMPATIBLE_MODELS.map(m => (
+            <SelectItem key={`compat-${m.value}`} value={`openai-compatible:${m.value}`} className="text-xs">
+              <span className="flex items-center gap-1.5">
+                <img src="./openai-icon.svg" alt="" className="w-3 h-3" />
+                {m.label}
+              </span>
+            </SelectItem>
+          ))}
         </SelectContent>
       </Select>
-      {providerName === 'codex' && (
+      {providerName !== 'claude' && (
         <Select value={reasoningEffort || 'off'} onValueChange={handleEffortChange} disabled={disabled}>
           <SelectTrigger size="sm" className="h-7 gap-1 text-[11px] rounded-lg shadow-none w-auto text-muted-foreground">
             <Sparkles className="w-3 h-3" />
@@ -644,6 +665,32 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     return gateway.pendingApprovals.filter(a => !a.sessionKey || a.sessionKey === sessionKey);
   }, [gateway.pendingApprovals, sessionKey]);
 
+  const activeProviderName = ((gateway.configData as any)?.provider?.name || gateway.providerInfo?.name || 'claude') as string;
+  const activeProviderLabel = activeProviderName === 'openai-compatible'
+    ? 'OpenAI-Compatible'
+    : activeProviderName === 'codex'
+      ? 'OpenAI'
+      : 'Anthropic';
+  const [activeProviderAuthenticated, setActiveProviderAuthenticated] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (gateway.connectionState !== 'connected') {
+      setActiveProviderAuthenticated(null);
+      return;
+    }
+
+    let cancelled = false;
+    gateway.getProviderAuth(activeProviderName).then((res) => {
+      if (!cancelled) setActiveProviderAuthenticated(!!res?.authenticated);
+    }).catch(() => {
+      if (!cancelled) setActiveProviderAuthenticated(null);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [gateway.connectionState, gateway.getProviderAuth, activeProviderName]);
+
   useEffect(() => {
     if (isEmpty) {
       landingInputRef.current?.focus();
@@ -744,7 +791,8 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   };
 
   const connected = gateway.connectionState === 'connected';
-  const authenticated = gateway.providerInfo?.auth?.authenticated ?? true; // assume true until loaded
+  const providerInfoForActive = gateway.providerInfo?.name === activeProviderName ? gateway.providerInfo.auth : null;
+  const authenticated = activeProviderAuthenticated ?? providerInfoForActive?.authenticated ?? true; // assume true until loaded
   const isReady = connected && authenticated;
   const gatewayFailed = !connected && !!gateway.gatewayError;
 
@@ -767,7 +815,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                   {gatewayFailed
                     ? <span className="text-destructive">{gateway.gatewayError?.error || 'gateway failed to start'}</span>
                     : !connected ? <>connecting...{gateway.gatewayTelemetry.reconnectCount > 2 && <span className="ml-1 opacity-60">({gateway.gatewayTelemetry.disconnectReason || 'retrying'})</span>}</>
-                    : !authenticated ? <>set up provider in <button type="button" className="underline hover:text-foreground transition-colors" onClick={onNavigateSettings}>Settings</button></>
+                    : !authenticated ? <>set up {activeProviderLabel} in <button type="button" className="underline hover:text-foreground transition-colors" onClick={onNavigateSettings}>Settings</button></>
                     : 'ready'}
                 </div>
                 {gatewayFailed && gateway.gatewayError?.logs && (
@@ -787,7 +835,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                   onChange={e => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
-                  placeholder={!connected ? 'waiting for gateway...' : !authenticated ? 'set up your AI provider to get started' : 'what are we building?'}
+                  placeholder={!connected ? 'waiting for gateway...' : !authenticated ? `set up your ${activeProviderLabel} provider to get started` : 'what are we building?'}
                   disabled={!isReady}
                   className="w-full min-h-[80px] max-h-[200px] resize-none text-sm border-0 rounded-2xl bg-transparent shadow-none focus-visible:ring-0"
                   rows={2}

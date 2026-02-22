@@ -73,6 +73,7 @@ export function ProviderCard({ gateway, disabled }: Props) {
 
   const currentModel = gateway.model || cfg?.model || 'claude-sonnet-4-5-20250929';
   const codexModel = cfg?.provider?.codex?.model || '';
+  const openaiCompatibleModel = cfg?.provider?.openaiCompatible?.model || '';
 
   const handleCodexModelChange = useCallback(async (value: string) => {
     try {
@@ -82,12 +83,20 @@ export function ProviderCard({ gateway, disabled }: Props) {
     }
   }, [gateway]);
 
+  const handleOpenAICompatibleModelChange = useCallback(async (value: string) => {
+    try {
+      await gateway.setConfig('provider.openaiCompatible.model', value);
+    } catch (err) {
+      console.error('failed to set openai-compatible model:', err);
+    }
+  }, [gateway]);
+
   return (
     <Card>
       <CardContent className="p-4">
         <div className="flex items-center gap-2 mb-4">
           <img
-            src={providerName === 'codex' ? './openai-icon.svg' : './claude-icon.svg'}
+            src={providerName === 'claude' ? './claude-icon.svg' : './openai-icon.svg'}
             alt={providerName}
             className="w-4 h-4"
           />
@@ -114,6 +123,7 @@ export function ProviderCard({ gateway, disabled }: Props) {
               <SelectContent>
                 <SelectItem value="claude" className="text-[11px]">Claude (Anthropic)</SelectItem>
                 <SelectItem value="codex" className="text-[11px]">OpenAI (Codex)</SelectItem>
+                <SelectItem value="openai-compatible" className="text-[11px]">OpenAI-Compatible</SelectItem>
               </SelectContent>
             </Select>
           </SettingRow>
@@ -148,7 +158,7 @@ export function ProviderCard({ gateway, disabled }: Props) {
             {showAuthSetup && (
               <div className="border border-border rounded-lg p-3 bg-secondary/30">
                 <ProviderSetup
-                  provider={providerName as 'claude' | 'codex'}
+                  provider={providerName as 'claude' | 'codex' | 'openai-compatible'}
                   gateway={gateway}
                   onSuccess={handleAuthSuccess}
                   compact
@@ -171,7 +181,7 @@ export function ProviderCard({ gateway, disabled }: Props) {
                 </SelectContent>
               </Select>
             </SettingRow>
-          ) : (
+          ) : providerName === 'codex' ? (
             <SettingRow label="model" description="codex model for agent runs">
               <Select value={codexModel || 'gpt-5.3-codex'} onValueChange={handleCodexModelChange} disabled={disabled}>
                 <SelectTrigger className="h-7 w-44 text-[11px]">
@@ -180,6 +190,19 @@ export function ProviderCard({ gateway, disabled }: Props) {
                 <SelectContent>
                   {codexModels.map(m => (
                     <SelectItem key={m.value} value={m.value} className="text-[11px]">{m.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </SettingRow>
+          ) : (
+            <SettingRow label="model" description="openai-compatible model for agent runs">
+              <Select value={openaiCompatibleModel || 'gpt-5.2'} onValueChange={handleOpenAICompatibleModelChange} disabled={disabled}>
+                <SelectTrigger className="h-7 w-44 text-[11px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {codexModels.map(m => (
+                    <SelectItem key={`compat-${m.value}`} value={m.value} className="text-[11px]">{m.label}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>

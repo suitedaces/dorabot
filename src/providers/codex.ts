@@ -453,14 +453,29 @@ function startLocalOAuthServer(expectedState: string): Promise<OAuthServer | nul
 
 // ── Auth helpers ────────────────────────────────────────────────────
 
-function getOpenAIApiKey(): string | undefined {
-  return process.env.OPENAI_API_KEY || loadPersistedOpenAIKey();
+type CodexAuthOverrides = {
+  apiKey?: string;
+  suppressStoredKey?: boolean;
+  suppressCliAuth?: boolean;
+  suppressOAuth?: boolean;
+};
+
+function getOpenAIApiKey(overrides?: CodexAuthOverrides): string | undefined {
+  const overrideKey = overrides?.apiKey?.trim();
+  if (overrideKey) return overrideKey;
+
+  const envKey = process.env.OPENAI_API_KEY?.trim();
+  if (envKey) return envKey;
+
+  if (overrides?.suppressStoredKey || process.env.DORABOT_CODEX_SUPPRESS_STORED_KEY === '1') return undefined;
+  return loadPersistedOpenAIKey();
 }
 
-function getCodexApiKey(): string | undefined {
+function getCodexApiKey(overrides?: CodexAuthOverrides): string | undefined {
   // Prefer managed key, then env, then codex CLI auth.json
-  const managed = getOpenAIApiKey();
+  const managed = getOpenAIApiKey(overrides);
   if (managed) return managed;
+  if (overrides?.suppressCliAuth || process.env.DORABOT_CODEX_SUPPRESS_CLI_AUTH === '1') return undefined;
   const authFile = join(codexHome(), 'auth.json');
   if (existsSync(authFile)) {
     try {
@@ -472,10 +487,11 @@ function getCodexApiKey(): string | undefined {
 }
 
 /** Resolve the best available API key — managed key, OAuth token, or codex auth.json */
-async function resolveCodexApiKey(): Promise<string | undefined> {
+async function resolveCodexApiKey(overrides?: CodexAuthOverrides): Promise<string | undefined> {
   // 1. Managed API key or env
-  const apiKey = getCodexApiKey();
+  const apiKey = getCodexApiKey(overrides);
   if (apiKey) return apiKey;
+  if (overrides?.suppressOAuth || process.env.DORABOT_CODEX_SUPPRESS_OAUTH === '1') return undefined;
   // 2. Managed OAuth token (with auto-refresh)
   const oauthToken = await ensureCodexOAuthToken();
   if (oauthToken) return oauthToken;
@@ -677,14 +693,19 @@ export class CodexProvider implements Provider {
   async *query(opts: ProviderRunOptions): AsyncGenerator<ProviderMessage, ProviderQueryResult, unknown> {
     const codexConfig = opts.config.provider?.codex;
     const model = codexConfig?.model || undefined;
+    const baseUrl = typeof (codexConfig as any)?.baseUrl === 'string'
+      ? ((codexConfig as any).baseUrl as string).trim() || undefined
+      : undefined;
+    const authOverrides = (codexConfig as any)?.authOverrides as CodexAuthOverrides | undefined;
     const reasoningEffort = opts.config.reasoningEffort;
 
     // Resolve API key (managed key > OAuth token > codex auth.json)
-    const apiKey = await resolveCodexApiKey();
+    const apiKey = await resolveCodexApiKey(authOverrides);
 
     // Create SDK instance
     const codex = new Codex({
       apiKey,
+      baseUrl,
       codexPathOverride: codexBinary !== 'codex' ? codexBinary : undefined,
     });
 
@@ -715,7 +736,9 @@ export class CodexProvider implements Provider {
         ? `<system_instructions>\n${opts.systemPrompt}\n</system_instructions>\n\n${opts.prompt}`
         : opts.prompt;
 
-    console.log(`[codex] ${opts.resumeId ? 'resuming' : 'starting'} thread: model=${model || 'default'} effort=${modelReasoningEffort || 'default'}${opts.resumeId ? ` threadId=${opts.resumeId}` : ''}`);
+    console.log(
+      `[codex] ${opts.resumeId ? 'resuming' : 'starting'} thread: model=${model || 'default'} effort=${modelReasoningEffort || 'default'}${opts.resumeId ? ` threadId=${opts.resumeId}` : ''}`
+    );
 
     // Run with streaming
     const abort = opts.abortController || new AbortController();

@@ -24,8 +24,13 @@ export async function getProviderByName(name: string): Promise<Provider> {
         providers.set(name, new CodexProvider());
         break;
       }
+      case 'openai-compatible': {
+        const { OpenAICompatibleProvider } = await import('./openai-compatible.js');
+        providers.set(name, new OpenAICompatibleProvider());
+        break;
+      }
       default:
-        throw new Error(`Unknown provider: ${name}. Supported: claude, codex`);
+        throw new Error(`Unknown provider: ${name}. Supported: claude, codex, openai-compatible`);
     }
   }
   return providers.get(name)!;

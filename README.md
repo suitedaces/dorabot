@@ -8,11 +8,11 @@
   [![GitHub stars](https://img.shields.io/github/stars/suitedaces/dorabot)](https://github.com/suitedaces/dorabot)
   [![GitHub release](https://img.shields.io/github/v/release/suitedaces/dorabot)](https://github.com/suitedaces/dorabot/releases/latest)
   [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-  [![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)](https://github.com/suitedaces/dorabot/releases/latest)
+  [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Ubuntu-lightgrey)](https://github.com/suitedaces/dorabot/releases/latest)
 
   Works with your existing Claude Code or OpenAI Codex subscription. No extra API key needed.
 
-  [**Download for macOS**](https://github.com/suitedaces/dorabot/releases/latest) · [Website](https://dora.so) · [Discord](https://discord.gg/FH99jkvMz) · [Demo](https://github.com/suitedaces/dorabot/releases/download/v0.2.3/annotated-demo-telegram.mp4)
+  [**Download for macOS**](https://github.com/suitedaces/dorabot/releases/latest) · [Ubuntu from source](#build-from-source) · [Website](https://dora.so) · [Discord](https://discord.gg/FH99jkvMz) · [Demo](https://github.com/suitedaces/dorabot/releases/download/v0.2.3/annotated-demo-telegram.mp4)
 
 </div>
 
@@ -54,7 +54,7 @@ Same agent on WhatsApp, Telegram, and Slack. Send text, photos, voice, documents
 
 ## Skills & MCP Servers
 
-Built-in skills for GitHub, email, macOS, PR review, agent swarms. Browse 56k+ community skills. Connect 7,300+ MCP servers via Smithery.
+Built-in skills for GitHub, email, desktop automation, PR review, and agent swarms. Browse 56k+ community skills. Connect 7,300+ MCP servers via Smithery.
 
 <img src="gifs/extensions.gif" width="800" />
 
@@ -65,7 +65,7 @@ Built-in skills for GitHub, email, macOS, PR review, agent swarms. Browse 56k+ c
 - **Multimodal.** Send images, screenshots, diagrams. The agent sees them.
 - **Multi-pane workspace.** Split panes (Cmd+D), parallel agents, streaming responses.
 - **Auto-update.** Signed, notarized, one-click updates.
-- **Local-only.** No cloud relay. Your data stays on your Mac.
+- **Local-only.** No cloud relay. Your data stays on your machine.
 
 ## Quick Start
 
@@ -73,13 +73,26 @@ Built-in skills for GitHub, email, macOS, PR review, agent swarms. Browse 56k+ c
 
 [**Download the macOS app**](https://github.com/suitedaces/dorabot/releases/latest) -- open the DMG, drag to Applications. Onboarding walks you through setup.
 
-**Requires:** macOS + a Claude Code or OpenAI Codex subscription (or any API key: Claude, OpenAI, MiniMax).
+**Requires:** macOS or Ubuntu + a Claude Code or OpenAI Codex subscription (or any API key: Claude, OpenAI, MiniMax).
 
 ### Build from source
 
+One-liner (fresh clone, macOS):
+
 ```bash
-git clone https://github.com/suitedaces/dorabot.git && cd dorabot
-npm install && npm run build && npm link
+git clone https://github.com/suitedaces/dorabot.git && cd dorabot && bash scripts/install.sh
+```
+
+One-liner (fresh clone, Ubuntu):
+
+```bash
+git clone https://github.com/suitedaces/dorabot.git && cd dorabot && bash scripts/install.sh
+```
+
+If you already cloned the repo:
+
+```bash
+bash scripts/install.sh
 ```
 
 ```bash
@@ -88,6 +101,23 @@ dorabot -g            # production gateway mode
 dorabot -i            # interactive terminal
 dorabot -m "message"  # one-off question
 ```
+
+### Run in browser (no global install)
+
+```bash
+npm run dev:web
+```
+
+- Open `http://localhost:5173`
+- Browser gateway endpoint is `ws://127.0.0.1:18889` (proxied from local Unix socket)
+
+### Ubuntu notes
+
+- Installer script includes Ubuntu deps: `libnotify-bin`, `gnome-screenshot`
+- Package desktop app: `npm -C desktop run package:linux`
+- Optional desktop integrations:
+  - Notifications: `notify-send`
+  - Screenshots: one of `gnome-screenshot`, `grim`, `import`, `maim`, `scrot`
 
 ## Personalization
 
@@ -103,7 +133,7 @@ All files live in `~/.dorabot/workspace/`. Edit directly or let the agent manage
 
 ## Security
 
-Local-only, no telemetry. Scoped file access (sensitive dirs blocked). Token-authenticated gateway. Configurable tool approval per channel. macOS native sandbox.
+Local-only, no telemetry. Scoped file access (sensitive dirs blocked). Token-authenticated gateway. Configurable tool approval per channel. Desktop sandboxing where supported by platform/runtime.
 
 ## FAQ
 

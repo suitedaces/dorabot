@@ -1169,6 +1169,13 @@ export function useGateway() {
       case 'config.update': {
         const d = data as { key: string; value: unknown };
         setConfigData(prev => prev ? setNestedKey(prev, d.key, d.value) : prev);
+        // Keep provider auth/identity in sync when provider-related config changes
+        // (e.g. provider.name or openai-compatible baseUrl updates can change auth state).
+        if (typeof d.key === 'string' && d.key.startsWith('provider.')) {
+          gatewayClientRef.current.rpc('provider.get').then((res) => {
+            setProviderInfo(res as { name: string; auth: ProviderAuthInfo });
+          }).catch(() => {});
+        }
         break;
       }
 
@@ -1546,6 +1553,26 @@ export function useGateway() {
     return { sessionKey: sk, chatId: newChatId };
   }, []);
 
+  const deleteSession = useCallback(async (sessionId: string) => {
+    const res = await rpc('sessions.delete', { sessionId }) as { deleted: boolean };
+    if (res?.deleted) {
+      setSessions(prev => prev.filter(s => s.id !== sessionId));
+      setSessionStates(prev => {
+        let changed = false;
+        const next: Record<string, SessionState> = {};
+        for (const [sessionKey, state] of Object.entries(prev)) {
+          if (state.sessionId === sessionId) {
+            changed = true;
+            continue;
+          }
+          next[sessionKey] = state;
+        }
+        return changed ? next : prev;
+      });
+    }
+    return res;
+  }, [rpc]);
+
   const changeModel = useCallback(async (newModel: string) => {
     await rpc('config.set', { key: 'model', value: newModel });
     setModel(newModel);
@@ -1722,7 +1749,12 @@ export function useGateway() {
     return await rpc('provider.detect') as {
       claude: { installed: boolean; hasOAuth: boolean; hasApiKey: boolean };
       codex: { installed: boolean; hasAuth: boolean };
+      openaiCompatible: { installed: boolean; hasApiKey: boolean };
     };
+  }, [rpc]);
+
+  const listProviderModels = useCallback(async (provider: string) => {
+    return await rpc('provider.models.list', { provider }) as { models: string[] };
   }, [rpc]);
 
   const runBackground = useCallback(async (prompt: string) => {
@@ -1815,6 +1847,7 @@ export function useGateway() {
     sendMessage,
     abortAgent,
     newSession,
+    deleteSession,
     loadSession,
     setCurrentSessionId: useCallback((id: string | undefined) => {
       const sk = activeSessionKeyRef.current;
@@ -1878,5 +1911,6 @@ export function useGateway() {
     checkProvider,
     getProviderAuth,
     detectProviders,
+    listProviderModels,
   };
 }

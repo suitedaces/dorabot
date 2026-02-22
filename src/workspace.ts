@@ -29,6 +29,7 @@ export const CLAUDE_KEY_PATH = join(DORABOT_DIR, '.anthropic-key');
 export const CLAUDE_OAUTH_PATH = join(DORABOT_DIR, '.claude-oauth.json');
 export const CODEX_OAUTH_PATH = join(DORABOT_DIR, '.codex-oauth.json');
 export const OPENAI_KEY_PATH = join(DORABOT_DIR, '.openai-key');
+export const OPENAI_COMPATIBLE_KEY_PATH = join(DORABOT_DIR, '.openai-compatible-key');
 export const LEGACY_CODEX_AUTH_PATH = join(DORABOT_DIR, 'codex-auth.json');
 
 export function toHomeAlias(path: string): string {
