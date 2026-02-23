@@ -8,6 +8,12 @@ export function Footer() {
         </div>
         <div className="flex items-center gap-6 text-sm text-text-muted">
           <a
+            href="/docs"
+            className="hover:text-text transition-colors"
+          >
+            Docs
+          </a>
+          <a
             href="https://github.com/suitedaces/dorabot"
             className="hover:text-text transition-colors"
           >

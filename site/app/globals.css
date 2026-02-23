@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@source "./docs";
 
 @theme {
   /* Runtime theme variables (desktop-aligned) */

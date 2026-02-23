@@ -59,7 +59,8 @@ export function Navbar() {
             <span className="text-sm font-medium text-text-secondary">dorabot</span>
           </a>
           <nav className="hidden sm:flex items-center gap-6">
-            <a href="#features" className="text-sm text-text-muted hover:text-text transition-colors">Features</a>
+            <a href="/docs" className="text-sm text-text-muted hover:text-text transition-colors">Docs</a>
+            <a href="/#features" className="text-sm text-text-muted hover:text-text transition-colors">Features</a>
           </nav>
         </div>
         <div className="flex items-center gap-2">
@@ -113,7 +114,10 @@ export function Navbar() {
       </div>
       {mobileOpen && (
         <div className="sm:hidden border-t border-border px-4 py-3">
-          <a href="#features" onClick={() => setMobileOpen(false)} className="block py-2 text-sm text-text-muted hover:text-text">
+          <a href="/docs" onClick={() => setMobileOpen(false)} className="block py-2 text-sm text-text-muted hover:text-text">
+            Docs
+          </a>
+          <a href="/#features" onClick={() => setMobileOpen(false)} className="block py-2 text-sm text-text-muted hover:text-text">
             Features
           </a>
           <a href="https://github.com/suitedaces/dorabot" className="flex items-center gap-1.5 py-2 text-sm text-text-muted hover:text-text">
