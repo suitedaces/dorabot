@@ -282,7 +282,7 @@ export function isPathAllowed(
   }
 
   // denied: always_denied + global + channel-specific (all merged)
-  const globalDenied = config.gateway?.deniedPaths || ALWAYS_DENIED;
+  const globalDenied = [...ALWAYS_DENIED, ...(config.gateway?.deniedPaths || [])];
   const channelDenied = channelOverride?.deniedPaths || [];
   const denied = [...globalDenied, ...channelDenied].map(p => resolve(p.replace(/^~/, home)));
   if (denied.some(d => resolved.startsWith(d))) return false;
