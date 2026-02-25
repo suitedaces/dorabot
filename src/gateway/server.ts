@@ -2,7 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'node:http';
 import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, chmodSync, unlinkSync, watch, type FSWatcher } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { resolve as pathResolve, join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { createConnection } from 'node:net';
@@ -63,9 +63,7 @@ import {
 
 function macNotify(title: string, body: string) {
   try {
-    const t = title.replace(/"/g, '\\"');
-    const b = body.replace(/"/g, '\\"');
-    execSync(`osascript -e 'display notification "${b}" with title "${t}"'`, { stdio: 'ignore' });
+    execFileSync('osascript', ['-e', `display notification "${body}" with title "${title}"`], { stdio: 'ignore' });
   } catch { /* ignore */ }
 }
 
