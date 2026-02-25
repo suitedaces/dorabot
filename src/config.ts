@@ -278,19 +278,29 @@ export function isPathAllowed(
   try {
     resolved = realpathSync(targetPath);
   } catch {
-    resolved = resolve(targetPath);
+    // For non-existent targets, resolve the parent via realpath to prevent
+    // symlink-parent bypasses, then append the final segment.
+    const parent = dirname(resolve(targetPath));
+    try {
+      resolved = join(realpathSync(parent), resolve(targetPath).slice(parent.length));
+    } catch {
+      resolved = resolve(targetPath);
+    }
   }
+
+  const pathMatch = (dir: string, target: string) =>
+    target === dir || target.startsWith(dir + '/');
 
   // denied: always_denied + global + channel-specific (all merged)
   const globalDenied = [...ALWAYS_DENIED, ...(config.gateway?.deniedPaths || [])];
   const channelDenied = channelOverride?.deniedPaths || [];
   const denied = [...globalDenied, ...channelDenied].map(p => resolve(p.replace(/^~/, home)));
-  if (denied.some(d => resolved.startsWith(d))) return false;
+  if (denied.some(d => pathMatch(d, resolved))) return false;
 
   // allowed: channel-specific overrides global if set
   const allowedRaw = channelOverride?.allowedPaths?.length
     ? channelOverride.allowedPaths
     : (config.gateway?.allowedPaths || [home, '/tmp']);
   const allowed = allowedRaw.map(p => resolve(p.replace(/^~/, home)));
-  return allowed.some(a => resolved.startsWith(a));
+  return allowed.some(a => pathMatch(a, resolved));
 }
