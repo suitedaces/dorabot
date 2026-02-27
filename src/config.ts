@@ -82,6 +82,14 @@ export type TelegramChannelConfig = {
   deniedPaths?: string[];
 };
 
+export type TranscriptionEngine = 'parakeet-mlx' | 'whisper' | 'none';
+
+export type TranscriptionConfig = {
+  engine?: TranscriptionEngine;
+  model?: string;       // e.g. 'mlx-community/parakeet-tdt-0.6b-v2'
+  pythonEnv?: string;   // path to venv (default: ~/.dorabot/transcription-env)
+};
+
 export type ChannelsConfig = {
   whatsapp?: WhatsAppChannelConfig;
   telegram?: TelegramChannelConfig;
@@ -164,6 +172,7 @@ export type Config = {
   cron?: CronConfig;
   calendar?: CalendarConfig;
   channels?: ChannelsConfig;
+  transcription?: TranscriptionConfig;
   gateway?: GatewayConfig;
   browser?: BrowserConfig;
   security?: SecurityConfig;

@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Shield, Brain, Globe, Settings2, Box, Lock, FolderLock, X, Plus, Wrench, Activity, Sun, Check } from 'lucide-react';
+import { Shield, Brain, Globe, Settings2, Box, Lock, FolderLock, X, Plus, Wrench, Activity, Sun, Check, Mic } from 'lucide-react';
 
 type Props = {
   gateway: ReturnType<typeof useGateway>;
@@ -232,6 +232,9 @@ export function SettingsView({ gateway }: Props) {
               </div>
             </CardContent>
           </Card>
+
+          {/* transcription */}
+          <TranscriptionCard gateway={gateway} disabled={disabled} />
 
           <div className="text-[10px] text-muted-foreground px-1">
             changes are saved to config and take effect on next agent run
@@ -585,6 +588,60 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
           {sandboxMode === 'danger-full-access' && approvalPolicy === 'never' && (
             <div className="text-[10px] text-warning bg-warning/10 rounded px-2 py-1.5">
               Codex has full system access with no approval — use caution
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function TranscriptionCard({ gateway, disabled }: { gateway: ReturnType<typeof useGateway>; disabled: boolean }) {
+  const cfg = gateway.configData as Record<string, any> | null;
+  const engine = cfg?.transcription?.engine || 'parakeet-mlx';
+  const model = cfg?.transcription?.model || '';
+
+  const set = useCallback(async (key: string, value: unknown) => {
+    try { await gateway.setConfig(key, value); } catch (err) { console.error(`failed to set ${key}:`, err); }
+  }, [gateway]);
+
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="flex items-center gap-2 mb-4">
+          <Mic className="w-4 h-4 text-primary" />
+          <span className="text-xs font-semibold">Voice Transcription</span>
+        </div>
+
+        <div className="space-y-4">
+          <SettingRow label="engine" description="transcription engine for voice messages">
+            <Select value={engine} onValueChange={v => set('transcription.engine', v)} disabled={disabled}>
+              <SelectTrigger className="h-7 w-40 text-[11px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="parakeet-mlx" className="text-[11px]">parakeet MLX</SelectItem>
+                <SelectItem value="whisper" className="text-[11px]">whisper</SelectItem>
+                <SelectItem value="none" className="text-[11px]">none (disabled)</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingRow>
+
+          {engine === 'parakeet-mlx' && (
+            <SettingRow label="model" description="HuggingFace model ID (leave empty for default)">
+              <Input
+                placeholder="mlx-community/parakeet-tdt-0.6b-v2"
+                value={model}
+                onChange={e => set('transcription.model', e.target.value || undefined)}
+                className="h-7 w-56 text-[11px]"
+                disabled={disabled}
+              />
+            </SettingRow>
+          )}
+
+          {engine === 'none' && (
+            <div className="text-[10px] text-muted-foreground bg-muted/50 rounded px-2 py-1.5">
+              voice messages will be passed as file paths without transcription
             </div>
           )}
         </div>
