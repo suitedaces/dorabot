@@ -26,6 +26,7 @@ import { validateTelegramToken } from '../channels/telegram/bot.js';
 import { insertEvent, queryEventsBySessionCursor, deleteEventsUpToSeq, cleanupOldEvents } from './event-log.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { closeBrowser } from '../browser/manager.js';
+import { transcribeAudio } from '../transcription.js';
 import { setScheduler } from '../tools/index.js';
 import { loadPlans, savePlans, type Plan, appendPlanLog, readPlanLogs, readPlanDoc, createPlanFromIdea } from '../tools/plans.js';
 import { loadIdeas, saveIdeas } from '../ideas/tools.js';
@@ -625,6 +626,10 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   };
   const channelRunContexts = new Map<string, ChannelRunContext>();
 
+  // Context usage tracking for warnings
+  const contextUsageMap = new Map<string, number>();
+  const contextWarningMap = new Map<string, number>();
+
   // background runs state
   type BackgroundRun = {
     id: string; sessionKey: string; prompt: string;
@@ -1020,14 +1025,22 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     return null;
   }
 
-  function buildIncomingChannelPrompt(msg: InboundMessage, bodyText: string, replyContext?: string): string {
+  function buildIncomingChannelPrompt(msg: InboundMessage, bodyText: string, replyContext?: string, transcript?: string): string {
     const safeSender = (msg.senderName || msg.senderId).replace(/[<>"'&\n\r]/g, '_').slice(0, 50);
     const safeBody = bodyText.replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const mediaAttr = msg.mediaType ? ` media_type="${msg.mediaType}" media_path="${msg.mediaPath || ''}"` : '';
 
+    const bodyLines: string[] = [];
+    if (transcript) {
+      bodyLines.push(`[Voice message transcript]: ${transcript}`);
+      if (safeBody) bodyLines.push(safeBody);
+    } else {
+      bodyLines.push(safeBody || (msg.mediaPath ? `[Attached: ${msg.mediaType || 'file'} at ${msg.mediaPath}]` : ''));
+    }
+
     return [
       `<incoming_message channel="${msg.channel}" sender="${safeSender}" chat="${msg.chatId}"${mediaAttr}>`,
-      safeBody || (msg.mediaPath ? `[Attached: ${msg.mediaType || 'file'} at ${msg.mediaPath}]` : ''),
+      ...bodyLines,
       `</incoming_message>`,
       ...(replyContext ? [
         '',
@@ -1222,8 +1235,27 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       ? `Multiple messages:\n${batchedBodies.map((b, i) => `${i + 1}. ${b}`).join('\n')}`
       : msg.body;
 
+    // transcribe audio if applicable
+    let transcript: string | undefined;
+    if (msg.mediaPath && msg.mediaType?.startsWith('audio/') && config.transcription?.engine !== 'none') {
+      // update status to show transcription in progress
+      const ctx = channelRunContexts.get(session.key);
+      const handler = getChannelHandler(msg.channel);
+      if (ctx?.statusMsgId && handler) {
+        handler.edit(ctx.statusMsgId, 'transcribing...', ctx.chatId).catch(() => {});
+      }
+      broadcast({ event: 'agent.status', data: { sessionKey: session.key, status: 'transcribing' } });
+
+      try {
+        const text = await transcribeAudio(msg.mediaPath, config.transcription);
+        if (text) transcript = text;
+      } catch (err) {
+        console.error('[gateway] transcription failed:', err);
+      }
+    }
+
     const replyContext = runReplyContext || resolveLinkedRunSession(msg)?.context;
-    const channelPrompt = buildIncomingChannelPrompt(msg, body, replyContext);
+    const channelPrompt = buildIncomingChannelPrompt(msg, body, replyContext, transcript);
 
     // handleAgentRun may never return for persistent sessions (Claude async generator).
     // Per-turn result handling is done inside the stream loop via channelRunContexts.
@@ -1309,11 +1341,22 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       sessionRegistry.incrementMessages(session.key);
       broadcastSessionUpdate(session.key);
 
+      // transcribe audio for injected messages
+      let injectTranscript: string | undefined;
+      if (msg.mediaPath && msg.mediaType?.startsWith('audio/')) {
+        try {
+          const text = await transcribeAudio(msg.mediaPath, config.transcription);
+          if (text) injectTranscript = text;
+        } catch (err) {
+          console.error('[gateway] transcription failed (inject path):', err);
+        }
+      }
+
       // try injection into active persistent session (even if idle between turns)
       const handle = runHandles.get(session.key);
       console.log(`[onMessage] key=${session.key} activeRun=${session.activeRun} handleExists=${!!handle} handleActive=${handle?.active} runQueueHas=${runQueues.has(session.key)}`);
       if (handle?.active) {
-        const channelPrompt = buildIncomingChannelPrompt(msg, msg.body, runReplyContext);
+        const channelPrompt = buildIncomingChannelPrompt(msg, msg.body, runReplyContext, injectTranscript);
         console.log(`[onMessage] INJECTING into ${session.key}`);
         handle.inject(channelPrompt);
         fileSessionManager.append(session.sessionId, {
@@ -1377,6 +1420,24 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         return `session reset. ${old ? `old: ${old.messageCount} messages.` : ''} new session started.`;
       }
 
+      if (cmd === 'clear' || cmd === 'reset') {
+        const session = sessionRegistry.get(key);
+
+        // Don't allow clear if agent is running
+        if (session?.activeRun) {
+          return '⚠️ Cannot clear while agent is running. Wait for current response to finish.';
+        }
+
+        if (session) {
+          fileSessionManager.setMetadata(session.sessionId, { sdkSessionId: undefined });
+        }
+        sessionRegistry.remove(key);
+        contextUsageMap.delete(key); // reset cumulative usage
+        contextWarningMap.delete(key); // reset warning state
+
+        return '✓ Conversation cleared. Starting fresh.';
+      }
+
       if (cmd === 'status') {
         const session = sessionRegistry.get(key);
         if (!session) return 'no active session for this chat.';
@@ -1395,6 +1456,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       if (pendingTask) {
         pendingTaskApprovals.delete(requestId);
         void handleTaskApprovalDecision(pendingTask.taskId, requestId, approved, reason);
+        broadcast({ event: 'agent.tool_approval_resolved', data: { requestId, approved, reason } });
         return;
       }
       const pending = pendingApprovals.get(requestId);
@@ -1402,6 +1464,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       pendingApprovals.delete(requestId);
       if (pending.timeout) clearTimeout(pending.timeout);
       pending.resolve({ approved, reason });
+      broadcast({ event: 'agent.tool_approval_resolved', data: { requestId, approved, reason } });
     },
     onQuestionResponse: async (requestId, selectedIndex, label) => {
       console.log(`[canUseTool] question response: requestId=${requestId} index=${selectedIndex} label=${label}`);
@@ -2199,6 +2262,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           connectedChannels: connected,
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           extraContext,
+          contextUsage: contextUsageMap.has(sessionKey) ? { inputTokens: contextUsageMap.get(sessionKey)! } : undefined,
           canUseTool: makeCanUseTool(channel, messageMetadata?.chatId, sessionKey),
           abortController,
           messageMetadata,
@@ -2610,6 +2674,51 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             broadcast(resultEvent);
             if (streamV2Enabled && typeof resultEvent.seq === 'number') {
               scheduleRunEventPrune(sessionKey, resultEvent.seq);
+            }
+
+            // per-turn: track cumulative token usage and send warnings
+            const currentUsage = contextUsageMap.get(sessionKey) || 0;
+            const newUsage = currentUsage + agentUsage.inputTokens;
+            contextUsageMap.set(sessionKey, newUsage);
+
+            const contextPct = Math.floor((newUsage / 200000) * 100);
+            const thresholds = [25, 50, 60, 70, 80, 85, 90, 95];
+            const lastNotified = contextWarningMap.get(sessionKey) || 0;
+
+            for (const threshold of thresholds) {
+              if (contextPct >= threshold && lastNotified < threshold) {
+                contextWarningMap.set(sessionKey, threshold);
+
+                const emoji = contextPct >= 95 ? '🚨🔥🚨' :
+                             contextPct >= 90 ? '🚨' :
+                             contextPct >= 80 ? '⚠️' : '📊';
+
+                const urgency = contextPct >= 90 ? 'CRITICAL' :
+                               contextPct >= 80 ? 'HIGH' :
+                               contextPct >= 70 ? 'MEDIUM' : 'INFO';
+
+                const tokensK = (newUsage / 1000).toFixed(0);
+
+                const msg = contextPct >= 90
+                  ? `${emoji} **[${urgency}] Context ${contextPct}% full (${tokensK}k / 200k tokens)**\n\nType \`/clear\` to reset, or use session_handoff tool to save state first!`
+                  : contextPct >= 70
+                  ? `${emoji} Context ${contextPct}% full (${tokensK}k / 200k tokens)\n\nConsider wrapping up or writing a handoff if this will continue.`
+                  : `${emoji} Context usage: ${contextPct}% (${tokensK}k tokens)`;
+
+                // Send warning to the active chat
+                if (channel && messageMetadata?.chatId) {
+                  const h = getChannelHandler(channel);
+                  if (h) {
+                    try {
+                      await h.send(messageMetadata.chatId, msg);
+                    } catch (err) {
+                      console.error('[gateway] failed to send context warning:', err);
+                    }
+                  }
+                }
+
+                break; // only send one warning per turn
+              }
             }
 
             // per-turn: broadcast goals/tasks updates if agent used planning tools
@@ -4596,6 +4705,24 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             return { id, result: { key, value } };
           }
 
+          if (key === 'transcription.engine') {
+            const valid = ['parakeet-mlx', 'whisper', 'none'];
+            if (typeof value !== 'string' || !valid.includes(value)) return { id, error: `transcription.engine must be one of: ${valid.join(', ')}` };
+            if (!config.transcription) config.transcription = {};
+            config.transcription.engine = value as any;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          if (key === 'transcription.model') {
+            if (!config.transcription) config.transcription = {};
+            config.transcription.model = (typeof value === 'string' && value) ? value : undefined;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
           // channel policy keys: channels.<channel>.dmPolicy / groupPolicy
           const policyMatch = key.match(/^channels\.(telegram|whatsapp)\.(dmPolicy|groupPolicy)$/);
           if (policyMatch) {
@@ -4821,6 +4948,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           pendingApprovals.delete(requestId);
           if (pending.timeout) clearTimeout(pending.timeout);
           pending.resolve({ approved: true, modifiedInput: params?.modifiedInput as Record<string, unknown> });
+          broadcast({ event: 'agent.tool_approval_resolved', data: { requestId, approved: true } });
           return { id, result: { approved: true } };
         }
 
@@ -4832,6 +4960,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             pendingTaskApprovals.delete(requestId);
             const reason = (params?.reason as string) || 'user denied';
             await handleTaskApprovalDecision(pendingTask.taskId, requestId, false, reason);
+            broadcast({ event: 'agent.tool_approval_resolved', data: { requestId, approved: false, reason } });
             return { id, result: { denied: true, taskId: pendingTask.taskId } };
           }
           const pending = pendingApprovals.get(requestId);
@@ -4839,6 +4968,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           pendingApprovals.delete(requestId);
           if (pending.timeout) clearTimeout(pending.timeout);
           pending.resolve({ approved: false, reason: (params?.reason as string) || 'user denied' });
+          broadcast({ event: 'agent.tool_approval_resolved', data: { requestId, approved: false, reason: (params?.reason as string) || 'user denied' } });
           return { id, result: { denied: true } };
         }
 

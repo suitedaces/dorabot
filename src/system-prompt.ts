@@ -15,6 +15,7 @@ export type SystemPromptOptions = {
   extraContext?: string;
   workspaceFiles?: WorkspaceFiles;
   lastPulseAt?: number;
+  contextUsage?: { inputTokens: number };
 };
 
 export function buildSystemPrompt(opts: SystemPromptOptions): string {
@@ -126,6 +127,26 @@ Workspace: ${WORKSPACE_DIR}
 Timestamped entries. This is your continuity between runs. Promote important things up to MEMORY.md.${recentMemoriesSection}
 
 Write consistently. User shares facts or preferences → USER.md or MEMORY.md. Decisions, "remember this" → MEMORY.md. Task outcomes, observations, research → today's journal. Memory files are the only thing that survives between sessions.`);
+
+  // context usage
+  if (opts.contextUsage) {
+    const pct = Math.floor((opts.contextUsage.inputTokens / 200000) * 100);
+    const tokensK = (opts.contextUsage.inputTokens / 1000).toFixed(0);
+    const status = pct >= 90 ? '🚨 CRITICAL' :
+                   pct >= 80 ? '⚠️ HIGH' :
+                   pct >= 70 ? '📊 MODERATE' : '✓ OK';
+
+    sections.push(`## Context Usage
+
+${status} — ${pct}% full (${tokensK}k / 200k tokens)
+
+**When to handoff**:
+- 70%+: Consider wrapping up or writing a handoff if work will continue
+- 80%+: Strongly recommend handoff for ongoing work
+- 90%+: URGENT — handoff immediately or conversation will fail
+
+Use \`session_handoff\` tool to write a rich handoff document, then tell the user to type \`/clear\`.`);
+  }
 
   // goals + tasks pipeline
   try {

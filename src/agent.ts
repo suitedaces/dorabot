@@ -99,6 +99,7 @@ export type AgentOptions = {
   timezone?: string;
   ownerIdentity?: string;
   extraContext?: string;
+  contextUsage?: { inputTokens: number };
   onMessage?: (msg: unknown) => void;
   onToolUse?: (tool: string, input: unknown) => void;
   onToolResult?: (tool: string, result: unknown) => void;
@@ -172,6 +173,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     extraContext,
     workspaceFiles,
     lastPulseAt,
+    contextUsage: opts.contextUsage,
   });
 
   // create MCP server for custom tools
@@ -351,6 +353,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
     extraContext,
     workspaceFiles,
     lastPulseAt,
+    contextUsage: opts.contextUsage,
   });
 
   const mcpServer = createAgentMcpServer();
