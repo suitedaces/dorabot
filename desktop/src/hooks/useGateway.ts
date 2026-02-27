@@ -1179,6 +1179,12 @@ export function useGateway() {
         break;
       }
 
+      case 'agent.tool_approval_resolved': {
+        const d = data as { requestId: string };
+        setPendingApprovals(prev => prev.filter(a => a.requestId !== d.requestId));
+        break;
+      }
+
       case 'agent.tool_notify': {
         const d = data as ToolNotification;
         setNotifications(prev => [...prev.slice(-20), d]);

@@ -135,9 +135,21 @@ export function VirtualChatList<T>({
     return () => observer.disconnect();
   }, [onScroll]);
 
+  // Scroll to bottom on mount (e.g., tab switch)
+  const mountedRef = useRef(false);
   useEffect(() => {
     const viewport = viewportRef.current;
-    if (!viewport || !nearBottomRef.current) return;
+    if (!viewport) return;
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      // Scroll immediately and again after layout settles
+      viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'auto' });
+      requestAnimationFrame(() => {
+        viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'auto' });
+      });
+      return;
+    }
+    if (!nearBottomRef.current) return;
     viewport.scrollTo({ top: viewport.scrollHeight, behavior: scrollBehavior });
     onScrollBehaviorConsumed?.();
   }, [items, onScrollBehaviorConsumed, scrollBehavior]);
