@@ -83,6 +83,20 @@ export async function startTelegramMonitor(opts: TelegramMonitorOptions): Promis
       const reply = await onCmd('status', chatId);
       if (reply) await ctx.reply(reply);
     });
+    bot.command('clear', async (ctx) => {
+      const senderId = String(ctx.from?.id || '');
+      if (opts.allowFrom && opts.allowFrom.length > 0 && !opts.allowFrom.includes(senderId)) return;
+      const chatId = String(ctx.chat.id);
+      const reply = await onCmd('clear', chatId);
+      if (reply) await ctx.reply(reply);
+    });
+    bot.command('reset', async (ctx) => {
+      const senderId = String(ctx.from?.id || '');
+      if (opts.allowFrom && opts.allowFrom.length > 0 && !opts.allowFrom.includes(senderId)) return;
+      const chatId = String(ctx.chat.id);
+      const reply = await onCmd('reset', chatId);
+      if (reply) await ctx.reply(reply);
+    });
   }
 
   // handle callback queries (approvals + questions)
