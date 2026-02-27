@@ -2043,14 +2043,18 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     }
 
     // check tool allow/deny policy (channel-specific + global)
-    const channelToolPolicy = getChannelToolPolicy(runChannel);
+    // For the message tool, use the target channel (input.channel) rather than the session channel
+    const policyChannel = (cleanName === 'message' && typeof input.channel === 'string')
+      ? input.channel
+      : runChannel;
+    const channelToolPolicy = getChannelToolPolicy(policyChannel);
     const globalToolPolicy = config.security?.tools;
     if (!isToolAllowed(cleanName, channelToolPolicy, globalToolPolicy)) {
       return { behavior: 'deny' as const, message: `tool '${cleanName}' blocked by policy` };
     }
 
     // classify tool call (use clean name so FORM_MAP in desktop matches)
-    const tier = classifyToolCall(cleanName, input);
+    const tier = classifyToolCall(cleanName, input, channelToolPolicy);
 
     // respect permissionMode and approvalMode
     const approvalMode = config.security?.approvalMode || 'approve-sensitive';

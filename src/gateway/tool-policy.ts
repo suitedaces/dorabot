@@ -66,6 +66,7 @@ function classifyBashCommand(command: string): Tier {
 export function classifyToolCall(
   toolName: string,
   input: Record<string, unknown>,
+  channelPolicy?: ToolPolicyConfig,
 ): Tier {
   const name = cleanToolName(toolName);
 
@@ -79,6 +80,10 @@ export function classifyToolCall(
   }
 
   if (name === 'message') {
+    // If channel policy explicitly allows message, auto-allow it
+    if (channelPolicy?.allow && channelPolicy.allow.includes('message')) {
+      return 'auto-allow';
+    }
     return 'require-approval';
   }
 
