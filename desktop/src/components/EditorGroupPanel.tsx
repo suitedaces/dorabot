@@ -1,7 +1,7 @@
 import type { EditorGroup, GroupId } from '../hooks/useLayout';
 import type { Tab } from '../hooks/useTabs';
 import { isChatTab } from '../hooks/useTabs';
-import type { useGateway } from '../hooks/useGateway';
+import type { useGateway, ImageAttachment } from '../hooks/useGateway';
 import type { useTabs } from '../hooks/useTabs';
 import { useDroppable } from '@dnd-kit/core';
 import { TabBar } from './TabBar';
@@ -54,6 +54,11 @@ type Props = {
   tabState: ReturnType<typeof useTabs>;
   selectedFile: string | null;
   selectedChannel: 'whatsapp' | 'telegram';
+  chatDrafts: {
+    getDraft: (sessionKey: string) => { text: string; images: ImageAttachment[] } | undefined;
+    saveDraft: (sessionKey: string, text: string, images: ImageAttachment[]) => void;
+    clearDraft: (sessionKey: string) => void;
+  };
   onFocusGroup: () => void;
   onNavigateSettings: () => void;
   onViewSession: (sessionId: string, channel?: string, chatId?: string, chatType?: string) => void;
@@ -73,6 +78,7 @@ export function EditorGroupPanel({
   tabState,
   selectedFile,
   selectedChannel,
+  chatDrafts,
   onFocusGroup,
   onNavigateSettings,
   onViewSession,
@@ -104,12 +110,16 @@ export function EditorGroupPanel({
         };
         return (
           <ChatView
+            key={activeTab.sessionKey}
             gateway={gateway}
             chatItems={ss.chatItems}
             agentStatus={ss.agentStatus}
             pendingQuestion={ss.pendingQuestion}
             sessionKey={activeTab.sessionKey}
             onNavigateSettings={onNavigateSettings}
+            getDraft={chatDrafts.getDraft}
+            saveDraft={chatDrafts.saveDraft}
+            clearDraft={chatDrafts.clearDraft}
           />
         );
       }

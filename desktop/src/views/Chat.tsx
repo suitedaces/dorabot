@@ -34,6 +34,9 @@ type Props = {
   pendingQuestion: AskUserQuestion | null;
   sessionKey?: string;
   onNavigateSettings?: () => void;
+  getDraft?: (sessionKey: string) => { text: string; images: ImageAttachment[] } | undefined;
+  saveDraft?: (sessionKey: string, text: string, images: ImageAttachment[]) => void;
+  clearDraft?: (sessionKey: string) => void;
 };
 
 const TOOL_TEXT: Record<string, { pending: string; done: string }> = {
@@ -566,7 +569,7 @@ function getGreeting(): string {
   return 'good evening';
 }
 
-export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, sessionKey, onNavigateSettings }: Props) {
+export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, sessionKey, onNavigateSettings, getDraft, saveDraft, clearDraft }: Props) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [attachedImages, setAttachedImages] = useState<ImageAttachment[]>([]);
@@ -578,6 +581,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   const landingRef = useRef<HTMLDivElement>(null);
   const isRunning = agentStatus !== 'idle';
   const isEmpty = chatItems.length === 0;
+  const draftLoadedRef = useRef(false);
 
   useEffect(() => {
     const el = landingRef.current;
@@ -586,6 +590,32 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // Restore draft on mount or sessionKey change
+  useEffect(() => {
+    if (!sessionKey || !getDraft) return;
+    const draft = getDraft(sessionKey);
+    if (draft) {
+      setInput(draft.text);
+      setAttachedImages(draft.images);
+    } else {
+      // Clear input when switching to a session with no draft
+      if (draftLoadedRef.current) {
+        setInput('');
+        setAttachedImages([]);
+      }
+    }
+    draftLoadedRef.current = true;
+  }, [sessionKey, getDraft]);
+
+  // Save draft when input or images change (debounced)
+  useEffect(() => {
+    if (!sessionKey || !saveDraft || !draftLoadedRef.current) return;
+    const timeout = setTimeout(() => {
+      saveDraft(sessionKey, input, attachedImages);
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [input, attachedImages, sessionKey, saveDraft]);
 
   const addImagesFromFiles = useCallback((files: FileList | File[]) => {
     const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
@@ -664,6 +694,10 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     try {
       const chatId = sessionKey ? sessionKey.split(':').slice(2).join(':') : undefined;
       await gateway.sendMessage(prompt || 'What do you see in this image?', sessionKey, chatId, images);
+      // Clear draft after successful send
+      if (sessionKey && clearDraft) {
+        clearDraft(sessionKey);
+      }
     } finally {
       setSending(false);
     }
