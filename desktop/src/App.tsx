@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { dorabotImg, whatsappImg, telegramImg } from './assets';
-import { useGateway, type NotifiableEvent } from './hooks/useGateway';
+import { useGateway, type NotifiableEvent, type ImageAttachment } from './hooks/useGateway';
 import { useTabs, isChatTab } from './hooks/useTabs';
 import type { Tab, TabType } from './hooks/useTabs';
 import { useLayout } from './hooks/useLayout';
@@ -82,6 +82,11 @@ const SECONDARY_NAV_ITEMS: { id: TabType; label: string; icon: React.ReactNode }
 
 const ALL_NAV_ITEMS = [...PRIMARY_NAV_ITEMS, ...SECONDARY_NAV_ITEMS];
 
+type ChatDraft = {
+  text: string;
+  images: ImageAttachment[];
+};
+
 export default function App() {
   const [showFiles, setShowFiles] = useState(false);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -99,6 +104,7 @@ export default function App() {
   const [draggingTab, setDraggingTab] = useState<Tab | null>(null);
   const { theme, toggle: toggleTheme } = useTheme();
   const [updateState, setUpdateState] = useState<UpdateState>({ status: 'idle' });
+  const [chatDrafts, setChatDrafts] = useState<Record<string, ChatDraft>>({});
   const notify = useCallback((body: string) => {
     const api = (window as any).electronAPI;
     if (api?.notify) {
@@ -573,6 +579,23 @@ export default function App() {
     ? gw.sessionStates[tabState.activeTab.sessionKey]
     : null;
 
+  // Draft handlers
+  const saveDraft = useCallback((sessionKey: string, text: string, images: ImageAttachment[]) => {
+    setChatDrafts(prev => ({ ...prev, [sessionKey]: { text, images } }));
+  }, []);
+
+  const clearDraft = useCallback((sessionKey: string) => {
+    setChatDrafts(prev => {
+      const next = { ...prev };
+      delete next[sessionKey];
+      return next;
+    });
+  }, []);
+
+  const getDraft = useCallback((sessionKey: string) => {
+    return chatDrafts[sessionKey];
+  }, [chatDrafts]);
+
   // Shared props for EditorGroupPanel
   const groupPanelProps = useCallback((groupId: GroupId) => ({
     tabs: tabState.tabs,
@@ -582,6 +605,7 @@ export default function App() {
     tabState,
     selectedFile,
     selectedChannel,
+    chatDrafts: { getDraft, saveDraft, clearDraft },
     onFocusGroup: () => {
       layout.focusGroup(groupId);
       // Sync gateway immediately so messages route to the right session
@@ -602,7 +626,7 @@ export default function App() {
       setTimeout(() => gw.sendMessage(prompt, created.sessionKey, created.chatId), 0);
     },
     onNavClick: (navId: string) => handleNavClick(navId as TabType),
-  }), [tabState, gw, selectedFile, selectedChannel, layout, handleNavClick, handleViewSession, draggingTab]);
+  }), [tabState, gw, selectedFile, selectedChannel, layout, handleNavClick, handleViewSession, draggingTab, getDraft, saveDraft, clearDraft]);
 
   const renderLayout = () => {
     const { visibleGroups, mode, activeGroupId } = layout;
