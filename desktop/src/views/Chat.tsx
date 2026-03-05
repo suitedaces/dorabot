@@ -727,6 +727,13 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         return <div key={i} className="my-1.5"><InlineErrorBoundary><ToolUseItem item={item} /></InlineErrorBoundary></div>;
       case 'thinking':
         return <ThinkingItem key={i} item={item} />;
+      case 'compacting':
+        return (
+          <div key={i} className="flex items-center gap-2 py-2 my-1">
+            <span className="compacting-sheen text-[11px] text-muted-foreground font-medium">Compacting</span>
+            <span className="compacting-dots text-[11px] text-muted-foreground" />
+          </div>
+        );
       case 'result':
         return (
           <div key={i} className="flex gap-2 text-[10px] text-muted-foreground py-1 mt-1 border-t border-border">

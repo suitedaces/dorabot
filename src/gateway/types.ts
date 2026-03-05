@@ -161,6 +161,7 @@ export type GatewayEventName =
   | 'fs.change'
   | 'agent.status'
   | 'agent.stream_batch'
+  | 'agent.compacting'
   | 'session.snapshot'
   | 'gateway.telemetry';
 

@@ -310,6 +310,39 @@
   -webkit-backdrop-filter: blur(20px) saturate(1.8);
 }
 
+/* compacting indicator */
+@keyframes compacting-sheen {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+@keyframes compacting-dots {
+  0%, 20% { content: '.'; }
+  40% { content: '..'; }
+  60%, 100% { content: '...'; }
+}
+
+.compacting-sheen {
+  background: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--muted-foreground) 35%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 65%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: compacting-sheen 2s ease-in-out infinite;
+}
+
+.compacting-dots::after {
+  content: '.';
+  animation: compacting-dots 1.5s steps(1) infinite;
+}
+
 /* dorabot idle animation */
 @keyframes dorabot-float {
   0%, 100% { transform: translateY(0); }

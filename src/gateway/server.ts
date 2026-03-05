@@ -2204,6 +2204,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           messageMetadata,
           onRunReady: (handle) => { runHandles.set(sessionKey, handle); },
           lastPulseAt,
+          hooks: {
+            PreCompact: [{ hooks: [async () => {
+              broadcast({ event: 'agent.compacting', data: { sessionKey, timestamp: Date.now() } });
+              return { continue: true };
+            }] }],
+          },
         });
 
         let agentText = '';

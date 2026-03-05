@@ -97,7 +97,8 @@ export type ChatItem =
   | { type: 'tool_use'; id: string; name: string; input: string; output?: string; imageData?: string; is_error?: boolean; streaming?: boolean; subItems?: ChatItem[]; timestamp: number }
   | { type: 'thinking'; content: string; streaming?: boolean; timestamp: number }
   | { type: 'result'; cost?: number; timestamp: number }
-  | { type: 'error'; content: string; timestamp: number };
+  | { type: 'error'; content: string; timestamp: number }
+  | { type: 'compacting'; timestamp: number };
 
 export type ProgressItem = { content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm: string };
 
@@ -1065,7 +1066,24 @@ export function useGateway() {
           } else if (d.status === 'thinking') {
             statusText = 'thinking...';
           }
-          return { ...prev, [sk]: { ...state, agentStatus: statusText } };
+          // remove compacting indicator when agent resumes
+          const items = state.agentStatus === 'compacting' && statusText !== 'compacting'
+            ? state.chatItems.filter(i => i.type !== 'compacting')
+            : state.chatItems;
+          return { ...prev, [sk]: { ...state, chatItems: items, agentStatus: statusText } };
+        });
+        break;
+      }
+
+      case 'agent.compacting': {
+        const d = data as { sessionKey: string; timestamp: number };
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk)) break;
+        setSessionStates(prev => {
+          const state = prev[sk];
+          if (!state) return prev;
+          const items = [...state.chatItems, { type: 'compacting' as const, timestamp: d.timestamp }];
+          return { ...prev, [sk]: { ...state, chatItems: items, agentStatus: 'compacting' } };
         });
         break;
       }
