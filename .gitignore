@@ -1,5 +1,5 @@
-# docs directory
-docs/
+# docs directory (root only, not site/app/docs)
+/docs/
 
 # dependencies
 node_modules/
