@@ -552,8 +552,8 @@ export class ClaudeProvider implements Provider {
       return { authenticated: false, error: 'Invalid auth code.' };
     }
 
-    if (returnedState && returnedState !== this._pkceState) {
-      console.warn('[claude] OAuth state mismatch, proceeding anyway');
+    if (returnedState !== this._pkceState) {
+      return { authenticated: false, error: 'OAuth state mismatch — possible CSRF. Please retry login.' };
     }
 
     try {

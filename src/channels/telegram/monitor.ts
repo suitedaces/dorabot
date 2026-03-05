@@ -87,6 +87,12 @@ export async function startTelegramMonitor(opts: TelegramMonitorOptions): Promis
 
   // handle callback queries (approvals + questions)
   bot.on('callback_query:data', async (ctx) => {
+    const callbackSenderId = String(ctx.from?.id || '');
+    if (opts.allowFrom && opts.allowFrom.length > 0 && !opts.allowFrom.includes(callbackSenderId)) {
+      await ctx.answerCallbackQuery('Unauthorized');
+      return;
+    }
+
     const data = ctx.callbackQuery.data;
     const sep = data.indexOf(':');
     if (sep < 0) return;
