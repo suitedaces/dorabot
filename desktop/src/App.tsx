@@ -22,7 +22,7 @@ import {
   MessageSquare, Radio, Zap, Brain, Settings2,
   Sparkles, LayoutGrid, Loader2, Star,
   Sun, Moon, Clock, FileSearch, Plug, Folder, FolderOpen, X,
-  ShieldAlert, CalendarCheck, Target, FlaskConical, KeyRound, GitBranch
+  ShieldAlert, CalendarCheck, Target, FlaskConical, KeyRound, GitBranch, TerminalSquare
 } from 'lucide-react';
 
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
@@ -782,17 +782,15 @@ export default function App() {
         >
           {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
         </button>
-        {!layout.isMultiPane && (
-          <button
-            onClick={() => setShowFiles(v => !v)}
-            className="ml-1 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
-            style={{ WebkitAppRegion: 'no-drag' } as any}
-            title={showFiles ? 'Hide file explorer' : 'Show file explorer'}
-            aria-label={showFiles ? 'Hide file explorer' : 'Show file explorer'}
-          >
-            {showFiles ? <FolderOpen className="w-4 h-4" /> : <Folder className="w-4 h-4" />}
-          </button>
-        )}
+        <button
+          onClick={() => setShowFiles(v => !v)}
+          className="ml-1 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
+          style={{ WebkitAppRegion: 'no-drag' } as any}
+          title={showFiles ? 'Hide file explorer' : 'Show file explorer'}
+          aria-label={showFiles ? 'Hide file explorer' : 'Show file explorer'}
+        >
+          {showFiles ? <FolderOpen className="w-4 h-4" /> : <Folder className="w-4 h-4" />}
+        </button>
       </div>
 
       {/* Update banner */}
@@ -1045,6 +1043,18 @@ export default function App() {
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom" className="text-[10px]">Source Control</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      className="rounded p-1.5 transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                      onClick={() => tabState.openTerminalTab()}
+                      title="New Terminal"
+                    >
+                      <TerminalSquare className="w-3.5 h-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="text-[10px]">Terminal ⌃`</TooltipContent>
                 </Tooltip>
                 <span className="flex-1" />
                 <button
