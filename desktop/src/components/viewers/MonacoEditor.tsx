@@ -54,6 +54,7 @@ export function MonacoEditor({ content, filePath, readOnly = false, onSave, onDi
   const originalContentRef = useRef(content);
   const onSaveRef = useRef(onSave);
   const onDirtyChangeRef = useRef(onDirtyChange);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   onSaveRef.current = onSave;
   onDirtyChangeRef.current = onDirtyChange;
 
@@ -98,11 +99,11 @@ export function MonacoEditor({ content, filePath, readOnly = false, onSave, onDi
   // Dispose editor on unmount
   useEffect(() => {
     return () => {
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
       const editor = editorRef.current;
       if (editor) {
         const model = editor.getModel();
         editor.dispose();
-        // Dispose model if no other editor uses it
         if (model) model.dispose();
         editorRef.current = null;
       }
@@ -122,12 +123,26 @@ export function MonacoEditor({ content, filePath, readOnly = false, onSave, onDi
       }
     );
 
-    // Track dirty state
+    // Track dirty state + autosave
     editor.onDidChangeModelContent(() => {
       const value = editor.getValue();
       const isDirty = value !== originalContentRef.current;
       userDirtyRef.current = isDirty;
       onDirtyChangeRef.current?.(isDirty);
+
+      // Autosave after 1s of inactivity
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+      if (isDirty) {
+        autosaveTimerRef.current = setTimeout(() => {
+          const currentValue = editorRef.current?.getValue();
+          if (currentValue != null && currentValue !== originalContentRef.current) {
+            onSaveRef.current?.(currentValue);
+            originalContentRef.current = currentValue;
+            userDirtyRef.current = false;
+            onDirtyChangeRef.current?.(false);
+          }
+        }, 1000);
+      }
     });
 
     editor.focus();

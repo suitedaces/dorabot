@@ -57,7 +57,7 @@ export function FileViewer({ filePath, rpc, onClose, headerless, onDirtyChange }
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [content, setContent] = useState<string>('');
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(true);
   const [dirty, setDirty] = useState(false);
   const [version, setVersion] = useState(0); // bump to force reload
   const fileType = getFileType(filePath);
