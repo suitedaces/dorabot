@@ -5,6 +5,7 @@ import { MarkdownViewer } from './viewers/MarkdownViewer';
 const PDFViewer = lazy(() => import('./viewers/PDFViewer').then(m => ({ default: m.PDFViewer })));
 import { ExcelViewer } from './viewers/ExcelViewer';
 import { ImageViewer } from './viewers/ImageViewer';
+import { VideoViewer } from './viewers/VideoViewer';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { X, Pencil, Eye } from 'lucide-react';
@@ -18,7 +19,7 @@ type Props = {
   onDirtyChange?: (dirty: boolean) => void;
 };
 
-type FileType = 'code' | 'markdown' | 'pdf' | 'excel' | 'image' | 'unsupported';
+type FileType = 'code' | 'markdown' | 'pdf' | 'excel' | 'image' | 'video' | 'audio' | 'unsupported';
 
 const CODE_EXTENSIONS = [
   'js', 'jsx', 'ts', 'tsx', 'py', 'rs', 'go', 'java', 'c', 'cpp', 'h', 'hpp',
@@ -29,20 +30,24 @@ const CODE_EXTENSIONS = [
 
 const EXCEL_EXTENSIONS = ['xlsx', 'xls', 'csv'];
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'];
+const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'ogv', 'm4v'];
+const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a', 'wma', 'opus'];
 
 function getFileType(path: string): FileType {
   const ext = path.split('.').pop()?.toLowerCase();
   const name = path.split('/').pop() || '';
-  if (!ext && !name) return 'unsupported';
-  // Handle extensionless files that are code
-  if (['Makefile', 'Dockerfile', '.gitignore', '.env'].includes(name)) return 'code';
-  if (!ext) return 'unsupported';
+  if (!ext && !name) return 'code';
+  // Handle extensionless files as code (plain text fallback)
+  if (!ext) return 'code';
   if (ext === 'md') return 'markdown';
   if (ext === 'pdf') return 'pdf';
   if (EXCEL_EXTENSIONS.includes(ext)) return 'excel';
   if (IMAGE_EXTENSIONS.includes(ext)) return 'image';
+  if (VIDEO_EXTENSIONS.includes(ext)) return 'video';
+  if (AUDIO_EXTENSIONS.includes(ext)) return 'audio';
   if (CODE_EXTENSIONS.includes(ext)) return 'code';
-  return 'unsupported';
+  // fallback: treat unknown extensions as code (plain text with line numbers)
+  return 'code';
 }
 
 function getFileName(path: string): string {
@@ -67,7 +72,7 @@ export function FileViewer({ filePath, rpc, onClose, headerless, onDirtyChange }
       return;
     }
 
-    if (fileType === 'pdf' || fileType === 'excel' || fileType === 'image') {
+    if (fileType === 'pdf' || fileType === 'excel' || fileType === 'image' || fileType === 'video' || fileType === 'audio') {
       setLoading(false);
       return;
     }
@@ -168,6 +173,10 @@ export function FileViewer({ filePath, rpc, onClose, headerless, onDirtyChange }
         return <ExcelViewer filePath={filePath} rpc={rpc} />;
       case 'image':
         return <ImageViewer filePath={filePath} rpc={rpc} />;
+      case 'video':
+        return <VideoViewer filePath={filePath} rpc={rpc} />;
+      case 'audio':
+        return <VideoViewer filePath={filePath} rpc={rpc} />;
       default:
         return <div className="p-4 text-muted-foreground text-xs">Unsupported file type</div>;
     }
