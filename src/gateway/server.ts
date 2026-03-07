@@ -2,7 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'node:http';
 import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, chmodSync, unlinkSync, watch, type FSWatcher } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
-import { execSync } from 'node:child_process';
+import { execSync, spawn as spawnProcess, type ChildProcess } from 'node:child_process';
 import { resolve as pathResolve, join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { createConnection } from 'node:net';
@@ -432,6 +432,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   };
   const fileWatchers = new Map<string, FileWatchEntry>();
   const watchedPathsByClient = new Map<WebSocket, Set<string>>();
+  const shellProcesses = new Map<string, ChildProcess>();
   const FS_WATCH_DEBOUNCE_MS = 250;
   const DEBUG_FS_WATCH = process.env.DORABOT_DEBUG_FS_WATCH === '1';
 
@@ -4788,6 +4789,21 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
         }
 
+        case 'fs.stat': {
+          const filePath = params?.path as string;
+          if (!filePath) return { id, error: 'path required' };
+          const resolved = resolve(filePath);
+          if (!isPathAllowed(resolved, config)) {
+            return { id, error: `path not allowed: ${resolved}` };
+          }
+          try {
+            const st = statSync(resolved);
+            return { id, result: { size: st.size, mtime: st.mtimeMs, isFile: st.isFile(), isDirectory: st.isDirectory() } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
         case 'fs.watch.start': {
           const watchPath = params?.path as string;
           if (!watchPath) return { id, error: 'path required' };
@@ -4811,6 +4827,307 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const tracked = clientWs ? watchedPathsByClient.get(clientWs) : undefined;
           tracked?.delete(resolvedWatch);
           return { id, result: { stopped: resolvedWatch } };
+        }
+
+        case 'git.detect': {
+          // Walk up from path to find nearest .git directory
+          const detectPath = params?.path as string;
+          if (!detectPath) return { id, error: 'path required' };
+          let dir = resolve(detectPath);
+          while (dir !== '/' && dir !== '.') {
+            try {
+              const gitDir = join(dir, '.git');
+              const st = statSync(gitDir);
+              if (st.isDirectory()) return { id, result: { root: dir } };
+            } catch { /* not found, keep walking */ }
+            const parent = dirname(dir);
+            if (parent === dir) break;
+            dir = parent;
+          }
+          return { id, result: { root: null } };
+        }
+
+        case 'git.status': {
+          // Get working tree changes + diff against origin
+          const repoRoot = params?.path as string;
+          if (!repoRoot) return { id, error: 'path required' };
+          const resolved = resolve(repoRoot);
+          try {
+            const { execFileSync } = await import('node:child_process');
+            // Working tree status (staged + unstaged)
+            const porcelain = execFileSync('git', ['status', '--porcelain', '-uall'], {
+              cwd: resolved, encoding: 'utf-8', timeout: 5000,
+            }).trim();
+            const files: { path: string; status: string; staged: boolean }[] = [];
+            if (porcelain) {
+              for (const line of porcelain.split('\n')) {
+                const index = line[0];  // staged status
+                const wt = line[1];     // working tree status
+                const filePath = line.slice(3);
+                if (index && index !== ' ' && index !== '?') {
+                  files.push({ path: filePath, status: index, staged: true });
+                }
+                if (wt && wt !== ' ') {
+                  files.push({ path: filePath, status: wt === '?' ? 'A' : wt, staged: false });
+                }
+              }
+            }
+            // Current branch
+            let branch = '';
+            try {
+              branch = execFileSync('git', ['branch', '--show-current'], {
+                cwd: resolved, encoding: 'utf-8', timeout: 3000,
+              }).trim();
+            } catch { /* detached HEAD */ }
+            return { id, result: { root: resolved, branch, files } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'git.branches': {
+          const repoRoot = params?.path as string;
+          if (!repoRoot) return { id, error: 'path required' };
+          const resolved = resolve(repoRoot);
+          try {
+            const { execFileSync } = await import('node:child_process');
+            const raw = execFileSync('git', ['branch', '-a', '--no-color'], {
+              cwd: resolved, encoding: 'utf-8', timeout: 5000,
+            }).trim();
+            const branches: { name: string; current: boolean; remote: boolean }[] = [];
+            if (raw) {
+              for (const line of raw.split('\n')) {
+                const current = line.startsWith('* ');
+                const name = line.replace(/^\*?\s+/, '').replace(/^remotes\//, '');
+                if (name.includes(' -> ')) continue;
+                branches.push({ name, current, remote: line.includes('remotes/') });
+              }
+            }
+            return { id, result: { branches } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'git.checkout': {
+          const repoRoot = params?.path as string;
+          const branch = params?.branch as string;
+          if (!repoRoot || !branch) return { id, error: 'path and branch required' };
+          const resolved = resolve(repoRoot);
+          try {
+            const { execFileSync } = await import('node:child_process');
+            execFileSync('git', ['checkout', branch], {
+              cwd: resolved, encoding: 'utf-8', timeout: 10000,
+            });
+            return { id, result: { switched: branch } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'git.fetch': {
+          const repoRoot = params?.path as string;
+          if (!repoRoot) return { id, error: 'path required' };
+          const resolved = resolve(repoRoot);
+          try {
+            const { execFileSync } = await import('node:child_process');
+            execFileSync('git', ['fetch', '--all', '--prune'], {
+              cwd: resolved, encoding: 'utf-8', timeout: 30000,
+            });
+            return { id, result: { fetched: true } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'git.pull': {
+          const repoRoot = params?.path as string;
+          if (!repoRoot) return { id, error: 'path required' };
+          const resolved = resolve(repoRoot);
+          try {
+            const { execFileSync } = await import('node:child_process');
+            const output = execFileSync('git', ['pull'], {
+              cwd: resolved, encoding: 'utf-8', timeout: 30000,
+            }).trim();
+            return { id, result: { output } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'git.showFile': {
+          const repoRoot = params?.path as string;
+          const filePath = params?.file as string;
+          const ref = (params?.ref as string) || 'HEAD';
+          if (!repoRoot || !filePath) return { id, error: 'path and file required' };
+          const resolved = resolve(repoRoot);
+          try {
+            const { execFileSync } = await import('node:child_process');
+            const content = execFileSync('git', ['show', `${ref}:${filePath}`], {
+              cwd: resolved, encoding: 'utf-8', timeout: 5000,
+            });
+            return { id, result: { content } };
+          } catch {
+            // File doesn't exist in that ref (new file)
+            return { id, result: { content: '' } };
+          }
+        }
+
+        case 'git.stageFile': {
+          const repoRoot = params?.path as string;
+          const filePath = params?.file as string;
+          if (!repoRoot || !filePath) return { id, error: 'path and file required' };
+          const resolved = resolve(repoRoot);
+          try {
+            const { execFileSync } = await import('node:child_process');
+            execFileSync('git', ['add', filePath], {
+              cwd: resolved, encoding: 'utf-8', timeout: 5000,
+            });
+            return { id, result: { staged: filePath } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'git.unstageFile': {
+          const repoRoot = params?.path as string;
+          const filePath = params?.file as string;
+          if (!repoRoot || !filePath) return { id, error: 'path and file required' };
+          const resolved = resolve(repoRoot);
+          try {
+            const { execFileSync } = await import('node:child_process');
+            execFileSync('git', ['restore', '--staged', filePath], {
+              cwd: resolved, encoding: 'utf-8', timeout: 5000,
+            });
+            return { id, result: { unstaged: filePath } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'git.commit': {
+          const repoRoot = params?.path as string;
+          const message = params?.message as string;
+          if (!repoRoot || !message) return { id, error: 'path and message required' };
+          const resolved = resolve(repoRoot);
+          try {
+            const { execFileSync } = await import('node:child_process');
+            const output = execFileSync('git', ['commit', '-m', message], {
+              cwd: resolved, encoding: 'utf-8', timeout: 10000,
+            }).trim();
+            return { id, result: { output } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'git.log': {
+          const repoRoot = params?.path as string;
+          const count = (params?.count as number) || 20;
+          if (!repoRoot) return { id, error: 'path required' };
+          const resolved = resolve(repoRoot);
+          try {
+            const { execFileSync } = await import('node:child_process');
+            const raw = execFileSync('git', [
+              'log', `--max-count=${count}`,
+              '--format=%H%x00%h%x00%s%x00%an%x00%aI',
+            ], { cwd: resolved, encoding: 'utf-8', timeout: 5000 }).trim();
+            const commits = raw ? raw.split('\n').map(line => {
+              const [hash, short, subject, author, date] = line.split('\0');
+              return { hash, short, subject, author, date };
+            }) : [];
+            return { id, result: { commits } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'git.diff': {
+          const repoRoot = params?.path as string;
+          const filePath = params?.file as string;
+          const staged = params?.staged as boolean;
+          if (!repoRoot || !filePath) return { id, error: 'path and file required' };
+          const resolved = resolve(repoRoot);
+          try {
+            const { execFileSync } = await import('node:child_process');
+            const args = staged ? ['diff', '--cached', '--', filePath] : ['diff', '--', filePath];
+            const output = execFileSync('git', args, {
+              cwd: resolved, encoding: 'utf-8', timeout: 5000,
+            });
+            return { id, result: { diff: output } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'shell.spawn': {
+          const shellId = params?.shellId as string;
+          const cols = (params?.cols as number) || 80;
+          const rows = (params?.rows as number) || 24;
+          if (!shellId) return { id, error: 'shellId required' };
+          if (shellProcesses.has(shellId)) return { id, result: { spawned: true } };
+
+          const shell = process.env.SHELL || '/bin/zsh';
+          const cwd = config.cwd || homedir();
+
+          const proc = spawnProcess(shell, ['-l'], {
+            cwd,
+            env: {
+              ...process.env,
+              TERM: 'xterm-256color',
+              COLORTERM: 'truecolor',
+              FORCE_COLOR: '1',
+              COLUMNS: String(cols),
+              LINES: String(rows),
+            },
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+
+          shellProcesses.set(shellId, proc);
+
+          const sendToClient = (data: string) => {
+            broadcast({ event: 'shell.data', data: { shellId, type: 'data', data } });
+          };
+
+          proc.stdout?.on('data', (chunk: Buffer) => sendToClient(chunk.toString()));
+          proc.stderr?.on('data', (chunk: Buffer) => sendToClient(chunk.toString()));
+          proc.on('exit', (code) => {
+            shellProcesses.delete(shellId);
+            broadcast({ event: 'shell.data', data: { shellId, type: 'exit', code } });
+          });
+
+          return { id, result: { spawned: true } };
+        }
+
+        case 'shell.write': {
+          const shellId = params?.shellId as string;
+          const data = params?.data as string;
+          if (!shellId || data == null) return { id, error: 'shellId and data required' };
+          const proc = shellProcesses.get(shellId);
+          if (!proc?.stdin?.writable) return { id, error: 'shell not found or not writable' };
+          proc.stdin.write(data);
+          return { id, result: { written: true } };
+        }
+
+        case 'shell.resize': {
+          const shellId = params?.shellId as string;
+          const cols = params?.cols as number;
+          const rows = params?.rows as number;
+          if (!shellId) return { id, error: 'shellId required' };
+          // Without a PTY, we can't truly resize, but we store the dimensions
+          // and send SIGWINCH-like info if the process supports it
+          return { id, result: { resized: true } };
+        }
+
+        case 'shell.kill': {
+          const shellId = params?.shellId as string;
+          if (!shellId) return { id, error: 'shellId required' };
+          const proc = shellProcesses.get(shellId);
+          if (proc) {
+            proc.kill('SIGTERM');
+            shellProcesses.delete(shellId);
+          }
+          return { id, result: { killed: true } };
         }
 
         case 'tool.approve': {

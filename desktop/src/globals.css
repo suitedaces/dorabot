@@ -216,6 +216,22 @@
   background: oklch(0.70 0.24 145 / 0.15);
 }
 
+/* diff character-level highlights (darker than line bg) */
+.diff-char-del {
+  background: oklch(0.55 0.20 27 / 0.30);
+  border-radius: 2px;
+}
+.diff-char-add {
+  background: oklch(0.55 0.20 145 / 0.30);
+  border-radius: 2px;
+}
+.dark .diff-char-del {
+  background: oklch(0.65 0.24 27 / 0.35);
+}
+.dark .diff-char-add {
+  background: oklch(0.70 0.24 145 / 0.35);
+}
+
 /* thinking container */
 .thinking-container {
   position: relative;

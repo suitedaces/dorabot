@@ -18,6 +18,7 @@ type ShortcutActions = {
   focusGroupRight: () => void;
   focusGroupUp: () => void;
   focusGroupDown: () => void;
+  openTerminal: () => void;
 };
 
 type ShortcutOptions = {
@@ -59,15 +60,15 @@ export function useKeyboardShortcuts(actions: ShortcutActions, options: Shortcut
         return;
       }
 
-      // Cmd+Shift+] — next tab
-      if (e.key === ']' && e.shiftKey) {
+      // Cmd+Shift+] or Cmd+Option+Right — next tab
+      if ((e.key === ']' && e.shiftKey) || (e.key === 'ArrowRight' && e.altKey && !e.shiftKey)) {
         e.preventDefault();
         actions.nextTab();
         return;
       }
 
-      // Cmd+Shift+[ — prev tab
-      if (e.key === '[' && e.shiftKey) {
+      // Cmd+Shift+[ or Cmd+Option+Left — prev tab
+      if ((e.key === '[' && e.shiftKey) || (e.key === 'ArrowLeft' && e.altKey && !e.shiftKey)) {
         e.preventDefault();
         actions.prevTab();
         return;
@@ -84,6 +85,13 @@ export function useKeyboardShortcuts(actions: ShortcutActions, options: Shortcut
       if (e.key === 'b' && !e.shiftKey) {
         e.preventDefault();
         actions.toggleFiles();
+        return;
+      }
+
+      // Ctrl+` — open terminal
+      if (e.key === '`' && !e.shiftKey) {
+        e.preventDefault();
+        actions.openTerminal();
         return;
       }
 

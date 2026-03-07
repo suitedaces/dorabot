@@ -3,7 +3,7 @@ import type { useGateway } from './useGateway';
 import type { useLayout } from './useLayout';
 import type { GroupId } from './useLayout';
 
-export type TabType = 'chat' | 'channels' | 'goals' | 'automation' | 'extensions' | 'memory' | 'research' | 'settings';
+export type TabType = 'chat' | 'channels' | 'goals' | 'automation' | 'extensions' | 'memory' | 'research' | 'settings' | 'file' | 'diff' | 'terminal';
 
 export type ChatTab = {
   id: string;
@@ -16,17 +16,55 @@ export type ChatTab = {
   sessionId?: string;
 };
 
+export type FileTab = {
+  id: string;
+  type: 'file';
+  label: string;
+  closable: true;
+  filePath: string;
+};
+
+export type DiffTab = {
+  id: string;
+  type: 'diff';
+  label: string;
+  closable: true;
+  filePath: string;
+  oldContent: string;
+  newContent: string;
+};
+
+export type TerminalTab = {
+  id: string;
+  type: 'terminal';
+  label: string;
+  closable: true;
+  shellId: string;
+};
+
 export type ViewTab = {
   id: string;
-  type: Exclude<TabType, 'chat'>;
+  type: Exclude<TabType, 'chat' | 'file' | 'diff' | 'terminal'>;
   label: string;
   closable: true;
 };
 
-export type Tab = ChatTab | ViewTab;
+export type Tab = ChatTab | ViewTab | FileTab | DiffTab | TerminalTab;
 
 export function isChatTab(tab: Tab): tab is ChatTab {
   return tab.type === 'chat';
+}
+
+export function isFileTab(tab: Tab): tab is FileTab {
+  return tab.type === 'file';
+}
+
+export function isDiffTab(tab: Tab): tab is DiffTab {
+  return tab.type === 'diff';
+}
+
+export function isTerminalTab(tab: Tab): tab is TerminalTab {
+  return tab.type === 'terminal';
 }
 
 const TABS_STORAGE_KEY = 'dorabot:tabs';
@@ -91,6 +129,16 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
   const subscribedSessionKeysRef = useRef<Set<string>>(new Set());
   const streamCountRef = useRef<Record<string, number>>({});
   const [unreadBySession, setUnreadBySession] = useState<Record<string, number>>({});
+  const [dirtyTabs, setDirtyTabs] = useState<Set<string>>(new Set());
+
+  const setTabDirty = useCallback((tabId: string, dirty: boolean) => {
+    setDirtyTabs(prev => {
+      const next = new Set(prev);
+      if (dirty) next.add(tabId);
+      else next.delete(tabId);
+      return next;
+    });
+  }, []);
 
   // Migrate: if layout groups are empty but we have tabs, put them all in g0
   useEffect(() => {
@@ -351,6 +399,10 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
         return rest;
       });
     }
+    // Kill shell process for terminal tabs
+    if (closing && isTerminalTab(closing)) {
+      gw.rpc('shell.kill', { shellId: closing.shellId }).catch(() => {});
+    }
 
     const remainingTabs = tabs.filter(t => t.id !== tabId);
 
@@ -446,7 +498,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     return tab.id;
   }, [tabs, focusTab, openTab]);
 
-  const openViewTab = useCallback((type: Exclude<TabType, 'chat'>, label: string, groupId?: GroupId) => {
+  const openViewTab = useCallback((type: Exclude<TabType, 'chat' | 'file' | 'diff' | 'terminal'>, label: string, groupId?: GroupId) => {
     const id = `view:${type}`;
     const existing = tabs.find(t => t.id === id);
     if (existing) {
@@ -465,6 +517,66 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     setActiveTabId(id);
     layout.addTabToGroup(id, groupId);
   }, [tabs, focusTab, layout]);
+
+  const openFileTab = useCallback((filePath: string, groupId?: GroupId) => {
+    const id = `file:${filePath}`;
+    const existing = tabs.find(t => t.id === id);
+    if (existing) {
+      focusTab(id, groupId);
+      return;
+    }
+
+    const label = filePath.split('/').pop() || filePath;
+    const tab: FileTab = {
+      id,
+      type: 'file',
+      label,
+      closable: true,
+      filePath,
+    };
+
+    setTabs(prev => [...prev, tab]);
+    setActiveTabId(id);
+    layout.addTabToGroup(id, groupId);
+  }, [tabs, focusTab, layout]);
+
+  const openDiffTab = useCallback((opts: {
+    filePath: string;
+    oldContent: string;
+    newContent: string;
+    label?: string;
+  }, groupId?: GroupId) => {
+    const id = `diff:${opts.filePath}:${Date.now()}`;
+    const label = opts.label || `${opts.filePath.split('/').pop() || 'diff'} (diff)`;
+    const tab: DiffTab = {
+      id,
+      type: 'diff',
+      label,
+      closable: true,
+      filePath: opts.filePath,
+      oldContent: opts.oldContent,
+      newContent: opts.newContent,
+    };
+
+    setTabs(prev => [...prev, tab]);
+    setActiveTabId(id);
+    layout.addTabToGroup(id, groupId);
+  }, [layout]);
+
+  const openTerminalTab = useCallback((groupId?: GroupId) => {
+    const shellId = crypto.randomUUID();
+    const id = `terminal:${shellId}`;
+    const tab: TerminalTab = {
+      id,
+      type: 'terminal',
+      label: 'Terminal',
+      closable: true,
+      shellId,
+    };
+    setTabs(prev => [...prev, tab]);
+    setActiveTabId(id);
+    layout.addTabToGroup(id, groupId);
+  }, [layout]);
 
   const newChatTab = useCallback((groupId?: GroupId): { tabId: string; sessionKey: string; chatId: string } => {
     const { sessionKey, chatId } = gw.newSession();
@@ -564,8 +676,13 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     focusTab,
     openChatTab,
     openViewTab,
+    openFileTab,
+    openDiffTab,
+    openTerminalTab,
     newChatTab,
     unreadBySession,
+    dirtyTabs,
+    setTabDirty,
     updateTabLabel,
     nextTab,
     prevTab,

@@ -23,7 +23,7 @@ import {
   MessageSquare, Radio, Zap, Brain, Settings2,
   Sparkles, LayoutGrid, Loader2, Star,
   Sun, Moon, Clock, FileSearch, Plug, Folder, FolderOpen, X,
-  ShieldAlert, CalendarCheck, Target, FlaskConical, KeyRound
+  ShieldAlert, CalendarCheck, Target, FlaskConical, KeyRound, GitBranch
 } from 'lucide-react';
 
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
@@ -84,7 +84,7 @@ const ALL_NAV_ITEMS = [...PRIMARY_NAV_ITEMS, ...SECONDARY_NAV_ITEMS];
 
 export default function App() {
   const [showFiles, setShowFiles] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [sidebarView, setSidebarView] = useState<'files' | 'git'>('files');
   const [sessionFilter, setSessionFilter] = useState<SessionFilter>('all');
   const [selectedChannel, setSelectedChannel] = useState<'whatsapp' | 'telegram'>('whatsapp');
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -409,10 +409,9 @@ export default function App() {
       } else {
         tabState.newChatTab();
       }
-    } else {
+    } else if (navId !== 'file' && navId !== 'diff' && navId !== 'terminal') {
       tabState.openViewTab(navId, ALL_NAV_ITEMS.find(n => n.id === navId)?.label || navId);
     }
-    setSelectedFile(null);
   }, [tabState, gw.sessionStates]);
 
   // --- Keyboard shortcuts ---
@@ -428,6 +427,7 @@ export default function App() {
     focusTabByIndex: (i: number) => tabState.focusTabByIndex(i),
     toggleFiles: () => setShowFiles(f => !f),
     openSettings: () => handleNavClick('settings'),
+    openTerminal: () => tabState.openTerminalTab(),
     focusInput: () => {
       const group = layout.groups.find(g => g.id === layout.activeGroupId);
       const groupEl = document.querySelector<HTMLElement>(`[data-group-id="${layout.activeGroupId}"]`);
@@ -580,7 +580,6 @@ export default function App() {
     isDragging: !!draggingTab,
     gateway: gw,
     tabState,
-    selectedFile,
     selectedChannel,
     onFocusGroup: () => {
       layout.focusGroup(groupId);
@@ -596,13 +595,12 @@ export default function App() {
     onNavigateSettings: () => handleNavClick('settings'),
     onViewSession: handleViewSession,
     onSwitchChannel: setSelectedChannel,
-    onClearSelectedFile: () => setSelectedFile(null),
     onSetupChat: (prompt: string) => {
       const created = tabState.newChatTab(groupId);
       setTimeout(() => gw.sendMessage(prompt, created.sessionKey, created.chatId), 0);
     },
     onNavClick: (navId: string) => handleNavClick(navId as TabType),
-  }), [tabState, gw, selectedFile, selectedChannel, layout, handleNavClick, handleViewSession, draggingTab]);
+  }), [tabState, gw, selectedChannel, layout, handleNavClick, handleViewSession, draggingTab]);
 
   const renderLayout = () => {
     const { visibleGroups, mode, activeGroupId } = layout;
@@ -1006,18 +1004,52 @@ export default function App() {
           </DndContext>
         </ResizablePanel>
 
-        {/* file explorer — only in single-pane mode */}
-        {showFiles && !layout.isMultiPane && (
+        {/* file explorer */}
+        {showFiles && (
           <>
             <ResizableHandle withHandle />
             <ResizablePanel defaultSize="30%" minSize="15%" maxSize="45%" className="overflow-hidden flex flex-col">
-              <div className="flex items-center justify-between border-b border-border px-3 py-2">
-                <div className="text-xs font-medium text-muted-foreground">Explorer</div>
+              <div className="flex items-center border-b border-border px-1.5 py-1.5 gap-0.5 shrink-0">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      className={cn(
+                        'rounded p-1.5 transition-colors',
+                        sidebarView === 'files'
+                          ? 'bg-secondary text-foreground'
+                          : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'
+                      )}
+                      onClick={() => setSidebarView('files')}
+                      title="File Explorer"
+                    >
+                      <Folder className="w-3.5 h-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="text-[10px]">Explorer</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      className={cn(
+                        'rounded p-1.5 transition-colors',
+                        sidebarView === 'git'
+                          ? 'bg-secondary text-foreground'
+                          : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'
+                      )}
+                      onClick={() => setSidebarView('git')}
+                      title="Source Control"
+                    >
+                      <GitBranch className="w-3.5 h-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="text-[10px]">Source Control</TooltipContent>
+                </Tooltip>
+                <span className="flex-1" />
                 <button
                   className="rounded p-1 text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
                   onClick={() => setShowFiles(false)}
-                  title="Hide file explorer"
-                  aria-label="Hide file explorer"
+                  title="Hide panel"
+                  aria-label="Hide panel"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -1026,8 +1058,10 @@ export default function App() {
               <FileExplorer
                 rpc={gw.rpc}
                 connected={gw.connectionState === 'connected'}
-                onFileClick={setSelectedFile}
+                onFileClick={(path) => tabState.openFileTab(path)}
+                onOpenDiff={(opts) => tabState.openDiffTab(opts)}
                 onFileChange={gw.onFileChange}
+                mode={sidebarView}
               />
             </ResizablePanel>
           </>

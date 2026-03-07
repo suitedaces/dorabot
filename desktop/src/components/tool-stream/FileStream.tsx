@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "motion/react"
 import { FileText, FilePlus, Pencil, FolderSearch, FileSearch } from "lucide-react"
 import type { ToolUIProps } from "../tool-ui"
 import { safeParse } from "../../lib/safe-parse"
+import { computeDiff } from "../../lib/diff"
 
 const TOOL_META: Record<string, { icon: typeof FileText; verb: string; color: string }> = {
   Read:  { icon: FileText,    verb: "reading",    color: "text-primary" },
@@ -10,40 +11,6 @@ const TOOL_META: Record<string, { icon: typeof FileText; verb: string; color: st
   Edit:  { icon: Pencil,      verb: "editing",    color: "text-warning" },
   Glob:  { icon: FolderSearch, verb: "searching",  color: "text-primary" },
   Grep:  { icon: FileSearch,  verb: "searching",  color: "text-primary" },
-}
-
-type DiffLine = { type: "ctx" | "del" | "add"; line: string }
-
-function computeDiff(oldStr: string, newStr: string): DiffLine[] {
-  const oldLines = oldStr.split("\n")
-  const newLines = newStr.split("\n")
-  const m = oldLines.length
-  const n = newLines.length
-
-  // LCS DP
-  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0))
-  for (let i = 1; i <= m; i++)
-    for (let j = 1; j <= n; j++)
-      dp[i][j] = oldLines[i - 1] === newLines[j - 1]
-        ? dp[i - 1][j - 1] + 1
-        : Math.max(dp[i - 1][j], dp[i][j - 1])
-
-  // backtrack
-  const result: DiffLine[] = []
-  let i = m, j = n
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-      result.push({ type: "ctx", line: oldLines[i - 1] })
-      i--; j--
-    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-      result.push({ type: "add", line: newLines[j - 1] })
-      j--
-    } else {
-      result.push({ type: "del", line: oldLines[i - 1] })
-      i--
-    }
-  }
-  return result.reverse()
 }
 
 const DIFF_STYLES = {

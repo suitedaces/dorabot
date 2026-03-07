@@ -481,6 +481,7 @@ export function useGateway() {
   });
 
   const fsChangeListenersRef = useRef<Set<(path: string) => void>>(new Set());
+  const shellEventListenersRef = useRef<Set<(event: { shellId: string; type: string; data?: string }) => void>>(new Set());
 
   // Refs for event handler (doesn't close over state)
   const activeSessionKeyRef = useRef<string>('');
@@ -1270,6 +1271,12 @@ export function useGateway() {
         break;
       }
 
+      case 'shell.data': {
+        const d = data as { shellId: string; type: string; data?: string };
+        shellEventListenersRef.current.forEach(listener => listener(d));
+        break;
+      }
+
       case 'calendar.result': {
         const d = data as CalendarRun;
         onNotifiableEventRef.current?.({ type: 'calendar', summary: d.summary || d.item });
@@ -1609,6 +1616,13 @@ export function useGateway() {
     };
   }, []);
 
+  const onShellEvent = useCallback((listener: (event: { shellId: string; type: string; data?: string }) => void) => {
+    shellEventListenersRef.current.add(listener);
+    return () => {
+      shellEventListenersRef.current.delete(listener);
+    };
+  }, []);
+
   // tool policy RPCs
   const getToolPolicies = useCallback(async () => {
     return await rpc('security.tools.get') as {
@@ -1854,6 +1868,7 @@ export function useGateway() {
     approveToolUse,
     denyToolUse,
     onFileChange,
+    onShellEvent,
     getSecuritySenders,
     addSender,
     removeSender,

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ShikiHighlighter, createHighlighterCore, createJavaScriptRegexEngine } from 'react-shiki/core';
 import type { HighlighterCore } from 'shiki/core';
+import { useTheme } from '../../hooks/useTheme';
 
 let highlighterPromise: Promise<HighlighterCore> | null = null;
 
@@ -9,6 +10,7 @@ function getHighlighter() {
     highlighterPromise = createHighlighterCore({
       themes: [
         import('@shikijs/themes/vitesse-dark'),
+        import('@shikijs/themes/vitesse-light'),
       ],
       langs: [
         import('@shikijs/langs/javascript'),
@@ -69,6 +71,7 @@ function getLanguage(path: string): string {
 
 export function CodeViewer({ content, filePath }: Props) {
   const language = getLanguage(filePath);
+  const { theme } = useTheme();
   const [hl, setHl] = useState<HighlighterCore | null>(null);
 
   useEffect(() => {
@@ -87,7 +90,7 @@ export function CodeViewer({ content, filePath }: Props) {
     <div className="code-viewer">
       <ShikiHighlighter
         language={language}
-        theme="vitesse-dark"
+        theme={theme === 'dark' ? 'vitesse-dark' : 'vitesse-light'}
         highlighter={hl}
         showLineNumbers
         showLanguage={false}

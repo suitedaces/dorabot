@@ -1,13 +1,14 @@
 import type { Tab } from '../hooks/useTabs';
-import { isChatTab } from '../hooks/useTabs';
+import { isChatTab, isFileTab, isDiffTab, isTerminalTab } from '../hooks/useTabs';
 import { whatsappImg, telegramImg } from '../assets';
 import type { SessionState } from '../hooks/useGateway';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { cn } from '@/lib/utils';
 import {
   MessageSquare, Radio, LayoutGrid, Zap, Sparkles, Brain, Settings2,
-  Plus, X, Loader2,
+  Plus, X, Loader2, FileCode, FileText, FileImage, File, FileDiff, TerminalSquare,
 } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 const VIEW_ICONS: Record<string, React.ReactNode> = {
   chat: <MessageSquare className="w-3 h-3" />,
@@ -19,12 +20,26 @@ const VIEW_ICONS: Record<string, React.ReactNode> = {
   settings: <Settings2 className="w-3 h-3" />,
 };
 
+const CODE_EXTS = new Set(['js','jsx','ts','tsx','py','rs','go','java','c','cpp','h','hpp','rb','php','swift','kt','scala','css','html','json','xml','yaml','yml','toml','sh','bash','sql','lua']);
+const IMAGE_EXTS = new Set(['png','jpg','jpeg','gif','webp','svg','bmp','ico']);
+
+function getFileIcon(filePath: string) {
+  const ext = filePath.split('.').pop()?.toLowerCase() || '';
+  if (CODE_EXTS.has(ext)) return <FileCode className="w-3 h-3" />;
+  if (IMAGE_EXTS.has(ext)) return <FileImage className="w-3 h-3" />;
+  if (ext === 'md' || ext === 'txt' || ext === 'log') return <FileText className="w-3 h-3" />;
+  return <File className="w-3 h-3" />;
+}
+
 function getTabIcon(tab: Tab) {
   if (isChatTab(tab)) {
     if (tab.channel === 'whatsapp') return <img src={whatsappImg} className="w-3 h-3" alt="W" />;
     if (tab.channel === 'telegram') return <img src={telegramImg} className="w-3 h-3" alt="T" />;
     return <MessageSquare className="w-3 h-3" />;
   }
+  if (isFileTab(tab)) return getFileIcon(tab.filePath);
+  if (isDiffTab(tab)) return <FileDiff className="w-3 h-3" />;
+  if (isTerminalTab(tab)) return <TerminalSquare className="w-3 h-3" />;
   return VIEW_ICONS[tab.type] || <MessageSquare className="w-3 h-3" />;
 }
 
@@ -32,6 +47,7 @@ function DraggableTab({
   tab,
   isActive,
   isRunning,
+  isDirty,
   unreadCount,
   groupId,
   onFocusTab,
@@ -40,6 +56,7 @@ function DraggableTab({
   tab: Tab;
   isActive: boolean;
   isRunning: boolean;
+  isDirty: boolean;
   unreadCount: number;
   groupId?: string;
   onFocusTab: (id: string) => void;
@@ -50,7 +67,8 @@ function DraggableTab({
     data: { tabId: tab.id, sourceGroupId: groupId },
   });
 
-  return (
+  const tooltipText = isFileTab(tab) ? tab.filePath : isDiffTab(tab) ? tab.filePath : undefined;
+  const inner = (
     <div
       ref={setNodeRef}
       {...listeners}
@@ -88,12 +106,25 @@ function DraggableTab({
         </span>
       )}
       {tab.closable && (
+        isDirty ? (
+          <span
+            className={cn(
+              'shrink-0 w-3 h-3 flex items-center justify-center group-hover:hidden',
+            )}
+          >
+            <span className="w-2 h-2 rounded-full bg-warning" />
+          </span>
+        ) : null
+      )}
+      {tab.closable && (
         <button
           className={cn(
             'shrink-0 rounded p-0.5 transition-all',
-            isActive
-              ? 'opacity-50 hover:opacity-100 hover:bg-secondary'
-              : 'opacity-0 group-hover:opacity-50 hover:!opacity-100 hover:bg-secondary',
+            isDirty
+              ? 'hidden group-hover:block opacity-50 hover:opacity-100 hover:bg-secondary'
+              : isActive
+                ? 'opacity-50 hover:opacity-100 hover:bg-secondary'
+                : 'opacity-0 group-hover:opacity-50 hover:!opacity-100 hover:bg-secondary',
           )}
           onClick={e => {
             e.stopPropagation();
@@ -105,6 +136,17 @@ function DraggableTab({
       )}
     </div>
   );
+
+  if (tooltipText) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>{inner}</TooltipTrigger>
+        <TooltipContent side="bottom" className="text-[10px] font-mono max-w-[400px]">{tooltipText}</TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  return inner;
 }
 
 type TabBarProps = {
@@ -112,6 +154,7 @@ type TabBarProps = {
   activeTabId: string;
   sessionStates: Record<string, SessionState>;
   unreadBySession?: Record<string, number>;
+  dirtyTabs?: Set<string>;
   isActiveGroup?: boolean;
   isMultiPane?: boolean;
   groupId?: string;
@@ -120,7 +163,7 @@ type TabBarProps = {
   onNewChat: () => void;
 };
 
-export function TabBar({ tabs, activeTabId, sessionStates, unreadBySession = {}, isActiveGroup, isMultiPane, groupId, onFocusTab, onCloseTab, onNewChat }: TabBarProps) {
+export function TabBar({ tabs, activeTabId, sessionStates, unreadBySession = {}, dirtyTabs, isActiveGroup, isMultiPane, groupId, onFocusTab, onCloseTab, onNewChat }: TabBarProps) {
   const { setNodeRef, isOver } = useDroppable({
     id: `group-drop:${groupId || 'default'}`,
     data: { groupId },
@@ -146,6 +189,7 @@ export function TabBar({ tabs, activeTabId, sessionStates, unreadBySession = {},
               tab={tab}
               isActive={isActive}
               isRunning={isRunning}
+              isDirty={dirtyTabs?.has(tab.id) || false}
               unreadCount={isChatTab(tab) ? (unreadBySession[tab.sessionKey] || 0) : 0}
               groupId={groupId}
               onFocusTab={onFocusTab}

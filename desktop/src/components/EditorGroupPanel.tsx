@@ -1,6 +1,6 @@
 import type { EditorGroup, GroupId } from '../hooks/useLayout';
 import type { Tab } from '../hooks/useTabs';
-import { isChatTab } from '../hooks/useTabs';
+import { isChatTab, isFileTab, isDiffTab, isTerminalTab } from '../hooks/useTabs';
 import type { useGateway } from '../hooks/useGateway';
 import type { useTabs } from '../hooks/useTabs';
 import { useDroppable } from '@dnd-kit/core';
@@ -14,6 +14,8 @@ import { ExtensionsView } from '../views/Extensions';
 import { GoalsView } from '../views/Goals';
 import { ResearchView } from '../views/Research';
 import { FileViewer } from './FileViewer';
+import { DiffViewer } from './viewers/DiffViewer';
+import { TerminalView } from './TerminalView';
 import { ErrorBoundary } from './ErrorBoundary';
 import { cn } from '@/lib/utils';
 
@@ -52,13 +54,11 @@ type Props = {
   isDragging: boolean;
   gateway: ReturnType<typeof useGateway>;
   tabState: ReturnType<typeof useTabs>;
-  selectedFile: string | null;
   selectedChannel: 'whatsapp' | 'telegram';
   onFocusGroup: () => void;
   onNavigateSettings: () => void;
   onViewSession: (sessionId: string, channel?: string, chatId?: string, chatType?: string) => void;
   onSwitchChannel: (ch: 'whatsapp' | 'telegram') => void;
-  onClearSelectedFile: () => void;
   onSetupChat: (prompt: string) => void;
   onNavClick: (navId: string) => void;
 };
@@ -71,13 +71,11 @@ export function EditorGroupPanel({
   isDragging,
   gateway,
   tabState,
-  selectedFile,
   selectedChannel,
   onFocusGroup,
   onNavigateSettings,
   onViewSession,
   onSwitchChannel,
-  onClearSelectedFile,
   onSetupChat,
   onNavClick,
 }: Props) {
@@ -88,14 +86,35 @@ export function EditorGroupPanel({
   const activeTab = groupTabs.find(t => t.id === group.activeTabId) || groupTabs[0];
 
   const renderContent = () => {
-    // File viewer takes precedence if this is the active group
-    if (isActive && selectedFile) {
-      return <FileViewer filePath={selectedFile} rpc={gateway.rpc} onClose={onClearSelectedFile} />;
-    }
-
     if (!activeTab) return null;
 
     switch (activeTab.type) {
+      case 'file':
+        return (
+          <FileViewer
+            filePath={activeTab.filePath}
+            rpc={gateway.rpc}
+            onClose={() => tabState.closeTab(activeTab.id)}
+            headerless
+            onDirtyChange={(dirty) => tabState.setTabDirty(activeTab.id, dirty)}
+          />
+        );
+      case 'diff':
+        return (
+          <DiffViewer
+            oldContent={activeTab.oldContent}
+            newContent={activeTab.newContent}
+            filePath={activeTab.filePath}
+          />
+        );
+      case 'terminal':
+        return (
+          <TerminalView
+            shellId={activeTab.shellId}
+            rpc={gateway.rpc}
+            onShellEvent={gateway.onShellEvent}
+          />
+        );
       case 'chat': {
         const ss = gateway.sessionStates[activeTab.sessionKey] || {
           chatItems: [],
@@ -160,6 +179,7 @@ export function EditorGroupPanel({
         activeTabId={group.activeTabId || ''}
         sessionStates={gateway.sessionStates}
         unreadBySession={tabState.unreadBySession}
+        dirtyTabs={tabState.dirtyTabs}
         isActiveGroup={isActive}
         isMultiPane={isMultiPane}
         groupId={group.id}
