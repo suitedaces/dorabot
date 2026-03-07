@@ -10,7 +10,6 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { EditorGroupPanel } from './components/EditorGroupPanel';
 import { TabDragOverlay } from './components/TabBar';
 import { FileExplorer } from './components/FileExplorer';
-import { Progress } from './components/Progress';
 import { OnboardingOverlay } from './components/Onboarding';
 import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core';
 import { cn } from '@/lib/utils';
@@ -1055,7 +1054,6 @@ export default function App() {
                   <X className="w-3.5 h-3.5" />
                 </button>
               </div>
-              <Progress items={gw.progress} />
               <FileExplorer
                 rpc={gw.rpc}
                 connected={gw.connectionState === 'connected'}

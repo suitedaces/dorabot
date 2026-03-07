@@ -23,9 +23,10 @@ import {
   Globe, Search, Bot, MessageCircle, ListChecks, FileCode,
   MessageSquare, Camera, Monitor, Clock, Wrench, ArrowUp, LayoutGrid,
   Smile, Image, Brain, MapPin, PenLine, GitPullRequest, Radio,
-  Paperclip, X, ExternalLink,
+  Paperclip, X, ExternalLink, Check, Circle, Loader2,
   type LucideIcon,
 } from 'lucide-react';
+import { jsonrepair } from 'jsonrepair';
 
 type Props = {
   gateway: ReturnType<typeof useGateway>;
@@ -602,6 +603,53 @@ function ImagePreviewStrip({ images, onRemove }: { images: ImageAttachment[]; on
   );
 }
 
+function ChatProgress({ items }: { items: { content: string; status: string; activeForm: string }[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const done = items.filter(i => i.status === 'completed').length;
+  const total = items.length;
+  const inProgress = items.find(i => i.status === 'in_progress');
+  const pct = Math.round((done / total) * 100);
+
+  return (
+    <div className="px-4 shrink-0">
+      <div className="rounded-lg bg-secondary/40 overflow-hidden">
+        <button
+          className="flex items-center gap-2 w-full px-3 py-1.5 hover:bg-secondary/60 transition-colors text-left"
+          onClick={() => setExpanded(v => !v)}
+        >
+          <Loader2 className="w-3 h-3 text-primary shrink-0 animate-spin" />
+          <span className="text-[11px] text-muted-foreground truncate flex-1">
+            {inProgress ? inProgress.activeForm : `${done}/${total} tasks`}
+          </span>
+          <div className="w-12 h-1 bg-secondary rounded-full overflow-hidden shrink-0">
+            <div className="h-full bg-primary rounded-full transition-all duration-300" style={{ width: `${pct}%` }} />
+          </div>
+          <span className="text-[10px] text-muted-foreground shrink-0">{done}/{total}</span>
+          {expanded ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" /> : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
+        </button>
+        {expanded && (
+          <div className="px-3 pb-2 space-y-0.5">
+            {items.map((item, i) => (
+              <div key={i} className="flex items-center gap-1.5 text-[11px]">
+                {item.status === 'completed' ? (
+                  <Check className="w-3 h-3 text-success shrink-0" />
+                ) : item.status === 'in_progress' ? (
+                  <Loader2 className="w-3 h-3 text-primary shrink-0 animate-spin" />
+                ) : (
+                  <Circle className="w-3 h-3 text-muted-foreground/40 shrink-0" />
+                )}
+                <span className={item.status === 'completed' ? 'text-muted-foreground/50' : item.status === 'in_progress' ? 'text-foreground' : 'text-muted-foreground'}>
+                  {item.status === 'in_progress' ? item.activeForm : item.content}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function getGreeting(): string {
   const h = new Date().getHours();
   if (h < 12) return 'good morning';
@@ -621,6 +669,24 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   const landingRef = useRef<HTMLDivElement>(null);
   const isRunning = agentStatus !== 'idle';
   const isEmpty = chatItems.length === 0;
+
+  // progress from last TodoWrite in this chat
+  const progress = useMemo(() => {
+    for (let i = chatItems.length - 1; i >= 0; i--) {
+      const item = chatItems[i];
+      if (item.type === 'tool_use' && item.name === 'TodoWrite') {
+        try {
+          const parsed = (item as any).streaming
+            ? JSON.parse(jsonrepair(item.input))
+            : JSON.parse(item.input);
+          const todos = (parsed.todos || []) as { content: string; status: string; activeForm: string }[];
+          if (todos.length > 0 && todos.every(t => t.status === 'completed')) return [];
+          return todos;
+        } catch { return []; }
+      }
+    }
+    return [];
+  }, [chatItems]);
 
   useEffect(() => {
     const el = landingRef.current;
@@ -952,6 +1018,9 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
           />
         </div>
       )}
+
+      {/* progress */}
+      {progress.length > 0 && <ChatProgress items={progress} />}
 
       {/* input area */}
       <div className="px-4 py-3 shrink-0 min-w-0">
