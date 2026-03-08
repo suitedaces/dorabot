@@ -22,7 +22,7 @@ import {
   MessageSquare, Radio, Zap, Brain, Settings2,
   Sparkles, LayoutGrid, Loader2, Star,
   Clock, FileSearch, Plug, Folder, FolderOpen, X,
-  ShieldAlert, CalendarCheck, Target, FlaskConical, KeyRound, GitBranch, TerminalSquare, Check, Palette
+  ShieldAlert, CalendarCheck, Target, FlaskConical, KeyRound, GitBranch, Check, Palette
 } from 'lucide-react';
 import { PALETTES } from './lib/palettes';
 
@@ -680,6 +680,10 @@ export default function App() {
       const created = tabState.newChatTab(groupId);
       setTimeout(() => gw.sendMessage(prompt, created.sessionKey, created.chatId), 0);
     },
+    onNewTerminal: () => {
+      layout.focusGroup(groupId);
+      tabState.openTerminalTab(undefined, groupId);
+    },
     onNavClick: (navId: string) => handleNavClick(navId as TabType),
     onSplitRight: layout.splitHorizontal,
     onSplitDown: layout.splitVertical,
@@ -1117,18 +1121,6 @@ export default function App() {
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom" className="text-[10px]">Source Control</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      className="rounded p-1.5 transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
-                      onClick={() => tabState.openTerminalTab()}
-                      title="New Terminal"
-                    >
-                      <TerminalSquare className="w-3.5 h-3.5" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" className="text-[10px]">Terminal ⌃`</TooltipContent>
                 </Tooltip>
                 <span className="flex-1" />
                 <button

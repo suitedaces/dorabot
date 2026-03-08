@@ -327,11 +327,20 @@ function GitPanel({ rpc, gitState, onFileClick, onOpenDiff, onRefresh }: {
     return (
       <div
         key={`${f.path}-${f.staged}`}
-        className="flex items-center gap-1 px-2 py-0.5 text-[11px] group cursor-pointer hover:bg-secondary/50 transition-colors"
+        className={cn(
+          'relative flex items-center gap-1 px-2 py-0.5 text-[11px] group cursor-pointer transition-colors',
+          section === 'staged' ? 'hover:bg-success/10' : 'hover:bg-warning/10',
+        )}
         onClick={() => openFileDiff(f)}
         onContextMenu={(e) => handleFileContextMenu(e, f, section)}
         title={f.path}
       >
+        <span
+          className={cn(
+            'absolute left-0.5 top-1 bottom-1 w-px rounded-full transition-colors',
+            section === 'staged' ? 'bg-success/40 group-hover:bg-success/70' : 'bg-warning/40 group-hover:bg-warning/70',
+          )}
+        />
         <span className="truncate min-w-0 flex-1">
           <span className="text-foreground">{fileName}</span>
           {dirPart && <span className="text-muted-foreground/50 ml-1 text-[10px]">{dirPart}</span>}
@@ -447,10 +456,15 @@ function GitPanel({ rpc, gitState, onFileClick, onOpenDiff, onRefresh }: {
       <ScrollArea className="flex-1 min-h-0">
         {/* staged changes */}
         {staged.length > 0 && (
-          <div>
-            <div className="flex items-center justify-between px-2 py-1 sticky top-0 bg-background z-10">
-              <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                Staged Changes ({staged.length})
+          <div className="mb-1">
+            <div className="flex items-center justify-between px-2 py-1.5 sticky top-0 bg-background/95 backdrop-blur border-y border-border/60 z-10">
+              <span className="flex items-center gap-1.5">
+                <span className="inline-flex items-center justify-center w-4 h-4 rounded-sm bg-success/20 text-success">
+                  <Check className="w-2.5 h-2.5" />
+                </span>
+                <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                  Staged Changes ({staged.length})
+                </span>
               </span>
               <button
                 className="p-0.5 rounded hover:bg-secondary text-muted-foreground hover:text-foreground"
@@ -460,16 +474,23 @@ function GitPanel({ rpc, gitState, onFileClick, onOpenDiff, onRefresh }: {
                 <Minus className="w-3 h-3" />
               </button>
             </div>
-            {staged.map(f => renderFileRow(f, 'staged'))}
+            <div className="border-l border-success/25 ml-2 pl-1">
+              {staged.map(f => renderFileRow(f, 'staged'))}
+            </div>
           </div>
         )}
 
         {/* unstaged changes */}
         {unstaged.length > 0 && (
-          <div>
-            <div className="flex items-center justify-between px-2 py-1 sticky top-0 bg-background z-10">
-              <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                Changes ({unstaged.length})
+          <div className="mb-1">
+            <div className="flex items-center justify-between px-2 py-1.5 sticky top-0 bg-background/95 backdrop-blur border-y border-border/60 z-10">
+              <span className="flex items-center gap-1.5">
+                <span className="inline-flex items-center justify-center w-4 h-4 rounded-sm bg-warning/20 text-warning">
+                  <FileEdit className="w-2.5 h-2.5" />
+                </span>
+                <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                  Changes ({unstaged.length})
+                </span>
               </span>
               <span className="flex items-center gap-0.5">
                 <button
@@ -481,7 +502,9 @@ function GitPanel({ rpc, gitState, onFileClick, onOpenDiff, onRefresh }: {
                 </button>
               </span>
             </div>
-            {unstaged.map(f => renderFileRow(f, 'unstaged'))}
+            <div className="border-l border-warning/25 ml-2 pl-1">
+              {unstaged.map(f => renderFileRow(f, 'unstaged'))}
+            </div>
           </div>
         )}
 

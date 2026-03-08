@@ -3,7 +3,7 @@
 
   # dorabot
 
-  **A 24/7 self-learning AI agent with a workspace that runs itself.**
+  **A 24/7 self-learning AI agent with an integrated IDE workspace that runs itself.**
 
   [![GitHub stars](https://img.shields.io/github/stars/suitedaces/dorabot)](https://github.com/suitedaces/dorabot)
   [![GitHub release](https://img.shields.io/github/v/release/suitedaces/dorabot)](https://github.com/suitedaces/dorabot/releases/latest)
@@ -21,6 +21,15 @@
 The agent manages its own goals, tracks research, messages you on Telegram and WhatsApp, runs scheduled tasks, and remembers everything across sessions.
 
 https://github.com/user-attachments/assets/2ec5dd22-7b47-4ec0-a60b-62380e560bd0
+
+## Desktop IDE Workspace
+
+Recent releases turned dorabot desktop into a practical IDE-style workspace:
+
+- File explorer with keyboard navigation and support for all file types
+- Monaco editor (edit mode by default, with autosave)
+- Git panel with ahead/behind status and cleaner staging flows
+- Real PTY terminal, tabs, split panes, and diff view
 
 ## Persistent Memory & Self-Learning
 
@@ -48,22 +57,21 @@ The agent creates and maintains its own research for you. Topics tracked, catego
 
 ## Multi-Channel Messaging
 
-Same agent on WhatsApp, Telegram, and Slack. Send text, photos, voice, documents. It responds with full context from every past conversation.
+Same agent on WhatsApp and Telegram, with the same memory and context as desktop sessions. Send text, photos, voice, and documents.
 
 <img src="gifs/channels.gif" width="800" />
 
 ## Skills & MCP Servers
 
-Built-in skills for GitHub, email, macOS, PR review, agent swarms. Browse 56k+ community skills. Connect 7,300+ MCP servers via Smithery.
+Built-in skills for GitHub, email, macOS, PR review, and agent swarms. Browse community skills and connect MCP servers via Smithery.
 
 <img src="gifs/extensions.gif" width="800" />
 
 ## Also
 
-- **Browser automation.** 90+ actions with your real Chrome profile. Already logged in everywhere.
+- **Browser automation.** 40+ actions with your real Chrome profile. Already logged in everywhere.
 - **Multi-provider.** Claude, OpenAI Codex, MiniMax. Use the model you're already paying for.
 - **Multimodal.** Send images, screenshots, diagrams. The agent sees them.
-- **Multi-pane workspace.** Split panes (Cmd+D), parallel agents, streaming responses.
 - **Auto-update.** Signed, notarized, one-click updates.
 - **Local-only.** No cloud relay. Your data stays on your Mac.
 
@@ -119,7 +127,7 @@ No. Runs on your Mac. Only network calls are to your AI provider's API.
 
 <details>
 <summary><strong>How is this different from Claude Code / Cursor?</strong></summary>
-Those are coding tools. dorabot is an agent workspace: persistent memory, autonomous goals, scheduling, browser automation, multi-channel messaging. It works while you sleep.
+Those are primarily coding tools. dorabot adds autonomous agent workflows (memory, goals, scheduling, messaging) and now also ships a full IDE-style desktop (editor, file explorer, git, terminal) in one app.
 </details>
 
 ## Contributing

@@ -419,6 +419,98 @@
   --stream-bubble-default: #27364a80;
 }
 
+/* ─── Berry Light (soft violet-teal) ─── */
+[data-palette="berry-light"] {
+  --background: #f7f4fb;
+  --foreground: #433b5b;
+  --card: #efe9f8e8;
+  --card-foreground: #433b5b;
+  --popover: #efe9f8f2;
+  --popover-foreground: #433b5b;
+  --primary: #8d7bc7;
+  --primary-foreground: #f7f4fb;
+  --secondary: #e2daf3b3;
+  --secondary-foreground: #433b5b;
+  --muted: #e2daf3b3;
+  --muted-foreground: #6a607f;
+  --accent: #e2daf3b3;
+  --accent-foreground: #433b5b;
+  --destructive: #be757d;
+  --destructive-foreground: #f7f4fb;
+  --border: #bfb0de8c;
+  --input: #e2daf3b3;
+  --ring: #8d7bc7;
+  --chart-1: #8d7bc7;
+  --chart-2: #7fb3a8;
+  --chart-3: #b59a5f;
+  --chart-4: #7b89c4;
+  --chart-5: #be757d;
+  --sidebar: #e8e0f340;
+  --sidebar-foreground: #433b5b;
+  --sidebar-primary: #8d7bc7;
+  --sidebar-primary-foreground: #f7f4fb;
+  --sidebar-accent: #e2daf366;
+  --sidebar-accent-foreground: #433b5b;
+  --sidebar-border: #bfb0de4d;
+  --sidebar-ring: #8d7bc7;
+  --success: #7fb3a8;
+  --warning: #b59a5f;
+  --stream-deep: #f7f4fbdd;
+  --stream-base: #efe9f8dd;
+  --stream-mid: #e8e0f3e0;
+  --stream-raised: #e2daf3e0;
+  --stream-elevated: #d8cfece8;
+  --stream-bubble-wa: #7fb3a822;
+  --stream-bubble-tg: #7b89c422;
+  --stream-bubble-default: #e2daf380;
+}
+
+/* ─── Berry Dark (dusty violet-teal) ─── */
+[data-palette="berry-dark"] {
+  --background: #171425;
+  --foreground: #e4def6;
+  --card: #1f1a33e8;
+  --card-foreground: #e4def6;
+  --popover: #1f1a33f2;
+  --popover-foreground: #e4def6;
+  --primary: #a798dd;
+  --primary-foreground: #171425;
+  --secondary: #332d52b3;
+  --secondary-foreground: #e4def6;
+  --muted: #332d5299;
+  --muted-foreground: #a79ec3;
+  --accent: #332d5299;
+  --accent-foreground: #e4def6;
+  --destructive: #c9878e;
+  --destructive-foreground: #171425;
+  --border: #564d7e66;
+  --input: #332d52b3;
+  --ring: #a798dd;
+  --chart-1: #a798dd;
+  --chart-2: #8bbeb3;
+  --chart-3: #c2ab76;
+  --chart-4: #94a4dc;
+  --chart-5: #c9878e;
+  --sidebar: #100e1d40;
+  --sidebar-foreground: #e4def6;
+  --sidebar-primary: #a798dd;
+  --sidebar-primary-foreground: #171425;
+  --sidebar-accent: #332d5266;
+  --sidebar-accent-foreground: #e4def6;
+  --sidebar-border: #564d7e40;
+  --sidebar-ring: #a798dd;
+  --success: #8bbeb3;
+  --warning: #c2ab76;
+  --stream-deep: #131024cc;
+  --stream-base: #171425cc;
+  --stream-mid: #1f1a33cc;
+  --stream-raised: #292244cc;
+  --stream-elevated: #332d52dd;
+  --stream-bubble-wa: #8bbeb330;
+  --stream-bubble-tg: #94a4dc30;
+  --stream-bubble-default: #332d5280;
+}
+
 /* ─── Liquid Glass modifier ─── */
 [data-glass="true"] [data-slot="resizable-panel"],
 [data-glass="true"] .glass-panel {

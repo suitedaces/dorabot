@@ -62,6 +62,7 @@ type Props = {
   onSwitchChannel: (ch: 'whatsapp' | 'telegram') => void;
   onSetupChat: (prompt: string) => void;
   onNavClick: (navId: string) => void;
+  onNewTerminal?: () => void;
   onSplitRight?: () => void;
   onSplitDown?: () => void;
 };
@@ -81,6 +82,7 @@ export function EditorGroupPanel({
   onSwitchChannel,
   onSetupChat,
   onNavClick,
+  onNewTerminal,
   onSplitRight,
   onSplitDown,
 }: Props) {
@@ -202,6 +204,7 @@ export function EditorGroupPanel({
           onFocusGroup();
           tabState.newChatTab(group.id);
         }}
+        onNewTerminal={onNewTerminal}
         onCloseOtherTabs={(tabId, groupId) => tabState.closeOtherTabs(tabId, groupId as any)}
         onCloseAllTabs={(groupId) => tabState.closeAllTabs(groupId as any)}
         onCloseTabsToRight={(tabId, groupId) => tabState.closeTabsToRight(tabId, groupId as any)}

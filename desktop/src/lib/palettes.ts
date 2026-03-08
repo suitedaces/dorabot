@@ -6,7 +6,9 @@ export type Palette =
   | 'sage-light'
   | 'sage-dark'
   | 'ocean-light'
-  | 'ocean-dark';
+  | 'ocean-dark'
+  | 'berry-light'
+  | 'berry-dark';
 
 export type PaletteInfo = {
   id: Palette;
@@ -22,15 +24,18 @@ const PAIRS: Record<string, [Palette, Palette]> = {
   mocha: ['mocha-light', 'mocha-dark'],
   sage: ['sage-light', 'sage-dark'],
   ocean: ['ocean-light', 'ocean-dark'],
+  berry: ['berry-light', 'berry-dark'],
 };
 
-const DARK_SET = new Set<Palette>(['default-dark', 'mocha-dark', 'sage-dark', 'ocean-dark']);
+const DARK_SET = new Set<Palette>(['default-dark', 'mocha-dark', 'sage-dark', 'ocean-dark', 'berry-dark']);
 
 export const LEGACY_PALETTE_MAP: Record<string, Palette> = {
   'catppuccin-latte': 'mocha-light',
   'catppuccin-mocha': 'mocha-dark',
   'rose-pine-dawn': 'ocean-light',
   'rose-pine': 'ocean-dark',
+  'pastel-light': 'berry-light',
+  'pastel-dark': 'berry-dark',
 };
 
 export function isDarkPalette(p: Palette): boolean {
@@ -41,7 +46,8 @@ export function getFamily(p: Palette): string {
   if (p.startsWith('default')) return 'default';
   if (p.startsWith('mocha')) return 'mocha';
   if (p.startsWith('sage')) return 'sage';
-  return 'ocean';
+  if (p.startsWith('ocean')) return 'ocean';
+  return 'berry';
 }
 
 export function getPairedPalette(p: Palette): Palette {
@@ -200,6 +206,44 @@ export const PALETTES: PaletteInfo[] = [
       blue: '#6f9cc8', magenta: '#8d8fc0', cyan: '#6faeb2', white: '#c4d3e6',
       brightBlack: '#495b72', brightRed: '#da928a', brightGreen: '#86b5a6', brightYellow: '#ceb67f',
       brightBlue: '#86b2dd', brightMagenta: '#a3a4d2', brightCyan: '#84c1c4', brightWhite: '#e7f0fb',
+    },
+  },
+  {
+    id: 'berry-light',
+    label: 'Berry Light',
+    family: 'berry',
+    isDark: false,
+    preview: { bg: '#f7f4fb', fg: '#433b5b', accent: '#8d7bc7', accent2: '#7fb3a8' },
+    terminal: {
+      background: '#f7f4fb',
+      foreground: '#433b5b',
+      cursor: '#8d7bc7',
+      cursorAccent: '#f7f4fb',
+      selectionBackground: '#e2daf3',
+      selectionForeground: '#342d49',
+      black: '#433b5b', red: '#be757d', green: '#6fa191', yellow: '#b59a5f',
+      blue: '#7b89c4', magenta: '#8d7bc7', cyan: '#68a9a2', white: '#ebe5f6',
+      brightBlack: '#6f668a', brightRed: '#cf8b93', brightGreen: '#88b2a4', brightYellow: '#c7b174',
+      brightBlue: '#949fd3', brightMagenta: '#a594d8', brightCyan: '#82bab4', brightWhite: '#ffffff',
+    },
+  },
+  {
+    id: 'berry-dark',
+    label: 'Berry Dark',
+    family: 'berry',
+    isDark: true,
+    preview: { bg: '#171425', fg: '#e4def6', accent: '#a798dd', accent2: '#8bbeb3' },
+    terminal: {
+      background: '#171425',
+      foreground: '#e4def6',
+      cursor: '#b7a8eb',
+      cursorAccent: '#171425',
+      selectionBackground: '#332d52',
+      selectionForeground: '#f1ecff',
+      black: '#19162a', red: '#c9878e', green: '#8bbeb3', yellow: '#c2ab76',
+      blue: '#94a4dc', magenta: '#a798dd', cyan: '#82c1bb', white: '#d2caea',
+      brightBlack: '#595379', brightRed: '#da9aa1', brightGreen: '#9dcec4', brightYellow: '#d3bd8d',
+      brightBlue: '#acb9e9', brightMagenta: '#beb1ea', brightCyan: '#98d0ca', brightWhite: '#f1ecff',
     },
   },
 ];

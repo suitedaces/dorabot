@@ -1,4 +1,4 @@
-import { useRef, useCallback, useEffect, useMemo } from 'react';
+import { useRef, useCallback, useEffect, useMemo, useState } from 'react';
 import Editor, { loader, type OnMount } from '@monaco-editor/react';
 import type { editor as monacoEditor } from 'monaco-editor';
 import { useTheme } from '../../hooks/useTheme';
@@ -40,6 +40,21 @@ function getMonacoLanguage(filePath: string): string {
   return EXT_TO_LANG[ext] || 'plaintext';
 }
 
+function resolveColor(raw: string, fallback: string): string {
+  if (!raw) return fallback;
+  const probe = document.createElement('span');
+  probe.style.color = raw;
+  document.body.appendChild(probe);
+  const resolved = getComputedStyle(probe).color || fallback;
+  probe.remove();
+  return resolved;
+}
+
+function getCssVarColor(name: string, fallback: string): string {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return resolveColor(raw, fallback);
+}
+
 type Props = {
   content: string;
   filePath: string;
@@ -49,8 +64,9 @@ type Props = {
 };
 
 export function MonacoEditor({ content, filePath, readOnly = false, onSave, onDirtyChange }: Props) {
-  const { theme } = useTheme();
+  const { theme, palette } = useTheme();
   const editorRef = useRef<monacoEditor.IStandaloneCodeEditor | null>(null);
+  const [monacoTheme, setMonacoTheme] = useState(theme === 'dark' ? 'vs-dark' : 'vs');
   const originalContentRef = useRef(content);
   const onSaveRef = useRef(onSave);
   const onDirtyChangeRef = useRef(onDirtyChange);
@@ -60,6 +76,68 @@ export function MonacoEditor({ content, filePath, readOnly = false, onSave, onDi
 
   // Track whether user has made edits (vs content prop changing)
   const userDirtyRef = useRef(false);
+
+  // Build a Monaco theme from active CSS palette tokens so editor tracks palette changes.
+  useEffect(() => {
+    let cancelled = false;
+    const themeName = `dorabot-${palette}`;
+    const base = theme === 'dark' ? 'vs-dark' : 'vs';
+    const defaultBackground = theme === 'dark' ? '#1e1e1e' : '#ffffff';
+    const defaultForeground = theme === 'dark' ? '#d4d4d4' : '#383a42';
+
+    void loader.init().then((m) => {
+      const background = getCssVarColor('--background', defaultBackground);
+      const foreground = getCssVarColor('--foreground', defaultForeground);
+      const muted = getCssVarColor('--muted-foreground', theme === 'dark' ? '#808080' : '#6b7280');
+      const primary = getCssVarColor('--primary', theme === 'dark' ? '#7c9eff' : '#3b5bdb');
+      const secondary = getCssVarColor('--secondary', theme === 'dark' ? '#2a2a3a' : '#e5e7eb');
+      const border = getCssVarColor('--border', theme === 'dark' ? '#3f3f46' : '#d1d5db');
+      const popover = getCssVarColor('--popover', theme === 'dark' ? '#1f1f2a' : '#f8f8fa');
+
+      m.editor.defineTheme(themeName, {
+        base,
+        inherit: true,
+        rules: [],
+        colors: {
+          'editor.background': background,
+          'editor.foreground': foreground,
+          'editorLineNumber.foreground': muted,
+          'editorLineNumber.activeForeground': foreground,
+          'editorCursor.foreground': primary,
+          'editor.selectionBackground': secondary,
+          'editor.inactiveSelectionBackground': secondary,
+          'editorLineHighlightBackground': secondary,
+          'editorLineHighlightBorder': border,
+          'editorIndentGuide.background1': border,
+          'editorIndentGuide.activeBackground1': muted,
+          'editorGutter.background': background,
+          'editorGutter.modifiedBackground': primary,
+          'editorBracketMatch.border': primary,
+          'editorBracketHighlight.foreground1': primary,
+          'editorWidget.background': popover,
+          'editorWidget.border': border,
+          'editorSuggestWidget.background': popover,
+          'editorSuggestWidget.border': border,
+          'editorSuggestWidget.foreground': foreground,
+          'editorSuggestWidget.selectedBackground': secondary,
+          'editorHoverWidget.background': popover,
+          'editorHoverWidget.border': border,
+        },
+      });
+
+      if (cancelled) return;
+      m.editor.setTheme(themeName);
+      setMonacoTheme(themeName);
+    }).catch(() => {
+      if (!cancelled) {
+        setMonacoTheme(base);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [theme, palette]);
 
   // Update content when prop changes (file watcher reload)
   useEffect(() => {
@@ -184,7 +262,7 @@ export function MonacoEditor({ content, filePath, readOnly = false, onSave, onDi
     <Editor
       defaultValue={content}
       language={language}
-      theme={theme === 'dark' ? 'vs-dark' : 'vs'}
+      theme={monacoTheme}
       onMount={handleMount}
       options={options}
       loading={

@@ -297,6 +297,7 @@ type TabBarProps = {
   onFocusTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onNewChat: () => void;
+  onNewTerminal?: () => void;
   onCloseOtherTabs?: (tabId: string, groupId: string) => void;
   onCloseAllTabs?: (groupId: string) => void;
   onCloseTabsToRight?: (tabId: string, groupId: string) => void;
@@ -304,7 +305,7 @@ type TabBarProps = {
   onSplitDown?: () => void;
 };
 
-export function TabBar({ tabs, activeTabId, sessionStates, unreadBySession = {}, dirtyTabs, isActiveGroup, isMultiPane, groupId, onFocusTab, onCloseTab, onNewChat, onCloseOtherTabs, onCloseAllTabs, onCloseTabsToRight, onSplitRight, onSplitDown }: TabBarProps) {
+export function TabBar({ tabs, activeTabId, sessionStates, unreadBySession = {}, dirtyTabs, isActiveGroup, isMultiPane, groupId, onFocusTab, onCloseTab, onNewChat, onNewTerminal, onCloseOtherTabs, onCloseAllTabs, onCloseTabsToRight, onSplitRight, onSplitDown }: TabBarProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
 
   const { setNodeRef, isOver } = useDroppable({
@@ -349,6 +350,16 @@ export function TabBar({ tabs, activeTabId, sessionStates, unreadBySession = {},
           );
         })}
       </div>
+
+      {onNewTerminal && (
+        <button
+          className="shrink-0 flex items-center justify-center w-[34px] h-[34px] text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors border-l border-border/50"
+          onClick={onNewTerminal}
+          title="new terminal"
+        >
+          <TerminalSquare className="w-3.5 h-3.5" />
+        </button>
+      )}
 
       <button
         className="shrink-0 flex items-center justify-center w-[34px] h-[34px] text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors border-l border-border/50"
