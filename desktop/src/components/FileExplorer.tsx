@@ -1351,7 +1351,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onFileCh
   return (
     <div className="flex flex-col h-full min-h-0 border border-transparent focus-within:border-primary/60 focus-within:ring-1 focus-within:ring-primary/35">
       <div className="group/explorer-header flex items-center gap-1 px-3 py-2 border-b border-border shrink-0">
-        <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground shrink-0">Explorer</span>
+        <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground shrink-0">Files</span>
         <div className="flex items-center gap-0.5 text-[10px] text-muted-foreground flex-1 min-w-0 overflow-hidden ml-1">
           {crumbs.map((c, i) => (
             <span key={c.path} className="flex items-center gap-0.5 shrink min-w-0">
