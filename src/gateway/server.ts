@@ -47,6 +47,7 @@ import { getProvider, getProviderByName, disposeAllProviders } from '../provider
 import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, onClaudeAuthRequired } from '../providers/claude.js';
 import { isCodexInstalled, hasCodexAuth, onCodexAuthRequired } from '../providers/codex.js';
 import type { ProviderName } from '../config.js';
+import { buildProviderAuthGate, classifyAuthRecovery, type ProviderAuthGate } from './auth-state.js';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { classifyToolCall, cleanToolName, isToolAllowed, type Tier } from './tool-policy.js';
 import { AUTONOMOUS_SCHEDULE_ID, buildAutonomousCalendarItem, PULSE_INTERVALS, DEFAULT_PULSE_INTERVAL, pulseIntervalToRrule, rruleToPulseInterval } from '../autonomous.js';
@@ -642,11 +643,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   // pending OAuth re-auth: when a 401 hits mid-run, we send the OAuth URL to the
   // user's channel and wait for them to paste the code back
   type PendingReauth = {
+    provider: ProviderName;
     prompt: string;
     sessionKey: string;
     source: string;
     channel: string;
     chatId: string;
+    loginId?: string;
     messageMetadata?: import('../session/manager.js').MessageMetadata;
   };
   const pendingReauths = new Map<string, PendingReauth>(); // keyed by chatId
@@ -1102,16 +1105,20 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     prompt: string; sessionKey: string; source: string;
     channel?: string; chatId?: string;
     messageMetadata?: import('../session/manager.js').MessageMetadata;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const providerName = (config.provider?.name || 'claude') as ProviderName;
     const provider = await getProviderByName(providerName);
-    if (!provider.loginWithOAuth) return;
+    if (!provider.loginWithOAuth) return false;
 
-    const { authUrl } = await provider.loginWithOAuth();
+    const { authUrl, loginId } = await provider.loginWithOAuth();
 
     // broadcast to desktop regardless — it can show an inline re-auth UI
     broadcast({ event: 'auth.reauth_required', data: {
-      channel: params.channel, chatId: params.chatId, authUrl,
+      provider: providerName,
+      channel: params.channel,
+      chatId: params.chatId,
+      authUrl,
+      loginId,
     } });
 
     // if this came from a channel, send the link there and save context for replay
@@ -1121,22 +1128,33 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       const handler = getChannelHandler(channel);
       if (handler) {
         pendingReauths.set(chatId, {
+          provider: providerName,
           prompt: params.prompt,
           sessionKey: params.sessionKey,
           source: params.source,
           channel,
           chatId,
+          loginId,
           messageMetadata: params.messageMetadata,
         });
-        await handler.send(chatId, [
-          'Auth token expired. Please re-authenticate:',
-          '',
-          authUrl,
-          '',
-          'Open the link, click Authorize, then paste the code here.',
-        ].join('\n'));
+        await handler.send(chatId, providerName === 'codex'
+          ? [
+            'Auth token expired. Please re-authenticate on the computer running dorabot:',
+            '',
+            authUrl,
+            '',
+            'Open that link on the same computer, finish the browser flow, then send /done here. Send /cancel to skip.',
+          ].join('\n')
+          : [
+            'Auth token expired. Please re-authenticate:',
+            '',
+            authUrl,
+            '',
+            'Open the link, click Authorize, then paste the code here. Send /cancel to skip.',
+          ].join('\n'));
       }
     }
+    return true;
   }
 
   function clearTypingInterval(ctx: ChannelRunContext) {
@@ -1160,25 +1178,28 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     const pendingReauth = pendingReauths.get(msg.chatId);
     if (pendingReauth) {
       const code = (msg.body || '').trim();
-      // if it doesn't look like an OAuth code, treat as a normal message
-      // (user might be chatting while re-auth is pending)
-      if (code && looksLikeOAuthCode(code)) {
-        const handler = getChannelHandler(msg.channel);
+      const lowerCode = code.toLowerCase();
+      const handler = getChannelHandler(msg.channel);
+      if (lowerCode === '/cancel') {
+        pendingReauths.delete(msg.chatId);
+        if (handler) await handler.send(msg.chatId, 'Re-auth cancelled.');
+        return;
+      }
+      if (pendingReauth.provider === 'codex' && lowerCode === '/done') {
         try {
-          const provider = await getProviderByName('claude');
-          if (!provider.completeOAuthLogin) throw new Error('provider missing completeOAuthLogin');
-          const status = await provider.completeOAuthLogin(code);
+          const provider = await getProviderByName(pendingReauth.provider);
+          if (!provider.completeOAuthLogin || !pendingReauth.loginId) throw new Error('provider missing completeOAuthLogin');
+          const status = await provider.completeOAuthLogin(pendingReauth.loginId);
           if (!status.authenticated) {
-            // keep pendingReauth so user can retry
-            if (handler) await handler.send(msg.chatId, `re-auth failed: ${status.error || 'unknown'}. paste the code again or send /cancel to skip.`);
+            if (handler) await handler.send(msg.chatId, `re-auth failed: ${status.error || 'unknown'}. finish the browser flow and send /done again, or send /cancel to skip.`);
             return;
           }
           pendingReauths.delete(msg.chatId);
-          broadcast({ event: 'provider.auth_complete', data: { provider: 'claude', status } });
+          broadcast({ event: 'provider.auth_complete', data: { provider: pendingReauth.provider, status } });
           if (handler) await handler.send(msg.chatId, 'authenticated, retrying your message...');
           await processChannelMessage({
             ...msg,
-            body: pendingReauth.messageMetadata?.body || msg.body,
+            body: pendingReauth.messageMetadata?.body || pendingReauth.prompt,
             channel: pendingReauth.channel,
             chatId: pendingReauth.chatId,
           });
@@ -1188,11 +1209,31 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         }
         return;
       }
-      // "/cancel" clears the pending re-auth
-      if (code.toLowerCase() === '/cancel') {
-        pendingReauths.delete(msg.chatId);
-        const handler = getChannelHandler(msg.channel);
-        if (handler) await handler.send(msg.chatId, 'Re-auth cancelled.');
+      // if it doesn't look like an OAuth code, treat as a normal message
+      // (user might be chatting while re-auth is pending)
+      if (pendingReauth.provider !== 'codex' && code && looksLikeOAuthCode(code)) {
+        try {
+          const provider = await getProviderByName(pendingReauth.provider);
+          if (!provider.completeOAuthLogin) throw new Error('provider missing completeOAuthLogin');
+          const status = await provider.completeOAuthLogin(code);
+          if (!status.authenticated) {
+            // keep pendingReauth so user can retry
+            if (handler) await handler.send(msg.chatId, `re-auth failed: ${status.error || 'unknown'}. paste the code again or send /cancel to skip.`);
+            return;
+          }
+          pendingReauths.delete(msg.chatId);
+          broadcast({ event: 'provider.auth_complete', data: { provider: pendingReauth.provider, status } });
+          if (handler) await handler.send(msg.chatId, 'authenticated, retrying your message...');
+          await processChannelMessage({
+            ...msg,
+            body: pendingReauth.messageMetadata?.body || pendingReauth.prompt,
+            channel: pendingReauth.channel,
+            chatId: pendingReauth.chatId,
+          });
+        } catch (err) {
+          console.error('[gateway] re-auth completion failed:', err);
+          if (handler) await handler.send(msg.chatId, `re-auth failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
         return;
       }
       // otherwise fall through to normal message processing
@@ -2128,24 +2169,16 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const runQueues = new Map<string, Promise<void>>();
   const activeAbortControllers = new Map<string, AbortController>();
 
-  async function getProviderAuthGate(providerName = ((config.provider?.name || 'claude') as ProviderName)): Promise<{
-    providerName: ProviderName;
-    method: 'api_key' | 'oauth' | 'none';
-    expired: boolean;
-    reconnectRequired: boolean;
-    authenticated: boolean;
-    error?: string;
-  }> {
+  async function getProviderAuthGate(providerName = ((config.provider?.name || 'claude') as ProviderName)): Promise<ProviderAuthGate> {
     const provider = await getProviderByName(providerName);
     const status = await provider.getAuthStatus();
-    return {
-      providerName,
-      method: status.authenticated ? (status.method || 'none') : 'none',
-      expired: status.reconnectRequired === true || status.tokenHealth === 'expired',
-      reconnectRequired: status.reconnectRequired === true,
-      authenticated: status.authenticated,
-      error: status.error,
-    };
+    return buildProviderAuthGate(providerName, status);
+  }
+
+  async function refreshProviderAuthGate(providerName: ProviderName): Promise<ProviderAuthGate> {
+    const provider = await getProviderByName(providerName);
+    await provider.invalidateAuthCache?.();
+    return buildProviderAuthGate(providerName, await provider.getAuthStatus());
   }
 
   async function handleAgentRun(params: {
@@ -2165,20 +2198,18 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     // If token expired, try silent refresh before falling back to interactive re-auth
     if (!providerAuth.authenticated && (providerAuth.expired || providerAuth.reconnectRequired)) {
       console.log(`[gateway] ${providerAuth.providerName} auth expired pre-run, attempting silent refresh for ${source}`);
-      const provider = await getProviderByName(providerAuth.providerName);
-      // getAuthStatus() calls ensureOAuthToken() which attempts refresh
-      // Clear cached auth first so it actually re-checks
-      if ('_cachedAuth' in provider) (provider as any)._cachedAuth = null;
-      const freshStatus = await provider.getAuthStatus();
-      if (freshStatus.authenticated) {
+      const refreshedGate = await refreshProviderAuthGate(providerAuth.providerName);
+      if (refreshedGate.authenticated) {
         console.log(`[gateway] silent refresh succeeded for ${providerAuth.providerName}`);
-        providerAuth = { ...providerAuth, authenticated: true, reconnectRequired: false, expired: false };
+        providerAuth = refreshedGate;
+      } else {
+        providerAuth = refreshedGate;
       }
     }
     if (!providerAuth.authenticated && providerAuth.reconnectRequired) {
       console.log(`[gateway] ${providerAuth.providerName} silent refresh failed, triggering re-auth for ${source}`);
-      await startReauthFlow({ prompt, sessionKey, source, channel, chatId: messageMetadata?.chatId, messageMetadata }).catch(() => {});
-      return null;
+      const started = await startReauthFlow({ prompt, sessionKey, source, channel, chatId: messageMetadata?.chatId, messageMetadata }).catch(() => false);
+      if (started) return null;
     }
     if (!providerAuth.authenticated) {
       const error = providerAuth.error || 'Not authenticated';
@@ -2767,31 +2798,40 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         if (errMsg.includes('spawn node ENOENT') || errMsg.includes('spawn node')) {
           errMsg = 'Node.js not found. Install Node.js (https://nodejs.org) or Claude Code CLI (`npm install -g @anthropic-ai/claude-code`), then restart dorabot.';
         }
-        finishPlanRun(sessionKey, 'error', errMsg);
-        finishTaskRun(sessionKey, 'error', errMsg);
+        let suppressError = false;
         if (isAuthError(err)) {
           // Try silent refresh before falling back to interactive re-auth
           console.log(`[gateway] auth error for ${source}, attempting silent token refresh`);
           const provName = (config.provider?.name || 'claude') as ProviderName;
-          const prov = await getProviderByName(provName);
-          if ('_cachedAuth' in prov) (prov as any)._cachedAuth = null;
-          const freshStatus = await prov.getAuthStatus();
-          if (freshStatus.authenticated) {
+          const refreshedGate = await refreshProviderAuthGate(provName);
+          if (classifyAuthRecovery(refreshedGate) === 'retry') {
             console.log(`[gateway] silent refresh succeeded, retrying run for ${source}`);
             // Re-queue the failed prompt so user doesn't have to resend
             handleAgentRun(params).catch(() => {});
-          } else {
+            suppressError = true;
+          } else if (classifyAuthRecovery(refreshedGate) === 'reauth') {
             console.log(`[gateway] silent refresh failed for ${source}, starting interactive re-auth`);
-            await startReauthFlow({ prompt, sessionKey, source, channel, chatId: messageMetadata?.chatId, messageMetadata }).catch(() => {});
+            const started = await startReauthFlow({ prompt, sessionKey, source, channel, chatId: messageMetadata?.chatId, messageMetadata }).catch(() => false);
+            if (started) {
+              broadcast({
+                event: 'provider.auth_required',
+                data: { provider: provName, reason: refreshedGate.error || 'Authentication required', timestamp: Date.now() },
+              });
+              suppressError = true;
+            }
           }
         }
-        const errorEvent: WsEvent = {
-          event: 'agent.error',
-          data: { source, sessionKey, error: errMsg, timestamp: Date.now() },
-        };
-        broadcast(errorEvent);
-        if (streamV2Enabled && typeof errorEvent.seq === 'number') {
-          scheduleRunEventPrune(sessionKey, errorEvent.seq);
+        if (!suppressError) {
+          finishPlanRun(sessionKey, 'error', errMsg);
+          finishTaskRun(sessionKey, 'error', errMsg);
+          const errorEvent: WsEvent = {
+            event: 'agent.error',
+            data: { source, sessionKey, error: errMsg, timestamp: Date.now() },
+          };
+          broadcast(errorEvent);
+          if (streamV2Enabled && typeof errorEvent.seq === 'number') {
+            scheduleRunEventPrune(sessionKey, errorEvent.seq);
+          }
         }
       } finally {
         activeAbortControllers.delete(sessionKey);
@@ -5015,10 +5055,18 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'git.checkout': {
           const repoRoot = params?.path as string;
           const branch = params?.branch as string;
+          const create = params?.create as boolean;
           if (!repoRoot || !branch) return { id, error: 'path and branch required' };
           const resolved = resolve(repoRoot);
           try {
             const { execFileSync } = await import('node:child_process');
+            // Create new branch
+            if (create) {
+              execFileSync('git', ['checkout', '-b', branch], {
+                cwd: resolved, encoding: 'utf-8', timeout: 10000,
+              });
+              return { id, result: { switched: branch, created: true } };
+            }
             // For remote branches like origin/foo, try to create local tracking branch
             if (branch.includes('/')) {
               const parts = branch.split('/');
@@ -5551,6 +5599,36 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
         case 'agent.background_runs': {
           return { id, result: Array.from(backgroundRuns.values()) };
+        }
+
+        case 'search.ripgrep': {
+          const searchPath = params?.path as string;
+          const query = params?.query as string;
+          const maxResults = (params?.maxResults as number) || 100;
+          if (!searchPath || !query) return { id, error: 'path and query required' };
+          try {
+            const { execFileSync } = await import('node:child_process');
+            const args = ['--json', '--max-count', '3', '-m', String(maxResults), '-i', query, resolve(searchPath)];
+            const raw = execFileSync('rg', args, { encoding: 'utf-8', timeout: 10000, maxBuffer: 5 * 1024 * 1024 });
+            const results: { path: string; line: number; text: string }[] = [];
+            for (const line of raw.split('\n')) {
+              if (!line) continue;
+              try {
+                const obj = JSON.parse(line);
+                if (obj.type === 'match') {
+                  results.push({
+                    path: obj.data.path.text,
+                    line: obj.data.line_number,
+                    text: obj.data.lines.text.trim(),
+                  });
+                }
+              } catch { continue; }
+            }
+            return { id, result: { results } };
+          } catch (err) {
+            if ((err as any)?.status === 1) return { id, result: { results: [] } };
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
         }
 
         default:

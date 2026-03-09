@@ -8,8 +8,9 @@ import { cn } from '@/lib/utils';
 import {
   Folder, File, ChevronRight, ChevronDown, FolderPlus, FilePlus, Pencil, Trash2,
   GitBranch, Plus, Minus, FileEdit, RefreshCw, ArrowDownToLine, ArrowUpToLine,
-  Check, ChevronUp, Undo2, RotateCcw, X,
+  Check, ChevronUp, Undo2, RotateCcw, X, Search,
 } from 'lucide-react';
+import { toast } from '@/hooks/useToast';
 
 // Inline input for new file/folder/rename (replaces window.prompt which doesn't work in Electron)
 type InlineInputState = {
@@ -185,14 +186,15 @@ function GitPanel({ rpc, gitState, onFileClick, onOpenDiff, onRefresh }: {
     setBranchFilter('');
   }, []);
 
-  const handleCheckout = async (branch: string) => {
+  const handleCheckout = async (branch: string, create?: boolean) => {
     setActionError('');
     closeBranchPicker();
     try {
-      await rpc('git.checkout', { path: gitState.root, branch });
+      await rpc('git.checkout', { path: gitState.root, branch, ...(create ? { create: true } : {}) });
       onRefresh();
+      toast(`Switched to ${branch}`, 'success');
     } catch (err) {
-      setActionError(String(err));
+      toast(String(err), 'error');
     }
   };
 
@@ -202,8 +204,9 @@ function GitPanel({ rpc, gitState, onFileClick, onOpenDiff, onRefresh }: {
     try {
       await rpc('git.fetch', { path: gitState.root });
       onRefresh();
+      toast('Fetch complete', 'success');
     } catch (err) {
-      setActionError(String(err));
+      toast(String(err), 'error');
     } finally {
       setFetching(false);
     }
@@ -215,8 +218,9 @@ function GitPanel({ rpc, gitState, onFileClick, onOpenDiff, onRefresh }: {
     try {
       await rpc('git.pull', { path: gitState.root });
       onRefresh();
+      toast('Pull complete', 'success');
     } catch (err) {
-      setActionError(String(err));
+      toast(String(err), 'error');
     } finally {
       setPulling(false);
     }
@@ -228,15 +232,20 @@ function GitPanel({ rpc, gitState, onFileClick, onOpenDiff, onRefresh }: {
     try {
       await rpc('git.push', { path: gitState.root });
       onRefresh();
+      toast('Push complete', 'success');
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
+      toast(err instanceof Error ? err.message : String(err), 'error');
     } finally {
       setPushing(false);
     }
   };
 
   const handleStage = async (filePath: string) => {
-    await rpc('git.stageFile', { path: gitState.root, file: filePath });
+    try {
+      await rpc('git.stageFile', { path: gitState.root, file: filePath });
+    } catch (err) {
+      toast(String(err), 'error');
+    }
     onRefresh();
   };
 
@@ -244,7 +253,7 @@ function GitPanel({ rpc, gitState, onFileClick, onOpenDiff, onRefresh }: {
     try {
       await rpc('git.unstageFile', { path: gitState.root, file: filePath });
     } catch (err) {
-      console.error('unstage failed:', filePath, err);
+      toast(String(err), 'error');
     }
     onRefresh();
   };
@@ -258,7 +267,7 @@ function GitPanel({ rpc, gitState, onFileClick, onOpenDiff, onRefresh }: {
       await rpc('git.discardFile', { path: gitState.root, file: filePath });
       onRefresh();
     } catch (err) {
-      setActionError(String(err));
+      toast(String(err), 'error');
     }
   };
 
@@ -270,8 +279,9 @@ function GitPanel({ rpc, gitState, onFileClick, onOpenDiff, onRefresh }: {
       await rpc('git.commit', { path: gitState.root, message: commitMsg.trim() });
       setCommitMsg('');
       onRefresh();
+      toast('Committed', 'success');
     } catch (err) {
-      setActionError(String(err));
+      toast(String(err), 'error');
     } finally {
       setCommitting(false);
     }
@@ -317,6 +327,7 @@ function GitPanel({ rpc, gitState, onFileClick, onOpenDiff, onRefresh }: {
 
   const localBranches = filteredBranches.filter(b => !b.remote);
   const remoteBranches = filteredBranches.filter(b => b.remote);
+  const canCreateBranch = branchFilter.trim().length > 0 && !branches.some(b => b.name === branchFilter.trim());
   const allFiltered = [...localBranches, ...remoteBranches];
 
   useEffect(() => {
@@ -350,6 +361,25 @@ function GitPanel({ rpc, gitState, onFileClick, onOpenDiff, onRefresh }: {
       'text-warning';
     const fileName = f.path.split('/').pop() || f.path;
     const dirPart = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/') + 1) : '';
+
+    if (pendingDiscard === f.path) {
+      return (
+        <div
+          key={`${f.path}-${f.staged}-confirm`}
+          className="relative flex items-center gap-1.5 px-2 py-1 text-[11px] bg-destructive/10 border-y border-destructive/20"
+        >
+          <span className="truncate min-w-0 flex-1 text-destructive">Discard changes to <strong>{fileName}</strong>?</span>
+          <button
+            className="px-1.5 py-0.5 rounded text-[10px] bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            onClick={(e) => { e.stopPropagation(); handleDiscard(f.path); }}
+          >Yes</button>
+          <button
+            className="px-1.5 py-0.5 rounded text-[10px] bg-secondary hover:bg-secondary/80"
+            onClick={(e) => { e.stopPropagation(); setPendingDiscard(null); }}
+          >No</button>
+        </div>
+      );
+    }
 
     return (
       <div
@@ -628,29 +658,47 @@ function GitPanel({ rpc, gitState, onFileClick, onOpenDiff, onRefresh }: {
               <input
                 ref={branchInputRef}
                 className="w-full text-sm bg-transparent outline-none placeholder:text-muted-foreground/50"
-                placeholder="Switch branch..."
+                placeholder="Switch or create branch..."
                 value={branchFilter}
                 onChange={e => setBranchFilter(e.target.value)}
                 onKeyDown={e => {
                   if (e.key === 'Escape') { closeBranchPicker(); return; }
-                  if (e.key === 'ArrowDown') { e.preventDefault(); setBranchSelectedIdx(i => Math.min(i + 1, allFiltered.length - 1)); return; }
+                  if (e.key === 'ArrowDown') { e.preventDefault(); setBranchSelectedIdx(i => Math.min(i + 1, allFiltered.length + (canCreateBranch ? 1 : 0) - 1)); return; }
                   if (e.key === 'ArrowUp') { e.preventDefault(); setBranchSelectedIdx(i => Math.max(i - 1, 0)); return; }
-                  if (e.key === 'Enter' && allFiltered[branchSelectedIdx]) {
+                  if (e.key === 'Enter') {
                     e.preventDefault();
-                    handleCheckout(allFiltered[branchSelectedIdx].name);
+                    if (canCreateBranch && branchSelectedIdx === 0) {
+                      handleCheckout(branchFilter.trim(), true);
+                    } else {
+                      const idx = canCreateBranch ? branchSelectedIdx - 1 : branchSelectedIdx;
+                      if (allFiltered[idx]) handleCheckout(allFiltered[idx].name);
+                    }
                   }
                 }}
                 autoFocus
               />
             </div>
             <div className="flex-1 overflow-y-auto min-h-0">
+              {canCreateBranch && (
+                <button
+                  className={cn(
+                    'flex items-center gap-2 w-full px-3 py-1.5 text-[12px] text-left transition-colors border-b border-border',
+                    branchSelectedIdx === 0 ? 'bg-accent text-accent-foreground' : 'hover:bg-secondary/50',
+                  )}
+                  onClick={() => handleCheckout(branchFilter.trim(), true)}
+                  onMouseEnter={() => setBranchSelectedIdx(0)}
+                >
+                  <Plus className="w-3.5 h-3.5 shrink-0 text-primary" />
+                  <span className="truncate">Create branch <span className="font-medium">{branchFilter.trim()}</span></span>
+                </button>
+              )}
               {localBranches.length > 0 && (
                 <>
                   <div className="px-3 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30 sticky top-0">
                     Local Branches
                   </div>
                   {localBranches.map((b, i) => {
-                    const globalIdx = i;
+                    const globalIdx = (canCreateBranch ? 1 : 0) + i;
                     return (
                       <button
                         key={b.name}
@@ -675,7 +723,7 @@ function GitPanel({ rpc, gitState, onFileClick, onOpenDiff, onRefresh }: {
                     Remote Branches
                   </div>
                   {remoteBranches.map((b, i) => {
-                    const globalIdx = localBranches.length + i;
+                    const globalIdx = (canCreateBranch ? 1 : 0) + localBranches.length + i;
                     return (
                       <button
                         key={b.name}
@@ -733,7 +781,7 @@ function GitPanel({ rpc, gitState, onFileClick, onOpenDiff, onRefresh }: {
               <button
                 className="flex w-full items-center px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10 transition-colors"
                 onClick={() => { handleDiscard(contextMenu.file.path); setContextMenu(null); }}
-              >Discard Changes</button>
+              >{pendingDiscard === contextMenu.file.path ? 'Confirm Discard?' : 'Discard Changes'}</button>
             </>
           ) : (
             <button
@@ -775,6 +823,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onFileCh
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
   const [inlineInput, setInlineInput] = useState<InlineInputState>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [fileFilter, setFileFilter] = useState('');
 
   const [gitState, setGitState] = useState<GitState | null>(null);
   const gitPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -903,7 +952,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onFileCh
         loadDir(inlineInput.parentPath);
       }
     } catch (err) {
-      console.error('File operation failed:', err);
+      toast(String(err), 'error');
     }
     setInlineInput(null);
   }, [inlineInput, rpc, loadDir, selectedPath]);
@@ -921,7 +970,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onFileCh
       loadDir(parentPath);
       if (selectedPath === confirmDelete) setSelectedPath(null);
     } catch (err) {
-      console.error('Failed to delete:', err);
+      toast(String(err), 'error');
     }
     setConfirmDelete(null);
   }, [confirmDelete, rpc, loadDir, selectedPath]);
@@ -1136,6 +1185,18 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onFileCh
     }
   }
 
+  // Check if a subtree contains any entry matching the filter
+  const filterLower = fileFilter.toLowerCase();
+  const subtreeMatches = (parentPath: string): boolean => {
+    const st = dirs.get(parentPath);
+    if (!st) return false;
+    for (const e of st.entries) {
+      if (e.name.toLowerCase().includes(filterLower)) return true;
+      if (e.type === 'directory' && subtreeMatches(parentPath + '/' + e.name)) return true;
+    }
+    return false;
+  };
+
   const renderEntries = (parentPath: string, depth: number): React.JSX.Element[] => {
     const state = dirs.get(parentPath);
     if (!state) return [];
@@ -1153,6 +1214,12 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onFileCh
       const fullPath = parentPath + '/' + entry.name;
       const isDir = entry.type === 'directory';
       const isExpanded2 = expanded.has(fullPath);
+
+      // Filter: skip entries that don't match and don't contain matching children
+      if (fileFilter) {
+        const nameMatches = entry.name.toLowerCase().includes(filterLower);
+        if (!nameMatches && (!isDir || !subtreeMatches(fullPath))) continue;
+      }
       const isDot = entry.name.startsWith('.');
 
       const gitStatus = gitFileMap.get(fullPath);
@@ -1205,7 +1272,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onFileCh
         </div>
       );
 
-      if (isDir && isExpanded2) {
+      if (isDir && (isExpanded2 || fileFilter)) {
         items.push(...renderEntries(fullPath, depth + 1));
       }
     }
@@ -1249,6 +1316,20 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onFileCh
             </span>
           ))}
         </div>
+      </div>
+      <div className="flex items-center gap-1 px-2 py-1 border-b border-border shrink-0">
+        <Search className="w-3 h-3 text-muted-foreground shrink-0" />
+        <input
+          className="flex-1 bg-transparent text-[11px] outline-none placeholder:text-muted-foreground/50 min-w-0"
+          placeholder="Filter files..."
+          value={fileFilter}
+          onChange={(e) => setFileFilter(e.target.value)}
+        />
+        {fileFilter && (
+          <button className="p-0.5 hover:text-foreground text-muted-foreground transition-colors" onClick={() => setFileFilter('')}>
+            <X className="w-3 h-3" />
+          </button>
+        )}
       </div>
       <ScrollArea className="flex-1 min-h-0">
         <div
