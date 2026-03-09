@@ -28,7 +28,7 @@ async function main(): Promise<void> {
     let onItemRunCalls = 0;
 
     const config = {
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'claude-sonnet-4-6',
       permissionMode: 'default',
       sandbox: { enabled: false, mode: 'off' },
       provider: { name: 'claude' },

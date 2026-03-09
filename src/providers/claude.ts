@@ -618,6 +618,11 @@ export class ClaudeProvider implements Provider {
     }
   }
 
+  invalidateAuthCache(): void {
+    this._cachedAuth = null;
+    _cliHasAuth = null;
+  }
+
   resetAuth(): void {
     this._cachedAuth = null;
     _cliHasAuth = null;

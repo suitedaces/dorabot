@@ -10,11 +10,11 @@ When asked to plan or design, STOP and plan from the user's perspective BEFORE w
 
 When asked to investigate or debug something, run tests and scripts FIRST to observe actual behavior before reading/analyzing code extensively. Prefer empirical testing over code tracing.
 
-For SDK/API questions, check official SDK documentation and API docs via claude-agent-sdk skill FIRST, not the local codebase. Only grep local code after understanding the external API surface.
+For SDK/API questions, check official SDK documentation and API docs via Codex-agent-sdk skill FIRST, not the local codebase. Only grep local code after understanding the external API surface.
 
 ## Architecture
 
-- **Backend**: Node.js + TypeScript, Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`)
+- **Backend**: Node.js + TypeScript, Codex Agent SDK (`@anthropic-ai/Codex-agent-sdk`)
 - **Gateway**: WebSocket RPC server over Unix socket `~/.dorabot/gateway.sock` (`src/gateway/server.ts`)
 - **Desktop**: Electron + Vite + React in `desktop/`
 - **Channels**: WhatsApp (Baileys), Telegram (grammy)
@@ -22,7 +22,7 @@ For SDK/API questions, check official SDK documentation and API docs via claude-
 - **Tools**: MCP server — `message`, `browser`, `screenshot`, `calendar` (4 tools), `goals` (4 tools)
 - **Browser**: Playwright-core via CDP, persistent profile at `~/.dorabot/browser/profile/`, port 19222
 - **Skills**: Markdown files in `./skills/` and `~/.dorabot/skills/`, YAML frontmatter for metadata
-- **Providers**: Pluggable — Claude (Agent SDK, default) or OpenAI Codex (Codex SDK)
+- **Providers**: Pluggable — Codex (Agent SDK, default) or OpenAI Codex (Codex SDK)
 - **Calendar**: RFC 5545 iCal RRULE-based scheduling (replaced cron)
 
 ## Build
@@ -63,7 +63,7 @@ npm run dev:cli                      # interactive CLI mode
 ### Providers
 - `src/providers/index.ts` — provider factory, singleton management
 - `src/providers/types.ts` — provider type definitions
-- `src/providers/claude.ts` — Claude provider (Agent SDK, default)
+- `src/providers/Codex.ts` — Codex provider (Agent SDK, default)
 - `src/providers/codex.ts` — OpenAI Codex provider (dynamic import)
 
 ### Channels
@@ -150,7 +150,7 @@ Eligibility checks: required binaries (`which`), env vars, config keys.
 Loaded from (first found): explicit path → `./dorabot.config.json` → `~/.dorabot/config.json` → defaults.
 
 Key settings:
-- `model` — default `claude-sonnet-4-6`
+- `model` — default `Codex-sonnet-4-5-20250929`
 - `permissionMode` — default | acceptEdits | bypassPermissions | plan | dontAsk
 - `sandbox.enabled` — false by default
 - `sandbox.mode` — off | non-main | all

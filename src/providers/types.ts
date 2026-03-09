@@ -68,7 +68,7 @@ export type ProviderAuthStatus = {
   tokenHealth?: 'valid' | 'expiring' | 'expired';
   nextRefreshAt?: number;
   reconnectRequired?: boolean;
-  /** Model currently configured (e.g. "claude-opus-4-5-20251101") */
+  /** Model currently configured (e.g. "claude-opus-4-6" or "gpt-5-codex") */
   model?: string;
   /** Claude Code CLI version (e.g. "2.0.76") */
   cliVersion?: string;
@@ -106,6 +106,9 @@ export interface Provider {
 
   /** Run a query - yields SDK-compatible messages, returns final result */
   query(opts: ProviderRunOptions): AsyncGenerator<ProviderMessage, ProviderQueryResult, unknown>;
+
+  /** Clear transient auth caches before re-checking status */
+  invalidateAuthCache?(): Promise<void> | void;
 
   /** Clean up resources */
   dispose?(): Promise<void>;

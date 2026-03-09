@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Check, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL, codexModelsForAuth } from '@/lib/modelCatalog';
 
 type Props = {
   gateway: ReturnType<typeof useGateway>;
@@ -51,29 +52,9 @@ export function ProviderCard({ gateway, disabled }: Props) {
     gateway.getProviderStatus();
   }, [gateway]);
 
-  // Model options per provider
-  const claudeModels = [
-    { value: 'claude-opus-4-6', label: 'opus' },
-    { value: 'claude-sonnet-4-5-20250929', label: 'sonnet' },
-    { value: 'claude-haiku-4-5-20251001', label: 'haiku' },
-  ];
-
-  const codexModels = [
-    { value: 'gpt-5.4', label: 'gpt-5.4' },
-    { value: 'gpt-5.3-codex', label: 'gpt-5.3-codex' },
-    { value: 'gpt-5.2-codex', label: 'gpt-5.2-codex' },
-    { value: 'gpt-5.1-codex-mini', label: 'gpt-5.1-codex-mini' },
-    { value: 'gpt-5.1-codex-max', label: 'gpt-5.1-codex-max' },
-    { value: 'gpt-5.2', label: 'gpt-5.2' },
-    { value: 'gpt-5.1', label: 'gpt-5.1' },
-    { value: 'gpt-5.1-codex', label: 'gpt-5.1-codex' },
-    { value: 'gpt-5-codex', label: 'gpt-5-codex' },
-    { value: 'gpt-5-codex-mini', label: 'gpt-5-codex-mini' },
-    { value: 'gpt-5', label: 'gpt-5' },
-  ];
-
-  const currentModel = gateway.model || cfg?.model || 'claude-sonnet-4-5-20250929';
+  const currentModel = gateway.model || cfg?.model || DEFAULT_CLAUDE_MODEL;
   const codexModel = cfg?.provider?.codex?.model || '';
+  const codexOptions = codexModelsForAuth(providerName === 'codex' ? authMethod : undefined, codexModel);
 
   const handleCodexModelChange = useCallback(async (value: string) => {
     try {
@@ -162,11 +143,11 @@ export function ProviderCard({ gateway, disabled }: Props) {
           {providerName === 'claude' ? (
             <SettingRow label="model" description="default model for new chats">
               <Select value={currentModel} onValueChange={gateway.changeModel} disabled={disabled}>
-                <SelectTrigger className="h-7 w-40 text-[11px]">
+                <SelectTrigger className="h-7 w-48 text-[11px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {claudeModels.map(m => (
+                  {CLAUDE_MODELS.map(m => (
                     <SelectItem key={m.value} value={m.value} className="text-[11px]">{m.label}</SelectItem>
                   ))}
                 </SelectContent>
@@ -174,12 +155,12 @@ export function ProviderCard({ gateway, disabled }: Props) {
             </SettingRow>
           ) : (
             <SettingRow label="model" description="codex model for agent runs">
-              <Select value={codexModel || 'gpt-5.4'} onValueChange={handleCodexModelChange} disabled={disabled}>
-                <SelectTrigger className="h-7 w-44 text-[11px]">
+              <Select value={codexModel || DEFAULT_CODEX_MODEL} onValueChange={handleCodexModelChange} disabled={disabled}>
+                <SelectTrigger className="h-7 w-52 text-[11px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {codexModels.map(m => (
+                  {codexOptions.map(m => (
                     <SelectItem key={m.value} value={m.value} className="text-[11px]">{m.label}</SelectItem>
                   ))}
                 </SelectContent>

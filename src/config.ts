@@ -179,7 +179,7 @@ export type Config = {
 
 const DEFAULT_CONFIG: Config = {
   provider: { name: 'claude' },
-  model: 'claude-sonnet-4-5-20250929',
+  model: 'claude-sonnet-4-6',
   permissionMode: 'default',
   skills: {
     enabled: [],

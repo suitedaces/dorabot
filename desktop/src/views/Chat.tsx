@@ -27,6 +27,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { jsonrepair } from 'jsonrepair';
+import { CLAUDE_MODELS, CODEX_MODELS, DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL, codexModelsForAuth, labelForModel } from '@/lib/modelCatalog';
 
 type Props = {
   gateway: ReturnType<typeof useGateway>;
@@ -116,23 +117,6 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   memory_search: Search, memory_read: FileText,
 };
 
-const ANTHROPIC_MODELS = [
-  { value: 'claude-opus-4-6', label: 'opus' },
-  { value: 'claude-sonnet-4-5-20250929', label: 'sonnet' },
-  { value: 'claude-haiku-4-5-20251001', label: 'haiku' },
-];
-
-const OPENAI_MODELS = [
-  { value: 'gpt-5.4', label: 'gpt-5.4' },
-  { value: 'gpt-5.3-codex', label: 'gpt-5.3 codex' },
-  { value: 'gpt-5.2-codex', label: 'gpt-5.2 codex' },
-  { value: 'gpt-5.1-codex-mini', label: 'gpt-5.1 mini' },
-  { value: 'gpt-5.1-codex-max', label: 'gpt-5.1 max' },
-  { value: 'gpt-5.2', label: 'gpt-5.2' },
-  { value: 'gpt-5.1', label: 'gpt-5.1' },
-  { value: 'gpt-5', label: 'gpt-5' },
-];
-
 // Codex reasoning effort levels (SDK: minimal | low | medium | high | xhigh)
 // Our config uses 'max' → maps to 'xhigh' in the provider
 const EFFORT_LEVELS = [
@@ -145,9 +129,23 @@ const EFFORT_LEVELS = [
 
 function ModelSelector({ gateway, disabled }: { gateway: ReturnType<typeof useGateway>; disabled: boolean }) {
   const providerName = (gateway.configData as any)?.provider?.name || 'claude';
-  const claudeModel = gateway.model || 'claude-sonnet-4-5-20250929';
-  const codexModel = (gateway.configData as any)?.provider?.codex?.model || 'gpt-5.4';
+  const claudeModel = gateway.model || DEFAULT_CLAUDE_MODEL;
+  const codexModel = (gateway.configData as any)?.provider?.codex?.model || DEFAULT_CODEX_MODEL;
+  const [codexAuthMethod, setCodexAuthMethod] = useState<string | undefined>(undefined);
+  const codexOptions = codexModelsForAuth(codexAuthMethod, codexModel);
   const currentValue = providerName === 'codex' ? `codex:${codexModel}` : `claude:${claudeModel}`;
+
+  useEffect(() => {
+    gateway.getProviderAuth('codex')
+      .then((auth) => setCodexAuthMethod(auth.method))
+      .catch(() => {});
+  }, [gateway]);
+
+  useEffect(() => {
+    if (providerName === 'codex' && gateway.providerInfo?.auth?.method) {
+      setCodexAuthMethod(gateway.providerInfo.auth.method);
+    }
+  }, [gateway.providerInfo, providerName]);
 
   const handleChange = async (encoded: string) => {
     const [provider, model] = encoded.split(':') as [string, string];
@@ -161,8 +159,8 @@ function ModelSelector({ gateway, disabled }: { gateway: ReturnType<typeof useGa
   };
 
   const currentLabel = providerName === 'codex'
-    ? OPENAI_MODELS.find(m => m.value === codexModel)?.label || codexModel
-    : ANTHROPIC_MODELS.find(m => m.value === claudeModel)?.label || claudeModel;
+    ? labelForModel(CODEX_MODELS, codexModel)
+    : labelForModel(CLAUDE_MODELS, claudeModel);
 
   const reasoningEffort = (gateway.configData as any)?.reasoningEffort || null;
 
@@ -184,7 +182,7 @@ function ModelSelector({ gateway, disabled }: { gateway: ReturnType<typeof useGa
         </SelectTrigger>
         <SelectContent position="popper" align="start" className="min-w-[180px]">
           <div className="px-2 py-1 text-[9px] font-semibold text-muted-foreground uppercase tracking-wider">Anthropic</div>
-          {ANTHROPIC_MODELS.map(m => (
+          {CLAUDE_MODELS.map(m => (
             <SelectItem key={m.value} value={`claude:${m.value}`} className="text-xs">
               <span className="flex items-center gap-1.5">
                 <img src="./claude-icon.svg" alt="" className="w-3 h-3" />
@@ -193,7 +191,7 @@ function ModelSelector({ gateway, disabled }: { gateway: ReturnType<typeof useGa
             </SelectItem>
           ))}
           <div className="px-2 py-1 mt-1 text-[9px] font-semibold text-muted-foreground uppercase tracking-wider border-t border-border">OpenAI</div>
-          {OPENAI_MODELS.map(m => (
+          {codexOptions.map(m => (
             <SelectItem key={m.value} value={`codex:${m.value}`} className="text-xs">
               <span className="flex items-center gap-1.5">
                 <img src="./openai-icon.svg" alt="" className="w-3 h-3" />
@@ -674,9 +672,23 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   const landingRef = useRef<HTMLDivElement>(null);
   const sentHistoryRef = useRef<string[]>([]);
   const historyIndexRef = useRef(-1);
+  const historyInitRef = useRef(false);
   const dragStartRef = useRef<{ y: number; height: number } | null>(null);
   const isRunning = agentStatus !== 'idle';
   const isEmpty = chatItems.length === 0;
+
+  // Seed message history from existing chat items so ArrowUp works after reload
+  useEffect(() => {
+    if (historyInitRef.current || chatItems.length === 0) return;
+    historyInitRef.current = true;
+    const userMessages = chatItems
+      .filter((item): item is Extract<ChatItem, { type: 'user' }> => item.type === 'user')
+      .map(item => item.content.trim())
+      .filter(Boolean);
+    if (userMessages.length > 0) {
+      sentHistoryRef.current = userMessages;
+    }
+  }, [chatItems]);
 
   const SLASH_COMMANDS = useMemo(() => [
     { command: '/clear', description: 'Clear chat', autoSend: true },

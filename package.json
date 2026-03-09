@@ -20,7 +20,12 @@
     "test:reconnect-replay": "tsx scripts/test-reconnect-replay.ts",
     "test:question-lifecycle": "tsx scripts/test-question-lifecycle.ts",
     "test:load-7x4": "tsx scripts/test-load-7x4.ts",
-    "test:scheduler-run": "tsx scripts/test-scheduler-run-item.ts"
+    "test:scheduler-run": "tsx scripts/test-scheduler-run-item.ts",
+    "test:codex-auth-state": "node scripts/test-codex-auth-state.mjs",
+    "test:gateway-auth-state": "node scripts/test-gateway-auth-state.mjs",
+    "test:codex-provider": "node scripts/test-codex-provider.mjs status",
+    "test:claude-provider": "node scripts/test-claude-provider.mjs status",
+    "test:model-catalog": "node scripts/test-model-catalog.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.42",
