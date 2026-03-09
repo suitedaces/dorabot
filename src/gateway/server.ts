@@ -5142,6 +5142,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const repoRoot = params?.path as string;
           const filePath = params?.file as string;
           const ref = (params?.ref as string) || 'HEAD';
+          const binary = params?.binary as boolean;
           if (!repoRoot || !filePath) return { id, error: 'path and file required' };
           // Validate ref is safe (alphanumeric, /, -, _, ~, ^, .)
           if (!/^[a-zA-Z0-9/_\-.~^]+$/.test(ref)) return { id, error: 'invalid ref' };
@@ -5150,6 +5151,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!pathResolve(resolved, filePath).startsWith(resolved)) return { id, error: 'path traversal not allowed' };
           try {
             const { execFileSync } = await import('node:child_process');
+            if (binary) {
+              const buf = execFileSync('git', ['show', `${ref}:${filePath}`], {
+                cwd: resolved, timeout: 5000, maxBuffer: 10 * 1024 * 1024,
+              });
+              return { id, result: { content: buf.toString('base64'), encoding: 'base64' } };
+            }
             const content = execFileSync('git', ['show', `${ref}:${filePath}`], {
               cwd: resolved, encoding: 'utf-8', timeout: 5000,
             });

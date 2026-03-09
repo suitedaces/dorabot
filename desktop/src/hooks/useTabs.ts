@@ -32,6 +32,7 @@ export type DiffTab = {
   filePath: string;
   oldContent: string;
   newContent: string;
+  isImage?: boolean;
 };
 
 export type TerminalTab = {
@@ -559,6 +560,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     oldContent: string;
     newContent: string;
     label?: string;
+    isImage?: boolean;
   }, groupId?: GroupId) => {
     const id = `diff:${opts.filePath}:${Date.now()}`;
     const label = opts.label || `${opts.filePath.split('/').pop() || 'diff'} (diff)`;
@@ -570,6 +572,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
       filePath: opts.filePath,
       oldContent: opts.oldContent,
       newContent: opts.newContent,
+      isImage: opts.isImage,
     };
 
     setTabs(prev => [...prev, tab]);

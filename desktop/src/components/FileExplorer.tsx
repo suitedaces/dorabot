@@ -71,7 +71,7 @@ type Props = {
   rpc: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
   connected: boolean;
   onFileClick?: (filePath: string) => void;
-  onOpenDiff?: (opts: { filePath: string; oldContent: string; newContent: string; label?: string }) => void;
+  onOpenDiff?: (opts: { filePath: string; oldContent: string; newContent: string; label?: string; isImage?: boolean }) => void;
   onFileChange?: (listener: (path: string) => void) => () => void;
   onOpenTerminal?: (cwd: string) => void;
   mode?: 'files' | 'git';
@@ -305,13 +305,28 @@ function GitPanel({ rpc, gitState, onFileClick, onOpenDiff, onRefresh }: {
     onRefresh();
   };
 
+  const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'];
+
   const openFileDiff = useCallback(async (f: GitFileStatus) => {
     const fullPath = gitState.root + '/' + f.path;
     if (onOpenDiff && (f.status === 'M' || f.status === 'A')) {
+      const ext = f.path.split('.').pop()?.toLowerCase() || '';
+      const isImage = IMAGE_EXTS.includes(ext);
       try {
-        const currentRes = await rpc('fs.read', { path: fullPath }) as { content: string };
-        const oldRes = await rpc('git.showFile', { path: gitState.root, file: f.path }) as { content: string };
-        onOpenDiff({ filePath: f.path, oldContent: oldRes.content || '', newContent: currentRes.content, label: `${f.path.split('/').pop()} (diff)` });
+        let newContent: string;
+        let oldContent: string;
+        if (isImage) {
+          const currentRes = await rpc('fs.readBinary', { path: fullPath }) as { content: string };
+          const oldRes = await rpc('git.showFile', { path: gitState.root, file: f.path, binary: true }) as { content: string; encoding?: string };
+          newContent = currentRes.content || '';
+          oldContent = oldRes.content || '';
+        } else {
+          const currentRes = await rpc('fs.read', { path: fullPath }) as { content: string };
+          const oldRes = await rpc('git.showFile', { path: gitState.root, file: f.path }) as { content: string };
+          newContent = currentRes.content;
+          oldContent = oldRes.content || '';
+        }
+        onOpenDiff({ filePath: f.path, oldContent, newContent, label: `${f.path.split('/').pop()} (diff)`, isImage });
       } catch {
         onFileClick?.(fullPath);
       }

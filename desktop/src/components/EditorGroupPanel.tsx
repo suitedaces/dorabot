@@ -15,6 +15,7 @@ import { GoalsView } from '../views/Goals';
 import { ResearchView } from '../views/Research';
 import { FileViewer } from './FileViewer';
 import { DiffViewer } from './viewers/DiffViewer';
+import { ImageDiffViewer } from './viewers/ImageDiffViewer';
 import { TerminalView } from './TerminalView';
 import { ErrorBoundary } from './ErrorBoundary';
 import { useTheme } from '../hooks/useTheme';
@@ -108,6 +109,15 @@ export function EditorGroupPanel({
           />
         );
       case 'diff':
+        if (activeTab.isImage) {
+          return (
+            <ImageDiffViewer
+              oldSrc={activeTab.oldContent ? `data:image/*;base64,${activeTab.oldContent}` : ''}
+              newSrc={activeTab.newContent ? `data:image/*;base64,${activeTab.newContent}` : ''}
+              filePath={activeTab.filePath}
+            />
+          );
+        }
         return (
           <DiffViewer
             oldContent={activeTab.oldContent}

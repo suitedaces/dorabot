@@ -2,7 +2,7 @@ import { createPortal } from 'react-dom';
 import { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 
-const SHORTCUTS = [
+export const SHORTCUTS = [
   { section: 'Tabs', items: [
     { keys: '⌘T', desc: 'New tab' },
     { keys: '⌘W', desc: 'Close tab' },
