@@ -40,6 +40,13 @@ jobs:
           echo "Synced desktop/package.json to $ROOT_VERSION"
         working-directory: desktop
 
+      - name: Delete existing release if any
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+
       - name: Build & Package
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
