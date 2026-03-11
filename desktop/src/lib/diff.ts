@@ -1,7 +1,8 @@
 /**
- * Diff utilities for computing line-level and character-level diffs.
+ * Diff utilities using the 'diff' library (Myers' O(ND) algorithm).
  * Used by FileStream (inline edit diffs) and DiffViewer (full-file diffs).
  */
+import { diffLines, diffChars } from 'diff';
 
 export type DiffLineType = 'ctx' | 'del' | 'add';
 
@@ -24,47 +25,33 @@ export type CharDiff = {
 };
 
 /**
- * Compute a line-level diff using LCS (Longest Common Subsequence).
+ * Compute a line-level diff using Myers' algorithm via the 'diff' library.
  * Returns an array of DiffLines with line numbers.
  */
 export function computeDiff(oldStr: string, newStr: string): DiffLine[] {
-  const oldLines = oldStr.split('\n');
-  const newLines = newStr.split('\n');
-  const m = oldLines.length;
-  const n = newLines.length;
-
-  // LCS DP
-  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
-  for (let i = 1; i <= m; i++)
-    for (let j = 1; j <= n; j++)
-      dp[i][j] = oldLines[i - 1] === newLines[j - 1]
-        ? dp[i - 1][j - 1] + 1
-        : Math.max(dp[i - 1][j], dp[i][j - 1]);
-
-  // Backtrack to build diff
+  const changes = diffLines(oldStr, newStr);
   const result: DiffLine[] = [];
-  let i = m, j = n;
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-      result.push({ type: 'ctx', line: oldLines[i - 1] });
-      i--; j--;
-    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-      result.push({ type: 'add', line: newLines[j - 1] });
-      j--;
-    } else {
-      result.push({ type: 'del', line: oldLines[i - 1] });
-      i--;
-    }
-  }
-  result.reverse();
+  let oldNum = 0;
+  let newNum = 0;
 
-  // Assign line numbers
-  let oldNum = 0, newNum = 0;
-  for (const d of result) {
-    if (d.type === 'del' || d.type === 'ctx') oldNum++;
-    if (d.type === 'add' || d.type === 'ctx') newNum++;
-    d.oldNum = d.type !== 'add' ? oldNum : undefined;
-    d.newNum = d.type !== 'del' ? newNum : undefined;
+  for (const change of changes) {
+    // Split into individual lines, dropping the trailing empty string from final newline
+    const lines = change.value.split('\n');
+    if (lines[lines.length - 1] === '') lines.pop();
+
+    for (const line of lines) {
+      if (change.added) {
+        newNum++;
+        result.push({ type: 'add', line, newNum });
+      } else if (change.removed) {
+        oldNum++;
+        result.push({ type: 'del', line, oldNum });
+      } else {
+        oldNum++;
+        newNum++;
+        result.push({ type: 'ctx', line, oldNum, newNum });
+      }
+    }
   }
 
   return result;
@@ -75,85 +62,20 @@ export function computeDiff(oldStr: string, newStr: string): DiffLine[] {
  * Used to highlight the specific characters that changed within a line.
  */
 export function computeCharDiff(oldStr: string, newStr: string): { oldParts: CharDiff[]; newParts: CharDiff[] } {
-  const m = oldStr.length;
-  const n = newStr.length;
-
-  // For very long lines, skip char diff (too expensive)
-  if (m * n > 100000) {
-    return {
-      oldParts: [{ type: 'del', text: oldStr }],
-      newParts: [{ type: 'add', text: newStr }],
-    };
-  }
-
-  // LCS on characters
-  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
-  for (let i = 1; i <= m; i++)
-    for (let j = 1; j <= n; j++)
-      dp[i][j] = oldStr[i - 1] === newStr[j - 1]
-        ? dp[i - 1][j - 1] + 1
-        : Math.max(dp[i - 1][j], dp[i][j - 1]);
-
-  // Backtrack
-  const ops: Array<{ type: 'same' | 'del' | 'add'; char: string }> = [];
-  let i = m, j = n;
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && oldStr[i - 1] === newStr[j - 1]) {
-      ops.push({ type: 'same', char: oldStr[i - 1] });
-      i--; j--;
-    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-      ops.push({ type: 'add', char: newStr[j - 1] });
-      j--;
-    } else {
-      ops.push({ type: 'del', char: oldStr[i - 1] });
-      i--;
-    }
-  }
-  ops.reverse();
-
-  // Merge consecutive same-type operations into parts
+  const changes = diffChars(oldStr, newStr);
   const oldParts: CharDiff[] = [];
   const newParts: CharDiff[] = [];
 
-  let oldBuf = '', oldType: 'same' | 'del' = 'same';
-  let newBuf = '', newType: 'same' | 'add' = 'same';
-
-  for (const op of ops) {
-    if (op.type === 'same') {
-      // Flush old del buffer
-      if (oldType === 'del' && oldBuf) {
-        oldParts.push({ type: 'del', text: oldBuf });
-        oldBuf = '';
-      }
-      // Flush new add buffer
-      if (newType === 'add' && newBuf) {
-        newParts.push({ type: 'add', text: newBuf });
-        newBuf = '';
-      }
-      oldBuf += op.char;
-      newBuf += op.char;
-      oldType = 'same';
-      newType = 'same';
-    } else if (op.type === 'del') {
-      if (oldType === 'same' && oldBuf) {
-        oldParts.push({ type: 'same', text: oldBuf });
-        oldBuf = '';
-      }
-      oldBuf += op.char;
-      oldType = 'del';
+  for (const change of changes) {
+    if (change.added) {
+      newParts.push({ type: 'add', text: change.value });
+    } else if (change.removed) {
+      oldParts.push({ type: 'del', text: change.value });
     } else {
-      if (newType === 'same' && newBuf) {
-        newParts.push({ type: 'same', text: newBuf });
-        newBuf = '';
-      }
-      newBuf += op.char;
-      newType = 'add';
+      oldParts.push({ type: 'same', text: change.value });
+      newParts.push({ type: 'same', text: change.value });
     }
   }
-
-  // Flush remaining
-  if (oldBuf) oldParts.push({ type: oldType === 'del' ? 'del' : 'same', text: oldBuf });
-  if (newBuf) newParts.push({ type: newType === 'add' ? 'add' : 'same', text: newBuf });
 
   return { oldParts, newParts };
 }
