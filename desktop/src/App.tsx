@@ -1315,6 +1315,17 @@ export default function App() {
           </button>
         </div>
       )}
+      {updateState.status === 'error' && (
+        <div className="shrink-0 px-4 py-1.5 bg-destructive/10 border-b border-destructive/20 flex items-center gap-2 text-xs">
+          <span className="text-destructive">Update failed: {updateState.message}</span>
+          <button
+            onClick={() => setUpdateState({ status: 'idle' })}
+            className="ml-auto text-muted-foreground hover:text-foreground text-[10px]"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* main layout */}
       <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0">

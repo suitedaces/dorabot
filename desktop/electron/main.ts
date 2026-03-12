@@ -88,6 +88,13 @@ function setupAutoUpdater(): void {
   ipcMain.on('update-install', () => {
     isQuitting = true;
     autoUpdater.quitAndInstall();
+    // Safety net: if quitAndInstall didn't trigger quit within 5s
+    // (e.g. Squirrel deadlock), force restart the app
+    setTimeout(() => {
+      console.log('[updater] quitAndInstall did not quit within 5s, forcing restart');
+      app.relaunch();
+      app.exit(0);
+    }, 5000);
   });
 
   // Check for updates 10s after launch, then every 4 hours
