@@ -7,10 +7,18 @@ export type Palette =
   | 'sage-dark'
   | 'ocean-light'
   | 'ocean-dark'
-  | 'sand-light'
-  | 'sand-dark'
   | 'berry-light'
-  | 'berry-dark';
+  | 'berry-dark'
+  | 'terminal-light'
+  | 'terminal-dark'
+  | 'paper-light'
+  | 'paper-dark'
+  | 'neon-light'
+  | 'neon-dark'
+  | 'ink-light'
+  | 'ink-dark'
+  | 'sunset-light'
+  | 'sunset-dark';
 
 export type PaletteInfo = {
   id: Palette;
@@ -26,11 +34,18 @@ const PAIRS: Record<string, [Palette, Palette]> = {
   mocha: ['mocha-light', 'mocha-dark'],
   sage: ['sage-light', 'sage-dark'],
   ocean: ['ocean-light', 'ocean-dark'],
-  sand: ['sand-light', 'sand-dark'],
   berry: ['berry-light', 'berry-dark'],
+  terminal: ['terminal-light', 'terminal-dark'],
+  paper: ['paper-light', 'paper-dark'],
+  neon: ['neon-light', 'neon-dark'],
+  ink: ['ink-light', 'ink-dark'],
+  sunset: ['sunset-light', 'sunset-dark'],
 };
 
-const DARK_SET = new Set<Palette>(['default-dark', 'mocha-dark', 'sage-dark', 'ocean-dark', 'sand-dark', 'berry-dark']);
+const DARK_SET = new Set<Palette>([
+  'default-dark', 'mocha-dark', 'sage-dark', 'ocean-dark', 'berry-dark',
+  'terminal-dark', 'paper-dark', 'neon-dark', 'ink-dark', 'sunset-dark',
+]);
 
 export const LEGACY_PALETTE_MAP: Record<string, Palette> = {
   'catppuccin-latte': 'mocha-light',
@@ -50,8 +65,13 @@ export function getFamily(p: Palette): string {
   if (p.startsWith('mocha')) return 'mocha';
   if (p.startsWith('sage')) return 'sage';
   if (p.startsWith('ocean')) return 'ocean';
-  if (p.startsWith('sand')) return 'sand';
-  return 'berry';
+  if (p.startsWith('terminal')) return 'terminal';
+  if (p.startsWith('paper')) return 'paper';
+  if (p.startsWith('neon')) return 'neon';
+  if (p.startsWith('ink')) return 'ink';
+  if (p.startsWith('sunset')) return 'sunset';
+  if (p.startsWith('berry')) return 'berry';
+  return 'default';
 }
 
 export function getPairedPalette(p: Palette): Palette {
@@ -213,44 +233,6 @@ export const PALETTES: PaletteInfo[] = [
     },
   },
   {
-    id: 'sand-light',
-    label: 'Sand Light',
-    family: 'sand',
-    isDark: false,
-    preview: { bg: '#f6f1e6', fg: '#4c4235', accent: '#b58a54', accent2: '#7f9b7a' },
-    terminal: {
-      background: '#f6f1e6',
-      foreground: '#4c4235',
-      cursor: '#b58a54',
-      cursorAccent: '#f6f1e6',
-      selectionBackground: '#e2d6c1',
-      selectionForeground: '#3f362b',
-      black: '#4a4034', red: '#ba7062', green: '#7d9a70', yellow: '#b5945b',
-      blue: '#7f93b0', magenta: '#9b84b0', cyan: '#6fa39f', white: '#ece4d6',
-      brightBlack: '#7b6f61', brightRed: '#cb8576', brightGreen: '#94ae87', brightYellow: '#c5a872',
-      brightBlue: '#97aac3', brightMagenta: '#b198c4', brightCyan: '#86b6b1', brightWhite: '#ffffff',
-    },
-  },
-  {
-    id: 'sand-dark',
-    label: 'Sand Dark',
-    family: 'sand',
-    isDark: true,
-    preview: { bg: '#17140f', fg: '#eee4d4', accent: '#d1aa74', accent2: '#98b28f' },
-    terminal: {
-      background: '#17140f',
-      foreground: '#eee4d4',
-      cursor: '#dfbc8b',
-      cursorAccent: '#17140f',
-      selectionBackground: '#382e22',
-      selectionForeground: '#f8f0e2',
-      black: '#18140f', red: '#cc8677', green: '#98b28f', yellow: '#d5b57b',
-      blue: '#9daec9', magenta: '#b59ece', cyan: '#8bbab5', white: '#dccfb9',
-      brightBlack: '#5d5142', brightRed: '#dc9a8c', brightGreen: '#adc4a4', brightYellow: '#e2c58f',
-      brightBlue: '#b2c1d8', brightMagenta: '#c8b5dc', brightCyan: '#a0cbc6', brightWhite: '#f8f0e2',
-    },
-  },
-  {
     id: 'berry-light',
     label: 'Berry Light',
     family: 'berry',
@@ -286,6 +268,201 @@ export const PALETTES: PaletteInfo[] = [
       blue: '#94a4dc', magenta: '#a798dd', cyan: '#82c1bb', white: '#d2caea',
       brightBlack: '#595379', brightRed: '#da9aa1', brightGreen: '#9dcec4', brightYellow: '#d3bd8d',
       brightBlue: '#acb9e9', brightMagenta: '#beb1ea', brightCyan: '#98d0ca', brightWhite: '#f1ecff',
+    },
+  },
+  // ─── Terminal ───
+  {
+    id: 'terminal-light',
+    label: 'Terminal Light',
+    family: 'terminal',
+    isDark: false,
+    preview: { bg: '#e2e6da', fg: '#0a2a10', accent: '#1a7a2a', accent2: '#aa7700' },
+    terminal: {
+      background: '#e2e6da',
+      foreground: '#0a2a10',
+      cursor: '#1a7a2a',
+      cursorAccent: '#e2e6da',
+      selectionBackground: '#b8ccb0',
+      selectionForeground: '#0a1a08',
+      black: '#0a2a10', red: '#aa4422', green: '#1a7a2a', yellow: '#aa7700',
+      blue: '#2a7888', magenta: '#884488', cyan: '#2a8866', white: '#d8dcd2',
+      brightBlack: '#5a7058', brightRed: '#cc5533', brightGreen: '#2a8a3a', brightYellow: '#bb8800',
+      brightBlue: '#3a88aa', brightMagenta: '#aa55aa', brightCyan: '#3aaa77', brightWhite: '#eef0e8',
+    },
+  },
+  {
+    id: 'terminal-dark',
+    label: 'Terminal Dark',
+    family: 'terminal',
+    isDark: true,
+    preview: { bg: '#080c08', fg: '#33ff33', accent: '#00dd44', accent2: '#ccaa00' },
+    terminal: {
+      background: '#080c08',
+      foreground: '#33dd44',
+      cursor: '#33ff33',
+      cursorAccent: '#080c08',
+      selectionBackground: '#225522',
+      selectionForeground: '#44ff44',
+      black: '#080c08', red: '#cc4422', green: '#33dd44', yellow: '#ccaa00',
+      blue: '#44aacc', magenta: '#cc44aa', cyan: '#22ccaa', white: '#88cc88',
+      brightBlack: '#336633', brightRed: '#ee6644', brightGreen: '#44ff55', brightYellow: '#ffcc00',
+      brightBlue: '#66ccee', brightMagenta: '#ee66cc', brightCyan: '#44eebb', brightWhite: '#aaeebb',
+    },
+  },
+  // ─── Paper ───
+  {
+    id: 'paper-light',
+    label: 'Paper Light',
+    family: 'paper',
+    isDark: false,
+    preview: { bg: '#f8f0e2', fg: '#3a2818', accent: '#a04030', accent2: '#6b7f52' },
+    terminal: {
+      background: '#f8f0e2',
+      foreground: '#3a2818',
+      cursor: '#a04030',
+      cursorAccent: '#f8f0e2',
+      selectionBackground: '#ddd0ba',
+      selectionForeground: '#2a2010',
+      black: '#3a2818', red: '#a04030', green: '#6b7f52', yellow: '#a07830',
+      blue: '#5a7a90', magenta: '#8a5a50', cyan: '#5a8878', white: '#eae2d4',
+      brightBlack: '#7a6a52', brightRed: '#b85040', brightGreen: '#7a8f62', brightYellow: '#b08840',
+      brightBlue: '#6a8aa0', brightMagenta: '#9a6a60', brightCyan: '#6a9888', brightWhite: '#f8f4ec',
+    },
+  },
+  {
+    id: 'paper-dark',
+    label: 'Paper Dark',
+    family: 'paper',
+    isDark: true,
+    preview: { bg: '#1c1610', fg: '#f0e6d0', accent: '#cc6852', accent2: '#8a9a70' },
+    terminal: {
+      background: '#1c1610',
+      foreground: '#f0e6d0',
+      cursor: '#cc6852',
+      cursorAccent: '#1c1610',
+      selectionBackground: '#3a2e20',
+      selectionForeground: '#f0e8d4',
+      black: '#1c1610', red: '#cc6852', green: '#8a9a70', yellow: '#c09040',
+      blue: '#7a98aa', magenta: '#a07060', cyan: '#7aaa98', white: '#d4caae',
+      brightBlack: '#5a4a34', brightRed: '#dd7060', brightGreen: '#9aaa80', brightYellow: '#d0a050',
+      brightBlue: '#8aa8ba', brightMagenta: '#b08070', brightCyan: '#8abaa8', brightWhite: '#f0e8d4',
+    },
+  },
+  // ─── Neon ───
+  {
+    id: 'neon-light',
+    label: 'Neon Light',
+    family: 'neon',
+    isDark: false,
+    preview: { bg: '#f2f0fa', fg: '#181828', accent: '#d41870', accent2: '#00aa88' },
+    terminal: {
+      background: '#f2f0fa',
+      foreground: '#181828',
+      cursor: '#d41870',
+      cursorAccent: '#f2f0fa',
+      selectionBackground: '#ddd0ee',
+      selectionForeground: '#101020',
+      black: '#181828', red: '#dd2222', green: '#00aa88', yellow: '#88bb00',
+      blue: '#3366cc', magenta: '#d41870', cyan: '#00aa88', white: '#e8e6f4',
+      brightBlack: '#606088', brightRed: '#ee3333', brightGreen: '#00bb99', brightYellow: '#99cc00',
+      brightBlue: '#4477dd', brightMagenta: '#e62880', brightCyan: '#00bb99', brightWhite: '#f8f6ff',
+    },
+  },
+  {
+    id: 'neon-dark',
+    label: 'Neon Dark',
+    family: 'neon',
+    isDark: true,
+    preview: { bg: '#0a0c18', fg: '#d0d8e4', accent: '#ff2288', accent2: '#00eebb' },
+    terminal: {
+      background: '#0a0c18',
+      foreground: '#d0d8e4',
+      cursor: '#ff2288',
+      cursorAccent: '#0a0c18',
+      selectionBackground: '#2a1840',
+      selectionForeground: '#f4f4ff',
+      black: '#0a0c18', red: '#ff4444', green: '#00eebb', yellow: '#bbff00',
+      blue: '#4488ff', magenta: '#ff2288', cyan: '#00ddcc', white: '#c0c0dd',
+      brightBlack: '#444466', brightRed: '#ff6666', brightGreen: '#33ffcc', brightYellow: '#ccff33',
+      brightBlue: '#66aaff', brightMagenta: '#ff44aa', brightCyan: '#33ffdd', brightWhite: '#eeeeff',
+    },
+  },
+  // ─── Ink ───
+  {
+    id: 'ink-light',
+    label: 'Ink Light',
+    family: 'ink',
+    isDark: false,
+    preview: { bg: '#f8f8fa', fg: '#0c0c0e', accent: '#c41420', accent2: '#888888' },
+    terminal: {
+      background: '#f8f8fa',
+      foreground: '#0c0c0e',
+      cursor: '#c41420',
+      cursorAccent: '#f8f8fa',
+      selectionBackground: '#d8d8d8',
+      selectionForeground: '#000000',
+      black: '#0c0c0e', red: '#c41420', green: '#2a7a3a', yellow: '#8a6a22',
+      blue: '#2255aa', magenta: '#882266', cyan: '#227788', white: '#e8e8e8',
+      brightBlack: '#666666', brightRed: '#dd2530', brightGreen: '#3a8a4a', brightYellow: '#9a7a32',
+      brightBlue: '#3366bb', brightMagenta: '#993377', brightCyan: '#338899', brightWhite: '#ffffff',
+    },
+  },
+  {
+    id: 'ink-dark',
+    label: 'Ink Dark',
+    family: 'ink',
+    isDark: true,
+    preview: { bg: '#0c0c0e', fg: '#f0f0f2', accent: '#dd3838', accent2: '#777777' },
+    terminal: {
+      background: '#0c0c0e',
+      foreground: '#f0f0f2',
+      cursor: '#dd3838',
+      cursorAccent: '#0c0c0e',
+      selectionBackground: '#333333',
+      selectionForeground: '#ffffff',
+      black: '#0c0c0e', red: '#dd3838', green: '#44aa55', yellow: '#aa8833',
+      blue: '#4488cc', magenta: '#aa3388', cyan: '#44aaaa', white: '#cccccc',
+      brightBlack: '#555555', brightRed: '#ee4848', brightGreen: '#55bb66', brightYellow: '#bb9944',
+      brightBlue: '#5599dd', brightMagenta: '#bb4499', brightCyan: '#55bbbb', brightWhite: '#ffffff',
+    },
+  },
+  // ─── Sunset ───
+  {
+    id: 'sunset-light',
+    label: 'Sunset Light',
+    family: 'sunset',
+    isDark: false,
+    preview: { bg: '#faf0e8', fg: '#382030', accent: '#d06030', accent2: '#8860a8' },
+    terminal: {
+      background: '#faf0e8',
+      foreground: '#382030',
+      cursor: '#d06030',
+      cursorAccent: '#faf0e8',
+      selectionBackground: '#e8ccb0',
+      selectionForeground: '#281a20',
+      black: '#382030', red: '#c04040', green: '#6a9a5a', yellow: '#cc7744',
+      blue: '#5a78a0', magenta: '#8860a8', cyan: '#4a9090', white: '#f0e4da',
+      brightBlack: '#7a5a5a', brightRed: '#d05050', brightGreen: '#7aaa6a', brightYellow: '#dd8855',
+      brightBlue: '#6a88b0', brightMagenta: '#9970b8', brightCyan: '#5aa0a0', brightWhite: '#fef8f2',
+    },
+  },
+  {
+    id: 'sunset-dark',
+    label: 'Sunset Dark',
+    family: 'sunset',
+    isDark: true,
+    preview: { bg: '#1a1540', fg: '#f4e4d4', accent: '#ff7048', accent2: '#a060c0' },
+    terminal: {
+      background: '#1a1540',
+      foreground: '#f4e4d4',
+      cursor: '#ff7048',
+      cursorAccent: '#1a1540',
+      selectionBackground: '#3a2250',
+      selectionForeground: '#f8eae0',
+      black: '#1a1540', red: '#e05050', green: '#80aa68', yellow: '#dda060',
+      blue: '#6080bb', magenta: '#a060c0', cyan: '#50aaa0', white: '#dcc8b8',
+      brightBlack: '#5a4070', brightRed: '#f06060', brightGreen: '#90bb78', brightYellow: '#eeb070',
+      brightBlue: '#7090cc', brightMagenta: '#b070d0', brightCyan: '#60bba8', brightWhite: '#f8eae0',
     },
   },
 ];

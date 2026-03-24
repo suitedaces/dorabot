@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { dorabotImg, whatsappImg, telegramImg } from './assets';
 import { useGateway, type NotifiableEvent } from './hooks/useGateway';
 import { useTabs, isChatTab } from './hooks/useTabs';
@@ -21,6 +21,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
+import type { PanelImperativeHandle } from 'react-resizable-panels';
 import {
   MessageSquare, Radio, Zap, Brain, Settings2,
   Sparkles, LayoutGrid, Loader2, Star,
@@ -28,6 +29,7 @@ import {
   ShieldAlert, CalendarCheck, Target, FlaskConical, KeyRound, GitBranch, Check, Palette, Play
 } from 'lucide-react';
 import { PALETTES } from './lib/palettes';
+import type { Palette as PaletteId } from './lib/palettes';
 import { ToastContainer } from './components/ToastContainer';
 
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
@@ -147,11 +149,9 @@ function scoreQuickOpen(file: QuickOpenFile, queryLower: string): number {
   return 300 + distance;
 }
 
-function PalettePicker({ palette, glass, onPalette, onGlass }: {
-  palette: string;
-  glass: boolean;
-  onPalette: (p: any) => void;
-  onGlass: (g: boolean) => void;
+function PalettePicker({ palette, onPalette }: {
+  palette: PaletteId;
+  onPalette: (p: PaletteId) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -176,8 +176,8 @@ function PalettePicker({ palette, glass, onPalette, onGlass }: {
         <Palette className="w-4 h-4" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 w-56 rounded-lg border border-border bg-popover p-2 shadow-lg">
-          <div className="grid grid-cols-3 gap-1.5 mb-2">
+        <div className="absolute right-0 top-full mt-1 z-50 w-64 rounded-lg border border-border bg-popover p-2 shadow-lg max-h-80 overflow-y-auto">
+          <div className="grid grid-cols-4 gap-1.5 mb-2">
             {PALETTES.map(p => (
               <button
                 key={p.id}
@@ -210,24 +210,6 @@ function PalettePicker({ palette, glass, onPalette, onGlass }: {
               </button>
             ))}
           </div>
-          <div className="flex items-center justify-between px-1 py-1 border-t border-border/50">
-            <div className="flex items-center gap-1.5">
-              <Sparkles className="w-3 h-3 text-muted-foreground" />
-              <span className="text-[10px] text-muted-foreground">glass</span>
-            </div>
-            <button
-              onClick={() => onGlass(!glass)}
-              className={cn(
-                'w-7 h-4 rounded-full transition-colors relative',
-                glass ? 'bg-primary' : 'bg-secondary',
-              )}
-            >
-              <div className={cn(
-                'absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform',
-                glass ? 'translate-x-3.5' : 'translate-x-0.5',
-              )} />
-            </button>
-          </div>
         </div>
       )}
     </div>
@@ -238,6 +220,7 @@ export default function App() {
   const [showFiles, setShowFiles] = useState(() => localStorage.getItem('dorabot:showFiles') === 'true');
   const [sidebarView, setSidebarView] = useState<'files' | 'git' | 'history'>(() => (localStorage.getItem('dorabot:sidebarView') as 'files' | 'git' | 'history') || 'files');
   const filesPanelSize = useRef(localStorage.getItem('dorabot:filesPanelSize') || '30%');
+  const filesPanelRef = useRef<PanelImperativeHandle | null>(null);
   const fileExplorerStateRef = useRef<{ viewRoot: string; expanded: string[]; selectedPath: string | null }>(
     (() => {
       try {
@@ -259,7 +242,7 @@ export default function App() {
   const tabState = useTabs(gw, layout);
   const [starCount, setStarCount] = useState<number | null>(null);
   const [draggingTab, setDraggingTab] = useState<Tab | null>(null);
-  const { palette, glass, setPalette, setGlass } = useTheme();
+  const { palette, setPalette } = useTheme();
   const [updateState, setUpdateState] = useState<UpdateState>({ status: 'idle' });
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const [showGlobalSearch, setShowGlobalSearch] = useState(false);
@@ -362,6 +345,13 @@ export default function App() {
   // Persist sidebar state
   useEffect(() => { localStorage.setItem('dorabot:showFiles', String(showFiles)); }, [showFiles]);
   useEffect(() => { localStorage.setItem('dorabot:sidebarView', sidebarView); }, [sidebarView]);
+
+  // Sync files panel collapse/expand before paint to avoid layout flash
+  useLayoutEffect(() => {
+    const panel = filesPanelRef.current;
+    if (!panel) return;
+    if (showFiles) panel.expand(); else panel.collapse();
+  }, [showFiles]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -1190,7 +1180,7 @@ export default function App() {
       />
 
       {/* titlebar — pure drag chrome */}
-      <div className="h-11 bg-card glass border-b border-border flex items-center pl-[78px] pr-4 shrink-0" style={{ WebkitAppRegion: 'drag' } as any}>
+      <div className="h-11 bg-card border-b border-border flex items-center pl-[78px] pr-4 shrink-0" style={{ WebkitAppRegion: 'drag' } as any}>
         <img src={dorabotImg} alt="dorabot" className="h-8 mr-1 dorabot-alive" style={{ imageRendering: 'pixelated' }} />
         <span className="text-base text-muted-foreground font-medium">dorabot</span>
         <a
@@ -1210,7 +1200,7 @@ export default function App() {
             </span>
           )}
         </a>
-        <PalettePicker palette={palette} glass={glass} onPalette={setPalette} onGlass={setGlass} />
+        <PalettePicker palette={palette} onPalette={setPalette} />
         <button
           onClick={() => setShowFiles(v => !v)}
           className="ml-1 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
@@ -1271,7 +1261,7 @@ export default function App() {
       {/* main layout */}
       <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0">
         {/* sidebar */}
-        <ResizablePanel defaultSize="12%" minSize="8%" maxSize="22%" className="bg-card glass overflow-hidden">
+        <ResizablePanel defaultSize="12%" minSize="8%" maxSize="22%" className="bg-card overflow-hidden">
           <div className="flex flex-col h-full min-h-0">
             <div className="shrink-0 p-2">
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground px-2.5 pt-3 pb-1">views</div>
@@ -1460,11 +1450,31 @@ export default function App() {
           </DndContext>
         </ResizablePanel>
 
-        {/* file explorer */}
-        {showFiles && (
-          <>
-            <ResizableHandle withHandle />
-            <ResizablePanel defaultSize={filesPanelSize.current} minSize="15%" maxSize="45%" className="overflow-hidden flex flex-col" onResize={(size) => { const s = typeof size === 'object' ? `${size.asPercentage}%` : `${size}%`; filesPanelSize.current = s; localStorage.setItem('dorabot:filesPanelSize', s); }}>
+        {/* file explorer — always rendered, collapsed when hidden to avoid layout redistribution */}
+        <ResizableHandle withHandle disabled={!showFiles} className={cn(!showFiles && 'invisible')} />
+        <ResizablePanel
+          panelRef={filesPanelRef}
+          collapsible
+          collapsedSize="0%"
+          defaultSize={showFiles ? filesPanelSize.current : "0%"}
+          disabled={!showFiles}
+          minSize="15%"
+          maxSize="45%"
+          className="overflow-hidden flex flex-col"
+          onResize={(size) => {
+            const pct = typeof size === 'object' ? size.asPercentage : parseFloat(String(size));
+            if (pct === 0) {
+              // Panel collapsed by dragging below minSize
+              setShowFiles(prev => prev ? false : prev);
+              return;
+            }
+            const s = typeof size === 'object' ? `${size.asPercentage}%` : `${size}%`;
+            filesPanelSize.current = s;
+            localStorage.setItem('dorabot:filesPanelSize', s);
+          }}
+        >
+          {showFiles && (
+            <>
               <div className="flex items-center border-b border-border px-1.5 py-1.5 gap-0.5 shrink-0">
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -1585,9 +1595,9 @@ export default function App() {
                   }}
                 />
               )}
-            </ResizablePanel>
-          </>
-        )}
+            </>
+          )}
+        </ResizablePanel>
       </ResizablePanelGroup>
       <ToastContainer />
     </TooltipProvider>

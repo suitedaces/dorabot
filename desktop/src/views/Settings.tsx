@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Shield, Brain, Globe, Settings2, Box, Lock, FolderLock, X, Plus, Wrench, Activity, Sun, Check, Sparkles } from 'lucide-react';
+import { Shield, Brain, Globe, Settings2, Box, Lock, FolderLock, X, Plus, Wrench, Activity, Sun, Check } from 'lucide-react';
 import { PALETTES } from '../lib/palettes';
 import type { Palette } from '../lib/palettes';
 import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL, codexModelsForAuth } from '@/lib/modelCatalog';
@@ -24,7 +24,7 @@ type Props = {
 
 export function SettingsView({ gateway }: Props) {
   const [settingsTab, setSettingsTab] = useState<'config' | 'tools' | 'status'>('config');
-  const { palette, glass, setPalette, setGlass } = useTheme();
+  const { palette, setPalette } = useTheme();
   const { prefs: editorPrefs, update: updateEditorPrefs } = useEditorPrefs();
   const cfg = gateway.configData as Record<string, any> | null;
   const disabled = gateway.connectionState !== 'connected' || !cfg;
@@ -123,17 +123,6 @@ export function SettingsView({ gateway }: Props) {
                 ))}
               </div>
 
-              {/* glass toggle */}
-              <SettingRow label="liquid glass" description="frosted translucent panels and sidebar">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-3 h-3 text-muted-foreground" />
-                  <Switch
-                    size="sm"
-                    checked={glass}
-                    onCheckedChange={setGlass}
-                  />
-                </div>
-              </SettingRow>
             </CardContent>
           </Card>
 

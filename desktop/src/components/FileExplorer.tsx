@@ -843,6 +843,11 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onFileCh
   const [gitState, setGitState] = useState<GitState | null>(null);
   const gitBranchRef = useRef<string | undefined>(undefined);
   const gitPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const connectedRef = useRef(connected);
+  connectedRef.current = connected;
+  const viewRootRef = useRef(viewRoot);
+  viewRootRef.current = viewRoot;
+  const gitErrorCountRef = useRef(0);
   const treeRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -853,31 +858,45 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onFileCh
   const reloadTreeRef = useRef<() => void>(() => {});
 
   const fetchGitStatus = useCallback(async () => {
-    if (!connected || !viewRoot) return;
+    if (!connectedRef.current || !viewRoot) return;
     try {
       const detectRes = await rpc('git.detect', { path: viewRoot }) as { root: string | null };
-      if (!detectRes?.root) { setGitState(null); return; }
+      if (viewRoot !== viewRootRef.current) return; // viewRoot changed during fetch
+      if (!detectRes?.root) { setGitState(null); gitBranchRef.current = undefined; return; }
       const statusRes = await rpc('git.status', { path: detectRes.root }) as GitState;
+      if (viewRoot !== viewRootRef.current) return; // viewRoot changed during fetch
       // Branch changed: reload file tree so UI reflects new branch contents
       if (gitBranchRef.current && statusRes.branch !== gitBranchRef.current) {
         reloadTreeRef.current();
       }
       gitBranchRef.current = statusRes.branch;
       setGitState(statusRes);
+      gitErrorCountRef.current = 0;
     } catch {
-      setGitState(null);
+      // Keep stale gitState on transient RPC errors (prevents flicker during reconnection).
+      // After 5 consecutive failures, clear state to reflect actual disconnection.
+      gitErrorCountRef.current += 1;
+      if (gitErrorCountRef.current >= 5) setGitState(null);
     }
-  }, [connected, viewRoot, rpc]);
+  }, [viewRoot, rpc]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Detect git repo and poll status when viewRoot changes
+  // Stable ref so the poll interval doesn't tear down on callback recreation
+  const fetchGitStatusRef = useRef(fetchGitStatus);
+  fetchGitStatusRef.current = fetchGitStatus;
+
+  // Detect git repo and poll status; interval only restarts on connect/viewRoot change.
+  // Reset stale git state from previous viewRoot immediately on navigation.
   useEffect(() => {
     if (!connected || !viewRoot) return;
-    fetchGitStatus();
-    gitPollRef.current = setInterval(fetchGitStatus, 3000);
+    setGitState(null);
+    gitBranchRef.current = undefined;
+    gitErrorCountRef.current = 0;
+    fetchGitStatusRef.current();
+    gitPollRef.current = setInterval(() => fetchGitStatusRef.current(), 3000);
     return () => {
       if (gitPollRef.current) clearInterval(gitPollRef.current);
     };
-  }, [connected, viewRoot, fetchGitStatus]);
+  }, [connected, viewRoot]);
 
   // Report state changes to parent for per-tab persistence
   useEffect(() => {

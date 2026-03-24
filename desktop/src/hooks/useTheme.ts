@@ -7,8 +7,8 @@ export type Theme = 'light' | 'dark';
 const VALID_PALETTES = new Set<string>(PALETTES.map(p => p.id));
 const THEME_CHANGE_EVENT = 'dorabot:theme-change';
 
-function emitThemeChange(palette: Palette, glass: boolean) {
-  window.dispatchEvent(new CustomEvent(THEME_CHANGE_EVENT, { detail: { palette, glass } }));
+function emitThemeChange(palette: Palette) {
+  window.dispatchEvent(new CustomEvent(THEME_CHANGE_EVENT, { detail: { palette } }));
 }
 
 function normalizePalette(raw: string | null): Palette | null {
@@ -17,7 +17,7 @@ function normalizePalette(raw: string | null): Palette | null {
   return LEGACY_PALETTE_MAP[raw] || null;
 }
 
-function applyToDOM(palette: Palette, glass: boolean) {
+function applyToDOM(palette: Palette) {
   const el = document.documentElement;
   const isDark = isDarkPalette(palette);
 
@@ -29,15 +29,9 @@ function applyToDOM(palette: Palette, glass: boolean) {
     el.classList.remove('dark');
   }
 
-  if (glass) {
-    el.setAttribute('data-glass', 'true');
-  } else {
-    el.removeAttribute('data-glass');
-  }
-
   localStorage.setItem('palette', palette);
   localStorage.setItem('theme', isDark ? 'dark' : 'light');
-  emitThemeChange(palette, glass);
+  emitThemeChange(palette);
 }
 
 function initPalette(): Palette {
@@ -59,14 +53,12 @@ function initPalette(): Palette {
 
 export function useTheme() {
   const [palette, setPaletteState] = useState<Palette>(initPalette);
-  const [glass, setGlassState] = useState(() => localStorage.getItem('glass') === 'true');
 
   useEffect(() => {
     const onThemeChange = (event: Event) => {
-      const detail = (event as CustomEvent<{ palette: Palette; glass: boolean }>).detail;
+      const detail = (event as CustomEvent<{ palette: Palette }>).detail;
       if (!detail) return;
       setPaletteState(detail.palette);
-      setGlassState(detail.glass);
     };
     window.addEventListener(THEME_CHANGE_EVENT, onThemeChange as EventListener);
     return () => window.removeEventListener(THEME_CHANGE_EVENT, onThemeChange as EventListener);
@@ -76,43 +68,20 @@ export function useTheme() {
 
   const setPalette = useCallback((p: Palette) => {
     setPaletteState(p);
-    setGlassState(currentGlass => {
-      applyToDOM(p, currentGlass);
-      return currentGlass;
-    });
+    applyToDOM(p);
   }, []);
-
-  const setGlass = useCallback((g: boolean) => {
-    setGlassState(g);
-    localStorage.setItem('glass', String(g));
-    if (g) {
-      document.documentElement.setAttribute('data-glass', 'true');
-    } else {
-      document.documentElement.removeAttribute('data-glass');
-    }
-    emitThemeChange(palette, g);
-  }, [palette]);
 
   const toggle = useCallback(() => {
     setPalette(getPairedPalette(palette));
   }, [palette, setPalette]);
 
   const setTheme = useCallback((t: Theme) => {
-    const family = getFamily(palette);
-    if (family === 'default') {
-      setPalette(t === 'dark' ? 'default-dark' : 'default-light');
-    } else if (family === 'mocha') {
-      setPalette(t === 'dark' ? 'mocha-dark' : 'mocha-light');
-    } else if (family === 'sage') {
-      setPalette(t === 'dark' ? 'sage-dark' : 'sage-light');
-    } else if (family === 'ocean') {
-      setPalette(t === 'dark' ? 'ocean-dark' : 'ocean-light');
-    } else if (family === 'sand') {
-      setPalette(t === 'dark' ? 'sand-dark' : 'sand-light');
-    } else {
-      setPalette(t === 'dark' ? 'berry-dark' : 'berry-light');
-    }
+    const isDark = t === 'dark';
+    const paired = getPairedPalette(palette);
+    // If current palette already matches the target mode, keep it; otherwise switch to the pair
+    if (isDarkPalette(palette) === isDark) return;
+    setPalette(paired);
   }, [palette, setPalette]);
 
-  return { theme, palette, glass, setTheme, setPalette, setGlass, toggle };
+  return { theme, palette, setTheme, setPalette, toggle };
 }
