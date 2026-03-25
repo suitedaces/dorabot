@@ -144,7 +144,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
 
   const initializedRef = useRef(false);
   const migratedRef = useRef(false);
-  const closingRef = useRef(false);
+  const closingRef = useRef(0);
   const subscribedSessionKeysRef = useRef<Set<string>>(new Set());
   const streamCountRef = useRef<Record<string, number>>({});
   const [unreadBySession, setUnreadBySession] = useState<Record<string, number>>({});
@@ -305,8 +305,10 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTabId);
   }, [activeTabId]);
 
-  // Invariant: visible groups should always have something renderable.
-  // Guards against blank panes if tab/layout updates race.
+  // Invariant: always have at least one tab, and the active group should have
+  // something renderable.  For empty panes in multi-pane mode, the fill-empty
+  // effect below handles creating new tabs, so we only act here for the
+  // single-pane / zero-tabs case.
   useEffect(() => {
     if (tabs.length === 0) {
       const fallback = makeDefaultChatTab();
@@ -319,13 +321,18 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
       return;
     }
 
-    const visibleGroup = layout.visibleGroups.find(g => g.id === layout.activeGroupId) || layout.visibleGroups[0];
+    // In multi-pane mode, let the fill-empty effect handle empty groups
+    // instead of stealing a tab from another pane (which causes duplication).
+    if (layout.isMultiPane) return;
+
+    const visibleGroup = layout.visibleGroups[0];
     if (!visibleGroup) return;
 
     const tabIds = new Set(tabs.map(t => t.id));
     const hasRenderableTab = visibleGroup.tabIds.some(id => tabIds.has(id));
     if (hasRenderableTab) return;
 
+    // Single-pane: safe to assign tabs[0] since there's only one pane
     const fallback = tabs[0];
     if (!fallback) return;
     layout.addTabToGroup(fallback.id, visibleGroup.id);
@@ -340,8 +347,8 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
   // Runs after render with fresh state — no stale closure issues
   useEffect(() => {
     // skip during closeTab — collapse will remove the empty group
-    if (closingRef.current) {
-      closingRef.current = false;
+    if (closingRef.current > 0) {
+      closingRef.current--;
       return;
     }
     if (!layout.isMultiPane) return;
@@ -415,7 +422,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
       if (!window.confirm('You have unsaved changes. Close anyway?')) return;
     }
 
-    closingRef.current = true;
+    closingRef.current++;
 
     // Remove from layout group (reads current state, queues layout update)
     const { groupId, neighborTabId } = layout.removeTabFromGroup(tabId);
@@ -454,19 +461,26 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     // Handle focus and layout after close
     if (!neighborTabId) {
       if (layout.isMultiPane) {
-        // Compute focus target from pre-collapse state before it goes stale
-        // (layout.groups won't reflect collapseGroup's setState until next render)
-        const preCollapseRemaining = layout.groups.filter(g => g.id !== groupId && g.tabIds.length > 0);
+        // Snapshot surviving groups and their active tabs BEFORE collapse
+        // (layout.groups is stale after collapseGroup queues setState).
+        const remainingGroupTabs = new Map<string, string | null>();
+        for (const g of layout.groups) {
+          if (g.id !== groupId && g.tabIds.length > 0) {
+            remainingGroupTabs.set(g.id, g.activeTabId);
+          }
+        }
 
-        // collapseGroup sets the correct activeGroupId — don't call focusGroup after
+        // collapseGroup sets the correct activePaneId internally
         layout.collapseGroup(groupId);
 
-        // Pick the tab to focus: keep current group's tab if it survived, otherwise first remaining
-        const focusTarget = layout.activeGroupId !== groupId
-          ? preCollapseRemaining.find(g => g.id === layout.activeGroupId) || preCollapseRemaining[0]
-          : preCollapseRemaining[0];
-        if (focusTarget?.activeTabId) {
-          const remTab = tabs.find(t => t.id === focusTarget.activeTabId);
+        // Pick the tab to focus from our snapshot
+        const preferredGroupId = layout.activeGroupId !== groupId ? layout.activeGroupId : null;
+        const focusActiveTabId =
+          (preferredGroupId && remainingGroupTabs.get(preferredGroupId))
+          || remainingGroupTabs.values().next().value
+          || null;
+        if (focusActiveTabId) {
+          const remTab = remainingTabs.find(t => t.id === focusActiveTabId);
           if (remTab) {
             setActiveTabId(remTab.id);
             if (isChatTab(remTab)) gw.setActiveSession(remTab.sessionKey, remTab.chatId);
@@ -690,7 +704,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     for (const tab of closingTabs) {
       if (isChatTab(tab)) gw.untrackSession(tab.sessionKey);
       if (isTerminalTab(tab)) gw.rpc('shell.kill', { shellId: tab.shellId }).catch(() => {});
-      layout.removeTabFromGroup(tab.id);
+      layout.removeTabFromGroup(tab.id, gid);
     }
     focusTab(tabId, gid);
   }, [layout, gw, focusTab]);
@@ -714,7 +728,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     for (const tab of closingTabs) {
       if (isChatTab(tab)) gw.untrackSession(tab.sessionKey);
       if (isTerminalTab(tab)) gw.rpc('shell.kill', { shellId: tab.shellId }).catch(() => {});
-      layout.removeTabFromGroup(tab.id);
+      layout.removeTabFromGroup(tab.id, gid);
     }
     if (fallback.tab) {
       gw.trackSession(fallback.tab.sessionKey);
@@ -738,7 +752,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     for (const tab of closingTabs) {
       if (isChatTab(tab)) gw.untrackSession(tab.sessionKey);
       if (isTerminalTab(tab)) gw.rpc('shell.kill', { shellId: tab.shellId }).catch(() => {});
-      layout.removeTabFromGroup(tab.id);
+      layout.removeTabFromGroup(tab.id, gid);
     }
     focusTab(tabId, gid);
   }, [layout, gw, focusTab]);

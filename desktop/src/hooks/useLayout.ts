@@ -247,20 +247,27 @@ export function useLayout() {
         return prev;
       }
       const panes = allPanes(prev);
-      const p0 = panes[0] || makePane();
-      const p1 = panes[1] || makePane();
-      const p2 = panes[2] || makePane();
-      const p3 = panes[3] || makePane();
+      // Clone existing panes so the new grid doesn't share references
+      const clone = (p: Pane): Pane => ({ ...p, tabIds: [...p.tabIds] });
+      const p0 = panes[0] ? clone(panes[0]) : makePane();
+      const p1 = panes[1] ? clone(panes[1]) : makePane();
+      const p2 = panes[2] ? clone(panes[2]) : makePane();
+      const p3 = panes[3] ? clone(panes[3]) : makePane();
       // Reuse existing column IDs if available
       const colId0 = prev.columns[0]?.id || uid();
       const colId1 = prev.columns[1]?.id || uid();
+      // Ensure activePaneId still exists in the new grid
+      const gridPaneIds = [p0.id, p1.id, p2.id, p3.id];
+      const activePaneId = gridPaneIds.includes(prev.activePaneId)
+        ? prev.activePaneId
+        : p0.id;
       return {
         columns: [
           { id: colId0, panes: [p0, p2], sizes: [50, 50] },
           { id: colId1, panes: [p1, p3], sizes: [50, 50] },
         ],
         sizes: [50, 50],
-        activePaneId: prev.activePaneId,
+        activePaneId,
       };
     });
   }, []);
@@ -336,21 +343,41 @@ export function useLayout() {
   const addTabToGroup = useCallback((tabId: string, paneId?: string) => {
     setState(prev => {
       const targetId = paneId || prev.activePaneId;
+      // Remove from any other pane first (prevent cross-pane duplication),
+      // then add to target pane.
       const columns = prev.columns.map(c => ({
         ...c,
         panes: c.panes.map(p => {
-          if (p.id !== targetId) return p;
-          if (p.tabIds.includes(tabId)) return { ...p, activeTabId: tabId };
-          return { ...p, tabIds: [...p.tabIds, tabId], activeTabId: tabId };
+          if (p.id === targetId) {
+            if (p.tabIds.includes(tabId)) return { ...p, activeTabId: tabId };
+            return { ...p, tabIds: [...p.tabIds, tabId], activeTabId: tabId };
+          }
+          // Strip from non-target panes
+          if (p.tabIds.includes(tabId)) {
+            const filtered = p.tabIds.filter(id => id !== tabId);
+            return {
+              ...p,
+              tabIds: filtered,
+              activeTabId: p.activeTabId === tabId
+                ? (filtered[0] || null)
+                : p.activeTabId,
+            };
+          }
+          return p;
         }),
       }));
       return { ...prev, columns };
     });
   }, []);
 
-  const removeTabFromGroup = useCallback((tabId: string): { groupId: string; wasActive: boolean; neighborTabId: string | null } => {
-    const panes = allPanes(state);
-    const pane = panes.find(p => p.tabIds.includes(tabId));
+  const removeTabFromGroup = useCallback((tabId: string, fromPaneId?: string): { groupId: string; wasActive: boolean; neighborTabId: string | null } => {
+    // Compute result synchronously from derived state (visibleGroups) so it's
+    // available immediately.  The setState updater uses the captured pane ID to
+    // scope the removal to that single pane.
+    const panes = visibleGroups;
+    const pane = fromPaneId
+      ? panes.find(p => p.id === fromPaneId && p.tabIds.includes(tabId))
+      : panes.find(p => p.tabIds.includes(tabId));
     if (!pane) return { groupId: '', wasActive: false, neighborTabId: null };
 
     const idx = pane.tabIds.indexOf(tabId);
@@ -359,18 +386,19 @@ export function useLayout() {
     const neighborIdx = Math.min(idx, newTabIds.length - 1);
     const neighborTabId = newTabIds[neighborIdx] || null;
 
+    const targetPaneId = pane.id;
     setState(prev => ({
       ...prev,
       columns: prev.columns.map(c => ({
         ...c,
         panes: c.panes.map(p => {
-          if (!p.tabIds.includes(tabId)) return p;
+          if (p.id !== targetPaneId) return p;
           const filtered = p.tabIds.filter(id => id !== tabId);
           return {
             ...p,
             tabIds: filtered,
             activeTabId: p.activeTabId === tabId
-              ? (filtered[Math.min(p.tabIds.indexOf(tabId), filtered.length - 1)] || null)
+              ? (filtered[Math.min(idx, filtered.length - 1)] || null)
               : p.activeTabId,
           };
         }),
@@ -378,7 +406,7 @@ export function useLayout() {
     }));
 
     return { groupId: pane.id, wasActive, neighborTabId };
-  }, [state]);
+  }, [visibleGroups]);
 
   const setGroupActiveTab = useCallback((paneId: string, tabId: string) => {
     setState(prev => ({
@@ -393,11 +421,11 @@ export function useLayout() {
   }, []);
 
   const findGroupForTab = useCallback((tabId: string): string | null => {
-    for (const p of allPanes(state)) {
+    for (const p of visibleGroups) {
       if (p.tabIds.includes(tabId)) return p.id;
     }
     return null;
-  }, [state]);
+  }, [visibleGroups]);
 
   // Collapse an empty pane: remove it, equalize sizes, collapse column if empty
   const collapseGroup = useCallback((emptyPaneId: string) => {
