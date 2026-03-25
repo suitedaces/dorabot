@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { dorabotImg, whatsappImg, telegramImg } from './assets';
 import { useGateway, type NotifiableEvent } from './hooks/useGateway';
 import { useTabs, isChatTab } from './hooks/useTabs';
@@ -347,12 +347,18 @@ export default function App() {
   useEffect(() => { localStorage.setItem('dorabot:showFiles', String(showFiles)); }, [showFiles]);
   useEffect(() => { localStorage.setItem('dorabot:sidebarView', sidebarView); }, [sidebarView]);
 
-  // Sync files panel collapse/expand before paint to avoid layout flash
-  useLayoutEffect(() => {
+  // Toggle file explorer via the library's imperative API.
+  // onResize is the single source of truth for showFiles — no sync effects needed.
+  const toggleFileExplorer = useCallback(() => {
     const panel = filesPanelRef.current;
     if (!panel) return;
-    if (showFiles) panel.expand(); else panel.collapse();
-  }, [showFiles]);
+    if (panel.isCollapsed()) {
+      const saved = parseFloat(filesPanelSize.current);
+      panel.resize(saved > 0 ? `${saved}%` : '15%');
+    } else {
+      panel.collapse();
+    }
+  }, []);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -814,7 +820,7 @@ export default function App() {
       if (!tab || tab.type !== 'file' || !tab.filePath.toLowerCase().endsWith('.md')) return;
       window.dispatchEvent(new CustomEvent(MARKDOWN_PREVIEW_EVENT, { detail: { filePath: tab.filePath } }));
     },
-    toggleFiles: () => setShowFiles(f => !f),
+    toggleFiles: toggleFileExplorer,
     openSettings: () => handleNavClick('settings'),
     openTerminal: () => tabState.openTerminalTab(),
     focusInput: () => {
@@ -1203,7 +1209,7 @@ export default function App() {
         </a>
         <PalettePicker palette={palette} onPalette={setPalette} />
         <button
-          onClick={() => setShowFiles(v => !v)}
+          onClick={toggleFileExplorer}
           className="ml-1 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
           style={{ WebkitAppRegion: 'no-drag' } as any}
           title={showFiles ? 'Hide file explorer' : 'Show file explorer'}
@@ -1458,20 +1464,20 @@ export default function App() {
           collapsible
           collapsedSize="0%"
           defaultSize={showFiles ? filesPanelSize.current : "0%"}
-          disabled={!showFiles}
           minSize="15%"
           maxSize="45%"
           className="overflow-hidden flex flex-col"
           onResize={(size) => {
+            // onResize is the single source of truth for showFiles.
+            // The library owns panel state; we derive React state from it.
             const pct = typeof size === 'object' ? size.asPercentage : parseFloat(String(size));
-            if (pct === 0) {
-              // Panel collapsed by dragging below minSize
-              setShowFiles(prev => prev ? false : prev);
+            if (pct < 1) {
+              setShowFiles(false);
               return;
             }
-            const s = typeof size === 'object' ? `${size.asPercentage}%` : `${size}%`;
-            filesPanelSize.current = s;
-            localStorage.setItem('dorabot:filesPanelSize', s);
+            setShowFiles(true);
+            filesPanelSize.current = `${pct}%`;
+            localStorage.setItem('dorabot:filesPanelSize', `${pct}%`);
           }}
         >
           {showFiles && (
