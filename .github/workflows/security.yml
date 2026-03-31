@@ -36,6 +36,49 @@ jobs:
         run: npm audit --audit-level=high
         working-directory: desktop
 
+  pin-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject unpinned dependencies
+        run: |
+          FAIL=0
+          for f in package.json desktop/package.json desktop/resources/gateway/package.json site/package.json; do
+            if grep -P '"[\^~><=]' "$f" | grep -v '"engines"' | grep -v '"node"'; then
+              echo "::error file=$f::Found unpinned dependency versions (^ or ~ ranges)"
+              FAIL=1
+            fi
+          done
+          if [ "$FAIL" -eq 1 ]; then
+            echo ""
+            echo "All dependencies must use exact versions (no ^ or ~ prefixes)."
+            echo "Run: npm install <pkg>@<version> --save-exact"
+            exit 1
+          fi
+          echo "All dependency versions are pinned."
+
+  package-age:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check package age (root, 7 days)
+        run: node scripts/check-package-age.mjs --min-days=7 --dir=.
+
+      - name: Check package age (desktop, 7 days)
+        run: node scripts/check-package-age.mjs --min-days=7 --dir=desktop
+
+      - name: Check package age (gateway, 7 days)
+        run: node scripts/check-package-age.mjs --min-days=7 --dir=desktop/resources/gateway
+
+      - name: Check package age (site, 7 days)
+        run: node scripts/check-package-age.mjs --min-days=7 --dir=site
+
   snyk:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -48,12 +91,11 @@ jobs:
           cache: npm
 
       - name: Install deps
-        run: npm ci && cd desktop && npm ci
+        run: npm ci && cd desktop && npm ci && cd resources/gateway && npm ci
 
-      - name: Run Snyk (desktop)
+      - name: Run Snyk (all projects)
         uses: snyk/actions/node@master
-        continue-on-error: true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
-          args: --file=desktop/package-lock.json --severity-threshold=high
+          args: --all-projects --strict-out-of-sync=false --severity-threshold=high
