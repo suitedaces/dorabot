@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, basename, dirname } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import matter from 'gray-matter';
 import type { Config } from '../config.js';
 
@@ -38,8 +38,9 @@ export type SkillEligibility = {
 };
 
 function checkBinaryExists(bin: string): boolean {
+  if (!/^[a-zA-Z0-9_\-]+$/.test(bin)) return false;
   try {
-    execSync(`which ${bin}`, { stdio: 'ignore' });
+    execFileSync('which', [bin], { stdio: 'ignore' });
     return true;
   } catch {
     return false;

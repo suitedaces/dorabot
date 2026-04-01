@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises';
 import * as nodePty from 'node-pty';
 import { resolve as pathResolve, join, dirname, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { createConnection } from 'node:net';
 
 const resolve = (p: string) => pathResolve(p.startsWith('~') ? p.replace('~', homedir()) : p);
@@ -4180,6 +4180,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (skillPath.includes('..')) {
             return { id, error: 'invalid skill path' };
           }
+          if (!/^[a-zA-Z0-9_\-]+$/.test(skillName)) {
+            return { id, error: 'invalid skill name' };
+          }
 
           const installDir = join(SKILLS_DIR, skillName);
           if (existsSync(installDir)) {
@@ -4200,7 +4203,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
             // Extract tarball using system tar (always available on macOS)
             mkdirSync(extractDir, { recursive: true });
-            execSync(`tar xzf "${tarPath}" -C "${extractDir}"`, { timeout: 30_000 });
+            execFileSync('tar', ['xzf', tarPath, '-C', extractDir], { timeout: 30_000 });
 
             // Find extracted root dir (format: repo-name-{sha}/)
             const roots = readdirSync(extractDir);
@@ -4795,6 +4798,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const filePath = params?.path as string;
           if (!filePath) return { id, error: 'path required' };
           const resolved = resolve(filePath);
+          if (!isPathAllowed(resolved, config)) {
+            return { id, error: 'path not allowed' };
+          }
           try {
             const { execFile } = await import('node:child_process');
             execFile('open', ['-R', resolved]);

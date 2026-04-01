@@ -568,7 +568,7 @@ export class ClaudeProvider implements Provider {
     }
 
     if (returnedState && returnedState !== this._pkceState) {
-      console.warn('[claude] OAuth state mismatch, proceeding anyway');
+      return { authenticated: false, error: 'OAuth state mismatch, please retry authorization.' };
     }
 
     try {
