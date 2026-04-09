@@ -517,6 +517,7 @@ export default function App() {
           }
           break;
         case 'auth.required':
+          if (!allowPing(`auth.required:${event.provider}`, 300_000)) break;
           toast.error(`${event.provider} auth required`, {
             description: event.reason,
             icon: <KeyRound className="w-4 h-4 text-red-400" />,
@@ -532,6 +533,7 @@ export default function App() {
           }
           break;
         case 'auth.reauth':
+          if (!allowPing(`auth.reauth:${event.provider}`, 300_000)) break;
           if (event.provider === 'codex' && event.loginId) {
             startCodexReauth(event.authUrl, event.loginId);
             toast.error('Codex session expired, reopening sign-in', {

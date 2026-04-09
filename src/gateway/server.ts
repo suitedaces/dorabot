@@ -560,10 +560,10 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   }
 
   const unsubscribeClaudeAuthRequired = onClaudeAuthRequired((reason) => {
-    broadcastAuthRequired('claude', reason);
+    if ((config.provider?.name || 'claude') === 'claude') broadcastAuthRequired('claude', reason);
   });
   const unsubscribeCodexAuthRequired = onCodexAuthRequired((reason) => {
-    broadcastAuthRequired('codex', reason);
+    if ((config.provider?.name || 'claude') === 'codex') broadcastAuthRequired('codex', reason);
   });
 
   // file system watcher manager
