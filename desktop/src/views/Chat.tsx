@@ -31,6 +31,18 @@ import { SHORTCUTS as ALL_SHORTCUTS } from '@/components/ShortcutHelp';
 import { jsonrepair } from 'jsonrepair';
 import { CLAUDE_MODELS, CODEX_MODELS, DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL, codexModelsForAuth, labelForModel } from '@/lib/modelCatalog';
 
+type SlashItem = {
+  command: string;
+  description: string;
+  type: 'command' | 'skill';
+};
+
+type SkillInfo = {
+  name: string;
+  description: string;
+  eligibility: { eligible: boolean };
+};
+
 type Props = {
   gateway: ReturnType<typeof useGateway>;
   chatItems: ChatItem[];
@@ -40,6 +52,8 @@ type Props = {
   onNavigateSettings?: () => void;
   onOpenFile?: (filePath: string) => void;
   onOpenDiff?: (opts: { filePath: string; oldContent: string; newContent: string; label?: string }) => void;
+  onClearChat?: () => void;
+  onNewTab?: () => void;
 };
 
 type ToolActions = {
@@ -654,7 +668,14 @@ function getGreeting(): string {
   return 'good evening';
 }
 
-export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, sessionKey, onNavigateSettings, onOpenFile, onOpenDiff }: Props) {
+function stripFrontmatter(raw: string): string {
+  if (!raw.startsWith('---')) return raw;
+  const end = raw.indexOf('\n---', 3);
+  if (end === -1) return raw;
+  return raw.slice(end + 4).trimStart();
+}
+
+export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, sessionKey, onNavigateSettings, onOpenFile, onOpenDiff, onClearChat, onNewTab }: Props) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [attachedImages, setAttachedImages] = useState<ImageAttachment[]>([]);
@@ -663,6 +684,13 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashFilter, setSlashFilter] = useState('');
   const [slashIndex, setSlashIndex] = useState(0);
+  const [activeSkill, setActiveSkill] = useState<{ name: string; content: string } | null>(null);
+  const [skillsList, setSkillsList] = useState<SkillInfo[]>([]);
+  const [atOpen, setAtOpen] = useState(false);
+  const [atFilter, setAtFilter] = useState('');
+  const [atIndex, setAtIndex] = useState(0);
+  const [atEntries, setAtEntries] = useState<Array<{ name: string; type: 'directory' | 'file' }>>([]);
+  const [atStartPos, setAtStartPos] = useState(-1);
   const nextAutoScrollBehaviorRef = useRef<ScrollBehavior>('auto');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const landingInputRef = useRef<HTMLTextAreaElement>(null);
@@ -692,16 +720,64 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     }
   }, [chatItems]);
 
-  const SLASH_COMMANDS = useMemo(() => [
-    { command: '/clear', description: 'Clear chat', autoSend: true },
-    { command: '/new', description: 'New chat tab', autoSend: true },
-    { command: '/help', description: 'Show shortcuts', autoSend: true },
-  ], []);
+  // Fetch skills list from gateway
+  useEffect(() => {
+    if (gateway.connectionState !== 'connected') return;
+    let cancelled = false;
+    gateway.rpc('skills.list').then((result: unknown) => {
+      if (cancelled || !Array.isArray(result)) return;
+      setSkillsList(result.filter((s: any) => s.eligibility?.eligible !== false).map((s: any) => ({
+        name: s.name as string,
+        description: (s.description || '') as string,
+        eligibility: (s.eligibility || { eligible: true }) as { eligible: boolean },
+      })));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [gateway.connectionState, gateway]);
+
+  // Load file entries for @ picker
+  useEffect(() => {
+    if (!atOpen) { setAtEntries([]); return; }
+    let cancelled = false;
+    const lastSlash = atFilter.lastIndexOf('/');
+    const dir = lastSlash >= 0 ? atFilter.slice(0, lastSlash + 1) : '';
+    const basename = lastSlash >= 0 ? atFilter.slice(lastSlash + 1) : atFilter;
+    const listPath = dir || '.';
+
+    gateway.rpc('fs.list', { path: listPath }).then((result: unknown) => {
+      if (cancelled || !Array.isArray(result)) return;
+      const entries = result as Array<{ name: string; type: 'directory' | 'file' }>;
+      const filtered = basename
+        ? entries.filter(e => e.name.toLowerCase().includes(basename.toLowerCase()))
+        : entries.filter(e => !e.name.startsWith('.'));
+      setAtEntries(filtered.slice(0, 20));
+      setAtIndex(0);
+    }).catch(() => { if (!cancelled) setAtEntries([]); });
+    return () => { cancelled = true; };
+  }, [atOpen, atFilter, gateway]);
+
+  const slashItems = useMemo<SlashItem[]>(() => {
+    const commands: SlashItem[] = [
+      { command: '/clear', description: 'Clear chat', type: 'command' },
+      { command: '/new', description: 'New tab', type: 'command' },
+      { command: '/help', description: 'Keyboard shortcuts', type: 'command' },
+    ];
+    const skills: SlashItem[] = skillsList.map(s => ({
+      command: `/${s.name}`,
+      description: s.description,
+      type: 'skill',
+    }));
+    return [...commands, ...skills];
+  }, [skillsList]);
 
   const filteredSlashCommands = useMemo(() => {
     if (!slashOpen) return [];
-    return SLASH_COMMANDS.filter(c => c.command.startsWith('/' + slashFilter));
-  }, [slashOpen, slashFilter, SLASH_COMMANDS]);
+    const filter = slashFilter.toLowerCase();
+    return slashItems.filter(c =>
+      c.command.toLowerCase().includes(filter) ||
+      c.description.toLowerCase().includes(filter)
+    );
+  }, [slashOpen, slashFilter, slashItems]);
 
   // progress from last TodoWrite in this chat
   const progress = useMemo(() => {
@@ -798,8 +874,14 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   }, [isEmpty]);
 
   const handleSend = async (overridePrompt?: string) => {
-    const prompt = overridePrompt || input.trim();
+    let prompt = overridePrompt || input.trim();
     if ((!prompt && attachedImages.length === 0) || sending || pendingQuestion) return;
+
+    // Inject active skill context into prompt
+    if (activeSkill) {
+      prompt = `<skill-context name="${activeSkill.name}">\n${activeSkill.content}\n</skill-context>\n\n${prompt}`;
+      setActiveSkill(null);
+    }
 
     // Push to message history
     if (prompt) {
@@ -826,17 +908,94 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     }
   };
 
+  const handleSlashSelect = async (item: SlashItem) => {
+    setSlashOpen(false);
+    setSlashFilter('');
+    setInput('');
+
+    if (item.type === 'command') {
+      switch (item.command) {
+        case '/clear':
+          onClearChat?.();
+          break;
+        case '/new':
+          onNewTab?.();
+          break;
+        case '/help':
+          handleSend('/help');
+          break;
+      }
+    } else {
+      // Skill: fetch SKILL.md content and set as active context
+      const skillName = item.command.slice(1);
+      try {
+        const result = await gateway.rpc('skills.read', { name: skillName }) as { raw?: string } | undefined;
+        if (result?.raw) {
+          setActiveSkill({ name: skillName, content: stripFrontmatter(result.raw) });
+        }
+      } catch { /* skill will just not load */ }
+      setTimeout(() => {
+        inputRef.current?.focus();
+        landingInputRef.current?.focus();
+      }, 0);
+    }
+  };
+
+  const handleAtSelect = (entry: { name: string; type: 'directory' | 'file' }) => {
+    const lastSlash = atFilter.lastIndexOf('/');
+    const dir = lastSlash >= 0 ? atFilter.slice(0, lastSlash + 1) : '';
+
+    if (entry.type === 'directory') {
+      // Navigate into directory: update the @path in input
+      const newPath = dir + entry.name + '/';
+      const before = input.slice(0, atStartPos + 1);
+      const after = input.slice(atStartPos + 1 + atFilter.length);
+      const newInput = before + newPath + after;
+      setInput(newInput);
+      setAtFilter(newPath);
+      setAtIndex(0);
+    } else {
+      // Insert file path, replacing the @mention
+      const fullPath = dir + entry.name;
+      const before = input.slice(0, atStartPos);
+      const after = input.slice(atStartPos + 1 + atFilter.length);
+      setInput(before + fullPath + ' ' + after);
+      setAtOpen(false);
+      setAtFilter('');
+    }
+  };
+
   const handleInputChange = useCallback((value: string) => {
     setInput(value);
     historyIndexRef.current = -1;
-    // slash command detection
+    // slash command detection (only at start of input)
     if (value.startsWith('/')) {
       setSlashOpen(true);
       setSlashFilter(value.slice(1));
       setSlashIndex(0);
+      setAtOpen(false);
     } else {
       setSlashOpen(false);
       setSlashFilter('');
+
+      // @ file picker detection: find @ preceded by whitespace or at start
+      let atIdx = -1;
+      for (let i = value.length - 1; i >= 0; i--) {
+        if (value[i] === ' ' || value[i] === '\n') break;
+        if (value[i] === '@' && (i === 0 || /\s/.test(value[i - 1]))) {
+          atIdx = i;
+          break;
+        }
+      }
+      if (atIdx >= 0) {
+        const afterAt = value.slice(atIdx + 1);
+        setAtOpen(true);
+        setAtFilter(afterAt);
+        setAtStartPos(atIdx);
+        setAtIndex(0);
+      } else {
+        setAtOpen(false);
+      }
     }
   }, []);
 
@@ -879,22 +1038,38 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
       if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault();
         const cmd = filteredSlashCommands[slashIndex];
-        if (cmd) {
-          setSlashOpen(false);
-          setSlashFilter('');
-          if (cmd.autoSend) {
-            setInput('');
-            handleSend(cmd.command);
-          } else {
-            setInput(cmd.command + ' ');
-          }
-        }
+        if (cmd) handleSlashSelect(cmd);
         return;
       }
       if (e.key === 'Escape') {
         e.preventDefault();
         setSlashOpen(false);
         setSlashFilter('');
+        return;
+      }
+    }
+
+    // @ file picker navigation
+    if (atOpen && atEntries.length > 0) {
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setAtIndex(i => (i - 1 + atEntries.length) % atEntries.length);
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setAtIndex(i => (i + 1) % atEntries.length);
+        return;
+      }
+      if (e.key === 'Tab' || e.key === 'Enter') {
+        e.preventDefault();
+        const entry = atEntries[atIndex];
+        if (entry) handleAtSelect(entry);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setAtOpen(false);
         return;
       }
     }
@@ -1064,7 +1239,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                 </div>
                 {/* slash command dropdown */}
                 {slashOpen && filteredSlashCommands.length > 0 && (
-                  <div className="absolute bottom-full left-3 right-3 mb-1 rounded-lg border border-border bg-popover shadow-md z-20 overflow-hidden">
+                  <div className="absolute bottom-full left-3 right-3 mb-1 rounded-lg border border-border bg-popover shadow-md z-20 max-h-60 overflow-y-auto overflow-x-hidden">
                     {filteredSlashCommands.map((cmd, i) => (
                       <button
                         key={cmd.command}
@@ -1074,20 +1249,55 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                         )}
                         onMouseDown={e => {
                           e.preventDefault();
-                          setSlashOpen(false);
-                          setSlashFilter('');
-                          if (cmd.autoSend) {
-                            setInput('');
-                            handleSend(cmd.command);
-                          } else {
-                            setInput(cmd.command + ' ');
-                          }
+                          handleSlashSelect(cmd);
                         }}
                       >
+                        {cmd.type === 'skill' ? (
+                          <Wrench className="w-3 h-3 text-primary shrink-0" />
+                        ) : (
+                          <Terminal className="w-3 h-3 text-muted-foreground shrink-0" />
+                        )}
                         <span className="font-mono text-primary">{cmd.command}</span>
-                        <span className="text-muted-foreground">{cmd.description}</span>
+                        <span className="text-muted-foreground truncate">{cmd.description}</span>
                       </button>
                     ))}
+                  </div>
+                )}
+                {/* @ file picker dropdown */}
+                {atOpen && atEntries.length > 0 && (
+                  <div className="absolute bottom-full left-3 right-3 mb-1 rounded-lg border border-border bg-popover shadow-md z-20 max-h-60 overflow-y-auto overflow-x-hidden">
+                    {atEntries.map((entry, i) => (
+                      <button
+                        key={entry.name}
+                        className={cn(
+                          'flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors',
+                          i === atIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/50'
+                        )}
+                        onMouseDown={e => {
+                          e.preventDefault();
+                          handleAtSelect(entry);
+                        }}
+                      >
+                        {entry.type === 'directory' ? (
+                          <FolderSearch className="w-3 h-3 text-primary shrink-0" />
+                        ) : (
+                          <FileText className="w-3 h-3 text-muted-foreground shrink-0" />
+                        )}
+                        <span className="font-mono">{entry.name}{entry.type === 'directory' ? '/' : ''}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {activeSkill && (
+                  <div className="flex items-center gap-1.5 px-3 pt-2">
+                    <Badge variant="secondary" className="gap-1 text-[10px] h-5">
+                      <Wrench className="w-2.5 h-2.5" />
+                      {activeSkill.name}
+                      <button type="button" className="ml-0.5 hover:text-foreground" onClick={() => setActiveSkill(null)}>
+                        <X className="w-2.5 h-2.5" />
+                      </button>
+                    </Badge>
+                    <span className="text-[10px] text-muted-foreground">skill loaded</span>
                   </div>
                 )}
                 <ImagePreviewStrip images={attachedImages} onRemove={j => setAttachedImages(prev => prev.filter((_, k) => k !== j))} />
@@ -1268,7 +1478,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
           </div>
           {/* slash command dropdown */}
           {slashOpen && filteredSlashCommands.length > 0 && (
-            <div className="absolute bottom-full left-3 right-3 mb-1 rounded-lg border border-border bg-popover shadow-md z-20 overflow-hidden">
+            <div className="absolute bottom-full left-3 right-3 mb-1 rounded-lg border border-border bg-popover shadow-md z-20 max-h-60 overflow-y-auto overflow-x-hidden">
               {filteredSlashCommands.map((cmd, i) => (
                 <button
                   key={cmd.command}
@@ -1278,20 +1488,55 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                   )}
                   onMouseDown={e => {
                     e.preventDefault();
-                    setSlashOpen(false);
-                    setSlashFilter('');
-                    if (cmd.autoSend) {
-                      setInput('');
-                      handleSend(cmd.command);
-                    } else {
-                      setInput(cmd.command + ' ');
-                    }
+                    handleSlashSelect(cmd);
                   }}
                 >
+                  {cmd.type === 'skill' ? (
+                    <Wrench className="w-3 h-3 text-primary shrink-0" />
+                  ) : (
+                    <Terminal className="w-3 h-3 text-muted-foreground shrink-0" />
+                  )}
                   <span className="font-mono text-primary">{cmd.command}</span>
-                  <span className="text-muted-foreground">{cmd.description}</span>
+                  <span className="text-muted-foreground truncate">{cmd.description}</span>
                 </button>
               ))}
+            </div>
+          )}
+          {/* @ file picker dropdown */}
+          {atOpen && atEntries.length > 0 && (
+            <div className="absolute bottom-full left-3 right-3 mb-1 rounded-lg border border-border bg-popover shadow-md z-20 max-h-60 overflow-y-auto overflow-x-hidden">
+              {atEntries.map((entry, i) => (
+                <button
+                  key={entry.name}
+                  className={cn(
+                    'flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors',
+                    i === atIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/50'
+                  )}
+                  onMouseDown={e => {
+                    e.preventDefault();
+                    handleAtSelect(entry);
+                  }}
+                >
+                  {entry.type === 'directory' ? (
+                    <FolderSearch className="w-3 h-3 text-primary shrink-0" />
+                  ) : (
+                    <FileText className="w-3 h-3 text-muted-foreground shrink-0" />
+                  )}
+                  <span className="font-mono">{entry.name}{entry.type === 'directory' ? '/' : ''}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {activeSkill && (
+            <div className="flex items-center gap-1.5 px-3 pt-2">
+              <Badge variant="secondary" className="gap-1 text-[10px] h-5">
+                <Wrench className="w-2.5 h-2.5" />
+                {activeSkill.name}
+                <button type="button" className="ml-0.5 hover:text-foreground" onClick={() => setActiveSkill(null)}>
+                  <X className="w-2.5 h-2.5" />
+                </button>
+              </Badge>
+              <span className="text-[10px] text-muted-foreground">skill loaded</span>
             </div>
           )}
           <ImagePreviewStrip images={attachedImages} onRemove={j => setAttachedImages(prev => prev.filter((_, k) => k !== j))} />

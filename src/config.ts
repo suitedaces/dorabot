@@ -8,6 +8,8 @@ import {
   LEGACY_CODEX_AUTH_PATH,
   SESSIONS_DIR,
   SKILLS_DIR,
+  CLAUDE_SKILLS_DIR,
+  CLAUDE_COMMANDS_DIR,
   WHATSAPP_AUTH_DIR,
   toHomeAlias,
 } from './workspace.js';
@@ -192,8 +194,12 @@ const DEFAULT_CONFIG: Config = {
     enabled: [],
     disabled: [],
     dirs: [
-      join(process.cwd(), 'skills'),
-      SKILLS_DIR,
+      SKILLS_DIR,                              // ~/.dorabot/skills/ (dorabot personal)
+      join(process.cwd(), 'skills'),           // bundled skills (repo)
+      CLAUDE_SKILLS_DIR,                       // ~/.claude/skills/ (CC personal)
+      CLAUDE_COMMANDS_DIR,                     // ~/.claude/commands/ (CC legacy)
+      join(process.cwd(), '.claude', 'skills'),     // .claude/skills/ (CC project)
+      join(process.cwd(), '.claude', 'commands'),   // .claude/commands/ (CC project legacy)
     ],
   },
   agents: {},
