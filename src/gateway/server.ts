@@ -3555,13 +3555,14 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const sessionId = params?.sessionId as string;
           const name = params?.name as string;
           if (!sessionId || !name) return { id, error: 'sessionId and name required' };
+          // Persist name in our DB
+          fileSessionManager.setMetadata(sessionId, { name });
+          // Also try to rename in the SDK (fire-and-forget, may not be available)
           try {
             const { renameSession } = await import('@anthropic-ai/claude-agent-sdk');
             await renameSession(sessionId, name);
-            return { id, result: { renamed: true } };
-          } catch (err) {
-            return { id, error: `rename failed: ${err instanceof Error ? err.message : String(err)}` };
-          }
+          } catch { /* SDK rename is best-effort */ }
+          return { id, result: { renamed: true } };
         }
 
         case 'channels.status': {

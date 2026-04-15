@@ -186,6 +186,10 @@ export type Config = {
   agentProgressSummaries?: boolean;
 };
 
+// Resolve the working directory once at init. In Electron, process.cwd() points
+// to the app bundle, not the user's workspace, so we fall back to ~/Desktop.
+const RESOLVED_CWD = process.env.DORABOT_ELECTRON ? join(homedir(), 'Desktop') : process.cwd();
+
 const DEFAULT_CONFIG: Config = {
   provider: { name: 'claude' },
   model: 'claude-sonnet-4-6',
@@ -194,12 +198,12 @@ const DEFAULT_CONFIG: Config = {
     enabled: [],
     disabled: [],
     dirs: [
-      SKILLS_DIR,                              // ~/.dorabot/skills/ (dorabot personal)
-      join(process.cwd(), 'skills'),           // bundled skills (repo)
-      CLAUDE_SKILLS_DIR,                       // ~/.claude/skills/ (CC personal)
-      CLAUDE_COMMANDS_DIR,                     // ~/.claude/commands/ (CC legacy)
-      join(process.cwd(), '.claude', 'skills'),     // .claude/skills/ (CC project)
-      join(process.cwd(), '.claude', 'commands'),   // .claude/commands/ (CC project legacy)
+      SKILLS_DIR,                                    // ~/.dorabot/skills/ (dorabot personal)
+      join(RESOLVED_CWD, 'skills'),                  // bundled skills (repo)
+      CLAUDE_SKILLS_DIR,                             // ~/.claude/skills/ (CC personal)
+      CLAUDE_COMMANDS_DIR,                           // ~/.claude/commands/ (CC legacy)
+      join(RESOLVED_CWD, '.claude', 'skills'),       // .claude/skills/ (CC project)
+      join(RESOLVED_CWD, '.claude', 'commands'),     // .claude/commands/ (CC project legacy)
     ],
   },
   agents: {},
@@ -208,7 +212,7 @@ const DEFAULT_CONFIG: Config = {
     autoAllowBashIfSandboxed: false,
   },
   sessionDir: SESSIONS_DIR,
-  cwd: process.env.DORABOT_ELECTRON ? join(homedir(), 'Desktop') : process.cwd(),
+  cwd: RESOLVED_CWD,
 };
 
 export async function loadConfig(configPath?: string): Promise<Config> {

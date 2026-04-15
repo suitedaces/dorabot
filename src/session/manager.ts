@@ -7,6 +7,7 @@ export type SessionMetadata = {
   chatType?: string;
   senderName?: string;
   sdkSessionId?: string;
+  name?: string;
 };
 
 export type SessionInfo = {
@@ -20,6 +21,7 @@ export type SessionInfo = {
   chatType?: string;
   senderName?: string;
   preview?: string;
+  name?: string;
 };
 
 export type MessageMetadata = {
@@ -61,6 +63,7 @@ export class SessionManager {
       if (meta.chatType !== undefined) { sets.push('chat_type = ?'); vals.push(meta.chatType); }
       if (meta.senderName !== undefined) { sets.push('sender_name = ?'); vals.push(meta.senderName); }
       if (meta.sdkSessionId !== undefined) { sets.push('sdk_session_id = ?'); vals.push(meta.sdkSessionId); }
+      if (meta.name !== undefined) { sets.push('name = ?'); vals.push(meta.name); }
       if (sets.length > 0) {
         sets.push('updated_at = ?');
         vals.push(new Date().toISOString());
@@ -209,6 +212,7 @@ export class SessionManager {
         s.chat_id,
         s.chat_type,
         s.sender_name,
+        s.name,
         s.message_count,
         s.created_at,
         s.updated_at,
@@ -227,6 +231,7 @@ export class SessionManager {
       chat_id: string | null;
       chat_type: string | null;
       sender_name: string | null;
+      name: string | null;
       message_count: number;
       created_at: string | null;
       updated_at: string | null;
@@ -244,6 +249,7 @@ export class SessionManager {
       chatType: row.chat_type || undefined,
       senderName: row.sender_name || undefined,
       preview: extractFirstUserPreview(row.first_user_content),
+      name: row.name || undefined,
     }));
   }
 

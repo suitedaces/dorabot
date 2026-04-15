@@ -45,8 +45,6 @@ function sanitizeTelegramHtml(html: string): string {
 // ---------------------------------------------------------------------------
 
 function telegramRenderer(): MarkedExtension {
-  let listCounter = 0;
-
   return {
     renderer: {
       // -- block --
@@ -69,11 +67,9 @@ function telegramRenderer(): MarkedExtension {
         return `<blockquote>${inner}</blockquote>\n\n`;
       },
       list(token: Tokens.List) {
-        listCounter = 0;
         const items = token.items
-          .map((item) => {
-            listCounter++;
-            const prefix = token.ordered ? `${(token.start || 1) + listCounter - 1}. ` : '\u2022 ';
+          .map((item, index) => {
+            const prefix = token.ordered ? `${(token.start || 1) + index}. ` : '\u2022 ';
             const content = this.parser.parseInline(item.tokens).replace(/\n+$/, '');
             return `${prefix}${content}`;
           })
@@ -156,8 +152,6 @@ function telegramRenderer(): MarkedExtension {
 // ---------------------------------------------------------------------------
 
 function whatsappRenderer(): MarkedExtension {
-  let listCounter = 0;
-
   return {
     renderer: {
       // -- block --
@@ -176,11 +170,9 @@ function whatsappRenderer(): MarkedExtension {
         return inner.split('\n').map(line => `> ${line}`).join('\n') + '\n\n';
       },
       list(token: Tokens.List) {
-        listCounter = 0;
         const items = token.items
-          .map((item) => {
-            listCounter++;
-            const prefix = token.ordered ? `${(token.start || 1) + listCounter - 1}. ` : '- ';
+          .map((item, index) => {
+            const prefix = token.ordered ? `${(token.start || 1) + index}. ` : '- ';
             const content = this.parser.parseInline(item.tokens).replace(/\n+$/, '');
             return `${prefix}${content}`;
           })
