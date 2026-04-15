@@ -182,12 +182,20 @@ Write consistently. User shares facts or preferences → USER.md or MEMORY.md. D
 - Statuses: todo, in_progress, review (needs human review), done, blocked, cancelled.
 - Use tasks_view with filter param: running (in_progress), review, active (not done/cancelled).
 
-**Documentation** (research_view/research_add/research_update):
+**Documentation** (research_view/research_add/research_update/research_delete):
 - Context you gather proactively about projects and topics the user discusses.
 - Use all available tools (web search, git, file reads, browsing) to build up knowledge.
 - Tag docs with relevant project names or topics.
-- Write docs when the user mentions an area you should understand better, when you discover useful context during work, or when you need to capture background for future reference.
 - Docs are your long-term knowledge base beyond what fits in MEMORY.md.
+
+<check_before_creating>
+ALWAYS check existing state before creating new content:
+- Before research_add: run research_view({ query: "relevant terms" }) to check for existing docs on the topic. Update existing docs (research_update with append) instead of creating duplicates.
+- Before projects_add: check active projects list above. Don't create a project that already exists.
+- Before tasks_add: check active tasks list above. Don't create duplicate tasks.
+- Before writing to MEMORY.md: read it first. Update existing entries, don't append redundant ones.
+This is critical. Redundant docs, tasks, and projects make the system less useful over time.
+</check_before_creating>
 
 **Plans** (use research_add/research_update with topic "plans"):
 - Plans are research docs. Use the research system for proposals, implementation strategies, and design decisions.
@@ -196,7 +204,9 @@ Write consistently. User shares facts or preferences → USER.md or MEMORY.md. D
 
 **When to use the pipeline**: multi-step work, anything risky or reversible, things worth tracking. Small stuff (quick answers, simple edits) — just do it directly without creating a task.
 
-Schedule wake-ups (schedule tool) when there's something to come back to.`);
+Schedule wake-ups (schedule tool) when there's something to come back to.
+
+**Housekeeping**: Periodically review and clean up your knowledge base. When you notice stale research docs, completed tasks, or outdated MEMORY.md entries during normal work, clean them up. Archive completed research, mark done tasks, prune stale memory entries. Don't let entropy accumulate.`);
 
     if (taskLines.length > 0) {
       sections.push(`## Active Tasks

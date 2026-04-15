@@ -2,7 +2,7 @@ import { extname } from 'node:path';
 import { lookup } from 'mime-types';
 import type { Api } from 'grammy';
 import { InputFile } from 'grammy';
-import { markdownToTelegramHtml, sanitizeTelegramHtml } from './format.js';
+import { markdownToTelegram } from '../../lib/markdown.js';
 
 const MSG_LIMIT = 4000; // safe margin below telegram's 4096
 
@@ -115,7 +115,7 @@ async function sendMedia(
   const file = new InputFile(mediaPath);
   const replyParams = replyTo ? { message_id: replyTo } : undefined;
   const opts: any = {
-    caption: caption ? sanitizeTelegramHtml(markdownToTelegramHtml(caption)) : undefined,
+    caption: caption ? markdownToTelegram(caption) : undefined,
     parse_mode: 'HTML' as const,
     reply_parameters: replyParams,
   };
@@ -150,7 +150,7 @@ export async function sendTelegramMessage(
     return sendMedia(api, chatId, opts.media, text || undefined, opts.replyTo);
   }
 
-  const html = sanitizeTelegramHtml(markdownToTelegramHtml(text));
+  const html = markdownToTelegram(text);
   const chunks = splitTelegramMessage(html);
 
   // send first chunk (with reply-to if any), fall back to plain text on HTML parse error
@@ -202,7 +202,7 @@ export async function editTelegramMessage(
   newText: string
 ): Promise<void> {
   const cid = normalizeTelegramChatId(chatId);
-  const html = sanitizeTelegramHtml(markdownToTelegramHtml(newText));
+  const html = markdownToTelegram(newText);
   const chunks = splitTelegramMessage(html);
 
   // edit the original message with the first chunk

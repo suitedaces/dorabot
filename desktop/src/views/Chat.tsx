@@ -961,7 +961,11 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                   ))}
                 </div>
               ) : null}
-              {item.content && <span className="text-foreground break-words">{item.content}</span>}
+              {item.content && (
+                <div className="text-foreground break-words prose-chat">
+                  <Markdown remarkPlugins={[remarkGfm]}>{item.content}</Markdown>
+                </div>
+              )}
             </div>
           </div>
         );

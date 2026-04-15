@@ -1,6 +1,14 @@
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
+import { Table } from '@tiptap/extension-table';
+import { TableRow } from '@tiptap/extension-table-row';
+import { TableCell } from '@tiptap/extension-table-cell';
+import { TableHeader } from '@tiptap/extension-table-header';
+import { Link } from '@tiptap/extension-link';
+import { TaskList } from '@tiptap/extension-task-list';
+import { TaskItem } from '@tiptap/extension-task-item';
+import { Image } from '@tiptap/extension-image';
 import { Markdown as TiptapMarkdown } from 'tiptap-markdown';
 import { useEffect, useCallback, useRef } from 'react';
 
@@ -33,6 +41,14 @@ export function MarkdownEditor({ content, onChange, editable = true, placeholder
         codeBlock: { HTMLAttributes: { class: 'tiptap-code-block' } },
         code: { HTMLAttributes: { class: 'tiptap-code-inline' } },
       }),
+      Table.configure({ resizable: false }),
+      TableRow,
+      TableCell,
+      TableHeader,
+      Link.configure({ openOnClick: true, autolink: true }),
+      TaskList,
+      TaskItem.configure({ nested: true }),
+      Image,
       Placeholder.configure({ placeholder: placeholder || 'Start writing...' }),
       TiptapMarkdown.configure({
         html: false,
