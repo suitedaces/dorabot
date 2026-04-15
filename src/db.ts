@@ -126,12 +126,12 @@ export function getDb(): Database.Database {
   return db;
 }
 
-// extract human-readable text from a message content blob
+// extract human-readable text from a message content blob (text blocks only, no tool calls)
 export function extractMessageText(content: string): string {
   try {
     const parsed = JSON.parse(content);
 
-    // user message: dig into content array for all blocks
+    // user message: dig into content array for text blocks only
     if (parsed?.message?.content) {
       const blocks = Array.isArray(parsed.message.content) ? parsed.message.content : [parsed.message.content];
       const texts: string[] = [];
@@ -140,21 +140,8 @@ export function extractMessageText(content: string): string {
           texts.push(block);
         } else if (block?.type === 'text' && block.text) {
           texts.push(block.text);
-        } else if (block?.type === 'tool_result' && typeof block.content === 'string') {
-          texts.push(block.content);
-        } else if (block?.type === 'tool_result' && Array.isArray(block.content)) {
-          for (const sub of block.content) {
-            if (sub?.type === 'text' && sub.text) texts.push(sub.text);
-          }
-        } else if (block?.type === 'tool_use' && block.name) {
-          // index tool name and stringified input for searchability
-          texts.push(`[tool:${block.name}]`);
-          if (block.input) {
-            const inputStr = typeof block.input === 'string' ? block.input : JSON.stringify(block.input);
-            // only index if reasonably sized
-            if (inputStr.length < 2000) texts.push(inputStr);
-          }
         }
+        // Skip tool_use and tool_result blocks: they pollute search with file paths, JSON blobs, etc.
       }
       return texts.join(' ').trim();
     }
@@ -171,13 +158,8 @@ export function extractMessageText(content: string): string {
       for (const block of blocks) {
         if (block?.type === 'text' && block.text) {
           texts.push(block.text);
-        } else if (block?.type === 'tool_use' && block.name) {
-          texts.push(`[tool:${block.name}]`);
-          if (block.input) {
-            const inputStr = typeof block.input === 'string' ? block.input : JSON.stringify(block.input);
-            if (inputStr.length < 2000) texts.push(inputStr);
-          }
         }
+        // Skip tool_use blocks: tool names and JSON inputs aren't useful search content
       }
       return texts.join(' ').trim();
     }
@@ -190,26 +172,35 @@ export function extractMessageText(content: string): string {
 
 // populate FTS index for a single message (call after inserting into messages table)
 export function indexMessageForSearch(messageRowId: number, content: string, type: string): void {
-  if (type === 'system') return; // skip system init messages
+  if (type !== 'user' && type !== 'assistant') return; // only index conversation messages
   const text = extractMessageText(content);
   if (!text || text.length < 5) return; // skip empty/trivial
   const d = getDb();
   d.prepare('INSERT INTO messages_fts(rowid, text_content) VALUES (?, ?)').run(messageRowId, text);
 }
 
+// FTS index version: bump this to force a full rebuild when extraction logic changes
+const FTS_VERSION = 2; // v2: text-only extraction (no tool_use/tool_result noise)
+
 // backfill FTS index from existing messages (run once on upgrade, then incremental)
 export function backfillFtsIndex(): void {
   const d = getDb();
 
-  // check if already backfilled (with actual content, not empty rows from a broken build)
+  // Check if index needs a full rebuild (version mismatch or empty)
+  d.exec("CREATE TABLE IF NOT EXISTS db_meta (key TEXT PRIMARY KEY, value TEXT)");
+  const versionRow = d.prepare("SELECT value FROM db_meta WHERE key = 'fts_version'").get() as { value: string } | undefined;
+  const currentVersion = versionRow ? parseInt(versionRow.value, 10) : 0;
+  const needsRebuild = currentVersion < FTS_VERSION;
+
   const sample = d.prepare("SELECT text_content FROM messages_fts LIMIT 1").get() as { text_content: string | null } | undefined;
-  if (!sample?.text_content) {
-    // drop and recreate to clear empty rows from previous broken backfill
+
+  if (needsRebuild || !sample?.text_content) {
+    // drop and recreate for clean rebuild
     d.exec('DROP TABLE IF EXISTS messages_fts');
     d.exec("CREATE VIRTUAL TABLE messages_fts USING fts5(text_content, content='', tokenize='porter unicode61')");
 
-    console.error('[db] backfilling FTS index...');
-    const rows = d.prepare('SELECT id, content, type FROM messages WHERE type IN (\'user\', \'assistant\', \'result\') ORDER BY id').all() as { id: number; content: string; type: string }[];
+    console.error(`[db] rebuilding FTS index (v${FTS_VERSION})...`);
+    const rows = d.prepare('SELECT id, content, type FROM messages WHERE type IN (\'user\', \'assistant\') ORDER BY id').all() as { id: number; content: string; type: string }[];
 
     const insert = d.prepare('INSERT INTO messages_fts(rowid, text_content) VALUES (?, ?)');
     const tx = d.transaction(() => {
@@ -220,16 +211,17 @@ export function backfillFtsIndex(): void {
         insert.run(row.id, text);
         indexed++;
       }
-      console.error(`[db] FTS backfill complete: ${indexed}/${rows.length} messages indexed`);
+      d.prepare("INSERT OR REPLACE INTO db_meta (key, value) VALUES ('fts_version', ?)").run(String(FTS_VERSION));
+      console.error(`[db] FTS rebuild complete (v${FTS_VERSION}): ${indexed}/${rows.length} messages indexed`);
     });
     tx();
     return;
   }
 
-  // incremental: index any messages missing from FTS
+  // incremental: index any messages missing from FTS (only user + assistant, skip result)
   const missing = d.prepare(`
     SELECT m.id, m.content, m.type FROM messages m
-    WHERE m.type IN ('user', 'assistant', 'result')
+    WHERE m.type IN ('user', 'assistant')
       AND m.id NOT IN (SELECT rowid FROM messages_fts)
     ORDER BY m.id
   `).all() as { id: number; content: string; type: string }[];

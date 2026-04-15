@@ -2,7 +2,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { extname, basename } from 'node:path';
 import { lookup } from 'mime-types';
 import type { WASocket } from './session.js';
-import { markdownToWhatsApp } from './format.js';
+import { markdownToWhatsApp } from '../../lib/markdown.js';
 
 const MSG_LIMIT = 60000; // safe margin below whatsapp's 65536
 
