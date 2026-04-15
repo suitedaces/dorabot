@@ -176,7 +176,7 @@ Common patterns:
     if (args.query) {
       const queryWords = args.query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
       if (queryWords.length > 0) {
-        type ScoredItem = { item: ResearchItem; score: number; matchSnippet: string };
+        type ScoredItem = { item: ResearchItem; score: number; matchSnippet: string; cachedContent: string };
         const scored: ScoredItem[] = [];
 
         for (const item of items) {
@@ -195,7 +195,7 @@ Common patterns:
             if (tagsLower.includes(w)) score += 2;
           }
 
-          // Score content matches
+          // Score content matches (cache the read for reuse in formatting)
           const content = readResearchContent(item.filePath);
           if (content) {
             const contentLower = content.toLowerCase();
@@ -223,7 +223,7 @@ Common patterns:
           }
 
           if (score > 0) {
-            scored.push({ item, score, matchSnippet });
+            scored.push({ item, score, matchSnippet, cachedContent: content });
           }
         }
 
@@ -238,10 +238,9 @@ Common patterns:
         const offset = (page - 1) * pageSize;
         const pageSlice = scored.slice(offset, offset + pageSize);
 
-        const formatted = pageSlice.map(({ item: i, matchSnippet }) => {
+        const formatted = pageSlice.map(({ item: i, matchSnippet, cachedContent }) => {
           const tags = i.tags?.length ? ` [${i.tags.join(', ')}]` : '';
-          const content = readResearchContent(i.filePath);
-          const words = wordCount(content);
+          const words = wordCount(cachedContent);
           const updated = timeAgo(i.updatedAt);
           const created = i.createdAt.slice(0, 10);
           let line = `#${i.id} [${i.status}] **${i.title}** (${i.topic})${tags}\n  ${words} words | created ${created} | updated ${updated}`;

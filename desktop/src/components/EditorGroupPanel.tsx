@@ -246,7 +246,13 @@ export function EditorGroupPanel({
         onCloseTabsToRight={(tabId, groupId) => tabState.closeTabsToRight(tabId, groupId as any)}
         onSplitRight={onSplitRight}
         onSplitDown={onSplitDown}
-        onRenameTab={(tabId, label) => tabState.updateTabLabel(tabId, label)}
+        onRenameTab={(tabId, label) => {
+          tabState.updateTabLabel(tabId, label);
+          const tab = tabs.find(t => t.id === tabId);
+          if (tab && isChatTab(tab) && tab.sessionId) {
+            gateway.rpc('sessions.rename', { sessionId: tab.sessionId, name: label }).catch(() => {});
+          }
+        }}
       />
       <div className="@container flex-1 min-h-0 min-w-0 relative">
         <ErrorBoundary>

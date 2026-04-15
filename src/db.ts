@@ -123,6 +123,9 @@ export function getDb(): Database.Database {
     );
   `);
 
+  // Migrations: add columns to existing tables (safe to re-run)
+  try { db.exec(`ALTER TABLE sessions ADD COLUMN name TEXT`); } catch { /* already exists */ }
+
   return db;
 }
 

@@ -644,7 +644,7 @@ export default function App() {
     const cid = chatId || sessionId;
     const sessionKey = `${ch}:${ct}:${cid}`;
     const session = gw.sessions.find(s => s.id === sessionId);
-    const label = session?.senderName || session?.preview || sessionId.slice(8, 16);
+    const label = session?.name || session?.senderName || session?.preview || sessionId.slice(8, 16);
 
     tabState.openChatTab({
       sessionId,
@@ -670,7 +670,7 @@ export default function App() {
       } else {
         tabState.newChatTab();
       }
-    } else if (navId !== 'file' && navId !== 'diff' && navId !== 'terminal' && navId !== 'task') {
+    } else if (navId !== 'file' && navId !== 'diff' && navId !== 'terminal' && navId !== 'task' && navId !== 'pr') {
       tabState.openViewTab(navId, ALL_NAV_ITEMS.find(n => n.id === navId)?.label || navId);
     }
   }, [tabState, gw.sessionStates]);
@@ -1360,7 +1360,7 @@ export default function App() {
                           e.preventDefault();
                           const actions = [
                             { label: 'Fork session', action: () => gw.forkSession(s.id).then(r => { toast.success(`Forked → ${r.sessionId.slice(0, 12)}...`); gw.refreshSessions(); }).catch(err => toast.error(String(err))) },
-                            { label: 'Rename', action: () => { const name = prompt('Session name:'); if (name) gw.renameSession(s.id, name).then(() => { toast.success('Renamed'); gw.refreshSessions(); }).catch(err => toast.error(String(err))); } },
+                            { label: 'Rename', action: () => { const name = prompt('Session name:', s.name || s.preview || ''); if (name) { gw.renameSession(s.id, name).then(() => { toast.success('Renamed'); gw.refreshSessions(); }).catch(err => toast.error(String(err))); const matchingTab = tabState.tabs.find(t => isChatTab(t) && (t as any).sessionId === s.id); if (matchingTab) tabState.updateTabLabel(matchingTab.id, name); } } },
                             { label: 'Tag', action: () => { const tag = prompt('Tag (empty to clear):'); gw.tagSession(s.id, tag || null).then(() => { toast.success(tag ? `Tagged: ${tag}` : 'Tag cleared'); gw.refreshSessions(); }).catch(err => toast.error(String(err))); } },
                           ];
                           // Simple popover via native context menu workaround using toast actions
@@ -1383,7 +1383,7 @@ export default function App() {
                       >
                         <span className="w-3 h-3 shrink-0 flex items-center justify-center">{channelIcon(s.channel)}</span>
                         <span className="truncate flex-1 text-left">
-                          {s.senderName || s.preview || s.chatId || s.id.slice(8, 16)}
+                          {s.name || s.senderName || s.preview || s.chatId || s.id.slice(8, 16)}
                         </span>
                         {unread > 0 && !s.activeRun && (
                           <span className="text-[9px] bg-primary text-primary-foreground rounded-full px-1.5 min-w-[16px] text-center">
@@ -1567,7 +1567,7 @@ export default function App() {
                     const tab = {
                       id: `chat:${sk}`,
                       type: 'chat' as const,
-                      label: session.preview || session.id.slice(0, 12),
+                      label: session.name || session.preview || session.id.slice(0, 12),
                       closable: true as const,
                       chatId,
                       sessionKey: sk,

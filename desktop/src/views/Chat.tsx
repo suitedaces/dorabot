@@ -675,6 +675,102 @@ function stripFrontmatter(raw: string): string {
   return raw.slice(end + 4).trimStart();
 }
 
+/** Shared dropdown overlays for slash commands, @ file picker, and active skill badge. */
+function InputDropdowns({
+  slashOpen, filteredSlashCommands, slashIndex, slashListRef, handleSlashSelect,
+  atOpen, atEntries, atLoading, atIndex, atListRef, handleAtSelect,
+  activeSkill, clearSkill,
+}: {
+  slashOpen: boolean;
+  filteredSlashCommands: SlashItem[];
+  slashIndex: number;
+  slashListRef: React.RefObject<HTMLDivElement | null>;
+  handleSlashSelect: (item: SlashItem) => void;
+  atOpen: boolean;
+  atEntries: Array<{ name: string; type: 'directory' | 'file' }>;
+  atLoading: boolean;
+  atIndex: number;
+  atListRef: React.RefObject<HTMLDivElement | null>;
+  handleAtSelect: (entry: { name: string; type: 'directory' | 'file' }) => void;
+  activeSkill: { name: string; content: string } | null;
+  clearSkill: () => void;
+}) {
+  return (
+    <>
+      {/* slash command dropdown */}
+      {slashOpen && filteredSlashCommands.length > 0 && (
+        <div ref={slashListRef} className="absolute bottom-full left-3 right-3 mb-1 rounded-lg border border-border bg-popover shadow-md z-20 max-h-60 overflow-y-auto overflow-x-hidden">
+          {filteredSlashCommands.map((cmd, i) => (
+            <button
+              key={cmd.command}
+              className={cn(
+                'flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors',
+                i === slashIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/50'
+              )}
+              onMouseDown={e => {
+                e.preventDefault();
+                handleSlashSelect(cmd);
+              }}
+            >
+              {cmd.type === 'skill' ? (
+                <Wrench className="w-3 h-3 text-primary shrink-0" />
+              ) : (
+                <Terminal className="w-3 h-3 text-muted-foreground shrink-0" />
+              )}
+              <span className="font-mono text-primary">{cmd.command}</span>
+              <span className="text-muted-foreground truncate">{cmd.description}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {/* @ file picker dropdown */}
+      {atOpen && (atEntries.length > 0 || atLoading) && (
+        <div ref={atListRef} className="absolute bottom-full left-3 right-3 mb-1 rounded-lg border border-border bg-popover shadow-md z-20 max-h-60 overflow-y-auto overflow-x-hidden">
+          {atLoading && atEntries.length === 0 ? (
+            <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              <span>loading...</span>
+            </div>
+          ) : (
+            atEntries.map((entry, i) => (
+              <button
+                key={entry.name}
+                className={cn(
+                  'flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors',
+                  i === atIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/50'
+                )}
+                onMouseDown={e => {
+                  e.preventDefault();
+                  handleAtSelect(entry);
+                }}
+              >
+                {entry.type === 'directory' ? (
+                  <FolderSearch className="w-3 h-3 text-primary shrink-0" />
+                ) : (
+                  <FileText className="w-3 h-3 text-muted-foreground shrink-0" />
+                )}
+                <span className="font-mono">{entry.name}{entry.type === 'directory' ? '/' : ''}</span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+      {activeSkill && (
+        <div className="flex items-center gap-1.5 px-3 pt-2">
+          <Badge variant="secondary" className="gap-1 text-[10px] h-5">
+            <Wrench className="w-2.5 h-2.5" />
+            {activeSkill.name}
+            <button type="button" className="ml-0.5 hover:text-foreground" onClick={clearSkill}>
+              <X className="w-2.5 h-2.5" />
+            </button>
+          </Badge>
+          <span className="text-[10px] text-muted-foreground">skill loaded</span>
+        </div>
+      )}
+    </>
+  );
+}
+
 export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, sessionKey, onNavigateSettings, onOpenFile, onOpenDiff, onClearChat, onNewTab }: Props) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -690,6 +786,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   const [atFilter, setAtFilter] = useState('');
   const [atIndex, setAtIndex] = useState(0);
   const [atEntries, setAtEntries] = useState<Array<{ name: string; type: 'directory' | 'file' }>>([]);
+  const [atLoading, setAtLoading] = useState(false);
   const [atStartPos, setAtStartPos] = useState(-1);
   const nextAutoScrollBehaviorRef = useRef<ScrollBehavior>('auto');
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -699,13 +796,41 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   const sentHistoryRef = useRef<string[]>([]);
   const historyIndexRef = useRef(-1);
   const historyInitRef = useRef(false);
+  const slashListRef = useRef<HTMLDivElement>(null);
+  const atListRef = useRef<HTMLDivElement>(null);
   const dragStartRef = useRef<{ y: number; height: number } | null>(null);
+  const draftsRef = useRef<Record<string, { text: string; images: ImageAttachment[] }>>({});
+  const liveInputRef = useRef(input);
+  liveInputRef.current = input;
+  const liveImagesRef = useRef(attachedImages);
+  liveImagesRef.current = attachedImages;
   const isRunning = agentStatus !== 'idle';
   const isEmpty = chatItems.length === 0;
 
   // Derive elicitation and worktree state from active session
   const activeState = sessionKey ? gateway.sessionStates[sessionKey] : undefined;
   const pendingElicitation = activeState?.pendingElicitation ?? null;
+
+  // Save/restore input draft and images per session when switching tabs
+  useEffect(() => {
+    if (!sessionKey) return;
+    const sk = sessionKey;
+    setInput(draftsRef.current[sk]?.text || '');
+    setAttachedImages(draftsRef.current[sk]?.images || []);
+    // Reset ephemeral picker state
+    setSlashOpen(false);
+    setSlashFilter('');
+    setAtOpen(false);
+    setAtFilter('');
+    setAtStartPos(-1);
+    setActiveSkill(null);
+    return () => {
+      draftsRef.current[sk] = {
+        text: liveInputRef.current,
+        images: liveImagesRef.current,
+      };
+    };
+  }, [sessionKey]);
 
   // Seed message history from existing chat items so ArrowUp works after reload
   useEffect(() => {
@@ -735,25 +860,36 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     return () => { cancelled = true; };
   }, [gateway.connectionState, gateway]);
 
-  // Load file entries for @ picker
+  // Load file entries for @ picker (debounced, path-validated)
   useEffect(() => {
-    if (!atOpen) { setAtEntries([]); return; }
-    let cancelled = false;
+    if (!atOpen) { setAtEntries([]); setAtLoading(false); return; }
     const lastSlash = atFilter.lastIndexOf('/');
     const dir = lastSlash >= 0 ? atFilter.slice(0, lastSlash + 1) : '';
     const basename = lastSlash >= 0 ? atFilter.slice(lastSlash + 1) : atFilter;
     const listPath = dir || '.';
 
-    gateway.rpc('fs.list', { path: listPath }).then((result: unknown) => {
-      if (cancelled || !Array.isArray(result)) return;
-      const entries = result as Array<{ name: string; type: 'directory' | 'file' }>;
-      const filtered = basename
-        ? entries.filter(e => e.name.toLowerCase().includes(basename.toLowerCase()))
-        : entries.filter(e => !e.name.startsWith('.'));
-      setAtEntries(filtered.slice(0, 20));
-      setAtIndex(0);
-    }).catch(() => { if (!cancelled) setAtEntries([]); });
-    return () => { cancelled = true; };
+    // Reject absolute paths and path traversal
+    if (listPath.startsWith('/') || listPath.includes('..')) {
+      setAtEntries([]);
+      setAtLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setAtLoading(true);
+    const timer = setTimeout(() => {
+      gateway.rpc('fs.list', { path: listPath }).then((result: unknown) => {
+        if (cancelled || !Array.isArray(result)) return;
+        const entries = result as Array<{ name: string; type: 'directory' | 'file' }>;
+        const filtered = basename
+          ? entries.filter(e => e.name.toLowerCase().includes(basename.toLowerCase()))
+          : entries.filter(e => !e.name.startsWith('.'));
+        setAtEntries(filtered.slice(0, 20));
+        setAtIndex(0);
+      }).catch(() => { if (!cancelled) setAtEntries([]); })
+        .finally(() => { if (!cancelled) setAtLoading(false); });
+    }, 150);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [atOpen, atFilter, gateway]);
 
   const slashItems = useMemo<SlashItem[]>(() => {
@@ -778,6 +914,21 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
       c.description.toLowerCase().includes(filter)
     );
   }, [slashOpen, slashFilter, slashItems]);
+
+  // Scroll active dropdown item into view on keyboard nav
+  useEffect(() => {
+    const container = slashListRef.current;
+    if (!container || !slashOpen) return;
+    const el = container.children[slashIndex] as HTMLElement | undefined;
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [slashIndex, slashOpen]);
+
+  useEffect(() => {
+    const container = atListRef.current;
+    if (!container || !atOpen) return;
+    const el = container.children[atIndex] as HTMLElement | undefined;
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [atIndex, atOpen]);
 
   // progress from last TodoWrite in this chat
   const progress = useMemo(() => {
@@ -879,7 +1030,8 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
 
     // Inject active skill context into prompt
     if (activeSkill) {
-      prompt = `<skill-context name="${activeSkill.name}">\n${activeSkill.content}\n</skill-context>\n\n${prompt}`;
+      const safeName = activeSkill.name.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] || c));
+      prompt = `<skill-context name="${safeName}">\n${activeSkill.content}\n</skill-context>\n\n${prompt}`;
       setActiveSkill(null);
     }
 
@@ -899,6 +1051,9 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     setInputHeight(null);
     setSlashOpen(false);
     setSlashFilter('');
+    setAtOpen(false);
+    setAtFilter('');
+    setAtStartPos(-1);
     setSending(true);
     try {
       const chatId = sessionKey ? sessionKey.split(':').slice(2).join(':') : undefined;
@@ -932,8 +1087,12 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         const result = await gateway.rpc('skills.read', { name: skillName }) as { raw?: string } | undefined;
         if (result?.raw) {
           setActiveSkill({ name: skillName, content: stripFrontmatter(result.raw) });
+        } else {
+          console.warn(`Skill "${skillName}" returned no content`);
         }
-      } catch { /* skill will just not load */ }
+      } catch (err) {
+        console.error(`Failed to load skill "${skillName}":`, err);
+      }
       setTimeout(() => {
         inputRef.current?.focus();
         landingInputRef.current?.focus();
@@ -1050,26 +1209,33 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     }
 
     // @ file picker navigation
-    if (atOpen && atEntries.length > 0) {
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setAtIndex(i => (i - 1 + atEntries.length) % atEntries.length);
-        return;
-      }
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setAtIndex(i => (i + 1) % atEntries.length);
-        return;
-      }
-      if (e.key === 'Tab' || e.key === 'Enter') {
-        e.preventDefault();
-        const entry = atEntries[atIndex];
-        if (entry) handleAtSelect(entry);
-        return;
-      }
+    if (atOpen) {
       if (e.key === 'Escape') {
         e.preventDefault();
         setAtOpen(false);
+        setAtFilter('');
+        return;
+      }
+      if (atEntries.length > 0) {
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setAtIndex(i => (i - 1 + atEntries.length) % atEntries.length);
+          return;
+        }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setAtIndex(i => (i + 1) % atEntries.length);
+          return;
+        }
+        if (e.key === 'Tab' || e.key === 'Enter') {
+          e.preventDefault();
+          const entry = atEntries[atIndex];
+          if (entry) handleAtSelect(entry);
+          return;
+        }
+      } else if (e.key === 'Enter' || e.key === 'Tab') {
+        // Loading or no results: swallow Enter/Tab to prevent sending raw @path
+        e.preventDefault();
         return;
       }
     }
@@ -1237,69 +1403,11 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                 >
                   <div className="w-8 h-0.5 rounded-full bg-border/60 group-hover:bg-border transition-colors" />
                 </div>
-                {/* slash command dropdown */}
-                {slashOpen && filteredSlashCommands.length > 0 && (
-                  <div className="absolute bottom-full left-3 right-3 mb-1 rounded-lg border border-border bg-popover shadow-md z-20 max-h-60 overflow-y-auto overflow-x-hidden">
-                    {filteredSlashCommands.map((cmd, i) => (
-                      <button
-                        key={cmd.command}
-                        className={cn(
-                          'flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors',
-                          i === slashIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/50'
-                        )}
-                        onMouseDown={e => {
-                          e.preventDefault();
-                          handleSlashSelect(cmd);
-                        }}
-                      >
-                        {cmd.type === 'skill' ? (
-                          <Wrench className="w-3 h-3 text-primary shrink-0" />
-                        ) : (
-                          <Terminal className="w-3 h-3 text-muted-foreground shrink-0" />
-                        )}
-                        <span className="font-mono text-primary">{cmd.command}</span>
-                        <span className="text-muted-foreground truncate">{cmd.description}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {/* @ file picker dropdown */}
-                {atOpen && atEntries.length > 0 && (
-                  <div className="absolute bottom-full left-3 right-3 mb-1 rounded-lg border border-border bg-popover shadow-md z-20 max-h-60 overflow-y-auto overflow-x-hidden">
-                    {atEntries.map((entry, i) => (
-                      <button
-                        key={entry.name}
-                        className={cn(
-                          'flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors',
-                          i === atIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/50'
-                        )}
-                        onMouseDown={e => {
-                          e.preventDefault();
-                          handleAtSelect(entry);
-                        }}
-                      >
-                        {entry.type === 'directory' ? (
-                          <FolderSearch className="w-3 h-3 text-primary shrink-0" />
-                        ) : (
-                          <FileText className="w-3 h-3 text-muted-foreground shrink-0" />
-                        )}
-                        <span className="font-mono">{entry.name}{entry.type === 'directory' ? '/' : ''}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {activeSkill && (
-                  <div className="flex items-center gap-1.5 px-3 pt-2">
-                    <Badge variant="secondary" className="gap-1 text-[10px] h-5">
-                      <Wrench className="w-2.5 h-2.5" />
-                      {activeSkill.name}
-                      <button type="button" className="ml-0.5 hover:text-foreground" onClick={() => setActiveSkill(null)}>
-                        <X className="w-2.5 h-2.5" />
-                      </button>
-                    </Badge>
-                    <span className="text-[10px] text-muted-foreground">skill loaded</span>
-                  </div>
-                )}
+                <InputDropdowns
+                  slashOpen={slashOpen} filteredSlashCommands={filteredSlashCommands} slashIndex={slashIndex} slashListRef={slashListRef} handleSlashSelect={handleSlashSelect}
+                  atOpen={atOpen} atEntries={atEntries} atLoading={atLoading} atIndex={atIndex} atListRef={atListRef} handleAtSelect={handleAtSelect}
+                  activeSkill={activeSkill} clearSkill={() => setActiveSkill(null)}
+                />
                 <ImagePreviewStrip images={attachedImages} onRemove={j => setAttachedImages(prev => prev.filter((_, k) => k !== j))} />
                 <Textarea
                   ref={landingInputRef}
@@ -1476,69 +1584,11 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
           >
             <div className="w-8 h-0.5 rounded-full bg-border/60 group-hover:bg-border transition-colors" />
           </div>
-          {/* slash command dropdown */}
-          {slashOpen && filteredSlashCommands.length > 0 && (
-            <div className="absolute bottom-full left-3 right-3 mb-1 rounded-lg border border-border bg-popover shadow-md z-20 max-h-60 overflow-y-auto overflow-x-hidden">
-              {filteredSlashCommands.map((cmd, i) => (
-                <button
-                  key={cmd.command}
-                  className={cn(
-                    'flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors',
-                    i === slashIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/50'
-                  )}
-                  onMouseDown={e => {
-                    e.preventDefault();
-                    handleSlashSelect(cmd);
-                  }}
-                >
-                  {cmd.type === 'skill' ? (
-                    <Wrench className="w-3 h-3 text-primary shrink-0" />
-                  ) : (
-                    <Terminal className="w-3 h-3 text-muted-foreground shrink-0" />
-                  )}
-                  <span className="font-mono text-primary">{cmd.command}</span>
-                  <span className="text-muted-foreground truncate">{cmd.description}</span>
-                </button>
-              ))}
-            </div>
-          )}
-          {/* @ file picker dropdown */}
-          {atOpen && atEntries.length > 0 && (
-            <div className="absolute bottom-full left-3 right-3 mb-1 rounded-lg border border-border bg-popover shadow-md z-20 max-h-60 overflow-y-auto overflow-x-hidden">
-              {atEntries.map((entry, i) => (
-                <button
-                  key={entry.name}
-                  className={cn(
-                    'flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors',
-                    i === atIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/50'
-                  )}
-                  onMouseDown={e => {
-                    e.preventDefault();
-                    handleAtSelect(entry);
-                  }}
-                >
-                  {entry.type === 'directory' ? (
-                    <FolderSearch className="w-3 h-3 text-primary shrink-0" />
-                  ) : (
-                    <FileText className="w-3 h-3 text-muted-foreground shrink-0" />
-                  )}
-                  <span className="font-mono">{entry.name}{entry.type === 'directory' ? '/' : ''}</span>
-                </button>
-              ))}
-            </div>
-          )}
-          {activeSkill && (
-            <div className="flex items-center gap-1.5 px-3 pt-2">
-              <Badge variant="secondary" className="gap-1 text-[10px] h-5">
-                <Wrench className="w-2.5 h-2.5" />
-                {activeSkill.name}
-                <button type="button" className="ml-0.5 hover:text-foreground" onClick={() => setActiveSkill(null)}>
-                  <X className="w-2.5 h-2.5" />
-                </button>
-              </Badge>
-              <span className="text-[10px] text-muted-foreground">skill loaded</span>
-            </div>
-          )}
+          <InputDropdowns
+            slashOpen={slashOpen} filteredSlashCommands={filteredSlashCommands} slashIndex={slashIndex} slashListRef={slashListRef} handleSlashSelect={handleSlashSelect}
+            atOpen={atOpen} atEntries={atEntries} atLoading={atLoading} atIndex={atIndex} atListRef={atListRef} handleAtSelect={handleAtSelect}
+            activeSkill={activeSkill} clearSkill={() => setActiveSkill(null)}
+          />
           <ImagePreviewStrip images={attachedImages} onRemove={j => setAttachedImages(prev => prev.filter((_, k) => k !== j))} />
           <Textarea
             ref={inputRef}

@@ -86,11 +86,18 @@ function resolveDate(input: string, timezone?: string): string {
 function extractConversationText(content: string): string | null {
   try {
     const parsed = JSON.parse(content);
-    const blocks = parsed?.message?.content;
-    if (!Array.isArray(blocks)) return null;
+    const msgContent = parsed?.message?.content;
+
+    // Handle string content directly (some assistant messages)
+    if (typeof msgContent === 'string') {
+      const trimmed = msgContent.trim();
+      return trimmed || null;
+    }
+
+    if (!Array.isArray(msgContent)) return null;
 
     const texts: string[] = [];
-    for (const block of blocks) {
+    for (const block of msgContent) {
       if (typeof block === 'string') {
         texts.push(block);
       } else if (block?.type === 'text' && block.text) {
@@ -200,7 +207,7 @@ function searchJournals(query: string | undefined, after?: string, before?: stri
         results.push({ date: dir, snippet, path: memPath });
       }
     }
-  } catch { /* ignore fs errors */ }
+  } catch (err) { console.error('searchJournals error:', err); }
 
   return results;
 }
@@ -457,6 +464,10 @@ typically has ~80 actual conversation turns. Much more readable.`,
 
     // ── Journal read ──
     if (idType === 'journal') {
+      // Validate date format to prevent path traversal
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(idValue)) {
+        return { content: [{ type: 'text', text: `Invalid journal date format: "${idValue}". Expected YYYY-MM-DD.` }], isError: true };
+      }
       const memPath = join(MEMORIES_DIR, idValue, 'MEMORY.md');
       if (!existsSync(memPath)) {
         return { content: [{ type: 'text', text: `Journal for ${idValue} not found.` }], isError: true };
@@ -584,18 +595,16 @@ typically has ~80 actual conversation turns. Much more readable.`,
       };
     }
 
-    // Time-range filter within session
+    // Time-range filter within session (separate from session.id param to avoid coupling)
     let timeFilter = '';
-    const timeParams: unknown[] = [session.id];
+    const timeFilterParams: unknown[] = [];
     if (args.after) {
-      // If just HH:MM, convert to a timestamp filter
-      const timeStr = args.after.includes('T') ? args.after : `%T${args.after}%`;
       timeFilter += ' AND timestamp >= ?';
-      timeParams.push(args.after.includes('T') ? args.after : (range.first?.slice(0, 11) || '') + args.after);
+      timeFilterParams.push(args.after.includes('T') ? args.after : (range.first?.slice(0, 11) || '') + args.after);
     }
     if (args.before) {
       timeFilter += ' AND timestamp <= ?';
-      timeParams.push(args.before.includes('T') ? args.before : (range.first?.slice(0, 11) || '') + args.before);
+      timeFilterParams.push(args.before.includes('T') ? args.before : (range.first?.slice(0, 11) || '') + args.before);
     }
 
     // ── Highlights mode: conversation only ──
@@ -605,7 +614,7 @@ typically has ~80 actual conversation turns. Much more readable.`,
         `SELECT id, type, content, timestamp FROM messages
          WHERE session_id = ?${timeFilter}
          ORDER BY id`
-      ).all(...timeParams) as { id: number; type: string; content: string; timestamp: string }[];
+      ).all(session.id, ...timeFilterParams) as { id: number; type: string; content: string; timestamp: string }[];
 
       // Filter to conversation turns (messages with actual text, not just tool calls)
       const conversationRows: { id: number; type: string; text: string; timestamp: string; tools?: string[] }[] = [];
@@ -694,7 +703,7 @@ typically has ~80 actual conversation turns. Much more readable.`,
 
     const totalRow = db.prepare(
       `SELECT COUNT(*) as c FROM messages WHERE session_id = ? AND type IN (${placeholders})${timeFilter}`
-    ).get(session.id, ...types, ...timeParams.slice(1)) as { c: number };
+    ).get(session.id, ...types, ...timeFilterParams) as { c: number };
     const total = totalRow.c;
     const totalPages = Math.ceil(total / pageSize);
     const offset = (page - 1) * pageSize;
@@ -708,7 +717,7 @@ typically has ~80 actual conversation turns. Much more readable.`,
        WHERE session_id = ? AND type IN (${placeholders})${timeFilter}
        ORDER BY id
        LIMIT ? OFFSET ?`
-    ).all(session.id, ...types, ...timeParams.slice(1), pageSize, offset) as {
+    ).all(session.id, ...types, ...timeFilterParams, pageSize, offset) as {
       id: number; type: string; content: string; timestamp: string;
     }[];
 

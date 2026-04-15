@@ -142,6 +142,7 @@ export type SessionInfo = {
   chatType?: string;
   senderName?: string;
   preview?: string;
+  name?: string;
   activeRun?: boolean;
 };
 
