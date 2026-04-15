@@ -1,4 +1,8 @@
+import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { join, basename } from 'node:path';
+import matter from 'gray-matter';
 import type { AgentDefinition, Config } from '../config.js';
+import { CLAUDE_AGENTS_DIR } from '../workspace.js';
 
 // built-in agent definitions
 export const builtInAgents: Record<string, AgentDefinition> = {
@@ -107,14 +111,93 @@ Focus on clarity and completeness. Flag any ambiguities.`,
   },
 };
 
+const MODEL_MAP: Record<string, 'sonnet' | 'opus' | 'haiku' | 'inherit'> = {
+  'claude-sonnet-4-6': 'sonnet',
+  'claude-opus-4-6': 'opus',
+  'claude-haiku-4-5': 'haiku',
+  'sonnet': 'sonnet',
+  'opus': 'opus',
+  'haiku': 'haiku',
+};
+
+/** Load CC-format agent definitions from a directory of .md files */
+function loadCCAgentsFromDir(dir: string): Record<string, AgentDefinition> {
+  if (!existsSync(dir)) return {};
+  const agents: Record<string, AgentDefinition> = {};
+
+  for (const entry of readdirSync(dir)) {
+    const entryPath = join(dir, entry);
+    const stat = statSync(entryPath);
+
+    let mdPath: string | null = null;
+    let name: string;
+
+    if (stat.isDirectory()) {
+      // .claude/agents/<name>/agent.md or just the first .md file
+      const agentMd = join(entryPath, 'agent.md');
+      const indexMd = join(entryPath, `${entry}.md`);
+      if (existsSync(agentMd)) mdPath = agentMd;
+      else if (existsSync(indexMd)) mdPath = indexMd;
+      else {
+        // try first .md in directory
+        const mds = readdirSync(entryPath).filter(f => f.endsWith('.md'));
+        if (mds.length > 0) mdPath = join(entryPath, mds[0]);
+      }
+      name = entry;
+    } else if (entry.endsWith('.md')) {
+      mdPath = entryPath;
+      name = basename(entry, '.md');
+    } else {
+      continue;
+    }
+
+    if (!mdPath || !existsSync(mdPath)) continue;
+
+    try {
+      const content = readFileSync(mdPath, 'utf-8');
+      const { data, content: body } = matter(content);
+
+      const description = data.description || '';
+      const prompt = body.trim();
+      if (!prompt) continue;
+
+      const tools: string[] = [];
+      if (data['allowed-tools']) {
+        const raw = data['allowed-tools'];
+        if (typeof raw === 'string') tools.push(...raw.split(/\s+/));
+        else if (Array.isArray(raw)) tools.push(...raw);
+      }
+
+      const model = data.model ? (MODEL_MAP[data.model] || 'inherit') : undefined;
+
+      agents[name] = { description, prompt, tools: tools.length > 0 ? tools : undefined, model };
+    } catch {
+      // skip malformed agent files
+    }
+  }
+
+  return agents;
+}
+
+/** Load agents from all CC agent directories (personal + project) */
+function loadCCAgents(cwd: string): Record<string, AgentDefinition> {
+  const personal = loadCCAgentsFromDir(CLAUDE_AGENTS_DIR);
+  const project = loadCCAgentsFromDir(join(cwd, '.claude', 'agents'));
+  // personal takes priority over project on collision
+  return { ...project, ...personal };
+}
+
 export function getBuiltInAgents(): Record<string, AgentDefinition> {
   return { ...builtInAgents };
 }
 
 export function getAllAgents(config: Config): Record<string, AgentDefinition> {
+  const ccAgents = loadCCAgents(config.cwd);
+  // priority: built-in > config > CC agents (built-in wins on collision)
   return {
-    ...builtInAgents,
+    ...ccAgents,
     ...config.agents,
+    ...builtInAgents,
   };
 }
 

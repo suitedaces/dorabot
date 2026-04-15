@@ -146,6 +146,11 @@ export function EditorGroupPanel({
             onNavigateSettings={onNavigateSettings}
             onOpenFile={(filePath) => tabState.openFileTab(filePath)}
             onOpenDiff={(opts) => tabState.openDiffTab(opts)}
+            onClearChat={() => {
+              tabState.closeTab(activeTab.id);
+              tabState.newChatTab(group.id);
+            }}
+            onNewTab={() => tabState.newChatTab(group.id)}
           />
         );
       }
