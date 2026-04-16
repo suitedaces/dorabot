@@ -31,7 +31,7 @@ import { getDb } from '../db.js';
 import { insertEvent, queryEventsBySessionCursor, deleteEventsUpToSeq, cleanupOldEvents } from './event-log.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { closeBrowser } from '../browser/manager.js';
-import { setScheduler } from '../tools/index.js';
+import { setScheduler, setBrowserConfig } from '../tools/index.js';
 import { loadProjects, saveProjects, type Project } from '../tools/projects.js';
 import {
   loadTasks,
@@ -411,6 +411,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const { config } = opts;
   const socketPath = opts.socketPath || GATEWAY_SOCKET_PATH;
   const startedAt = Date.now();
+  setBrowserConfig(config.browser || {});
   ensureWorkspace();
   mkdirSync(dirname(socketPath), { recursive: true });
 
