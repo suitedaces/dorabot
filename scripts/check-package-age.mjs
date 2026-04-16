@@ -19,6 +19,15 @@ const minDays = parseInt(
 const dir = resolve(
   args.find((a) => a.startsWith("--dir="))?.split("=")[1] ?? "."
 );
+// Comma-separated list of package names to exempt from the age check.
+// Use sparingly: only for trusted first-party packages where we intentionally
+// track upstream releases quickly (e.g. our own SDK).
+const allowlist = new Set(
+  (args.find((a) => a.startsWith("--allow="))?.split("=")[1] ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
 
 const pkg = JSON.parse(readFileSync(resolve(dir, "package.json"), "utf8"));
 const allDeps = {
@@ -34,6 +43,11 @@ const checked = [];
 for (const [name, version] of Object.entries(allDeps)) {
   // Strip any remaining range prefixes (shouldn't exist if pinned, but be safe)
   const exactVersion = version.replace(/^[\^~>=<]*/g, "");
+
+  if (allowlist.has(name)) {
+    console.log(`  ALLOW ${name}@${exactVersion} (exempted)`);
+    continue;
+  }
 
   try {
     const res = await fetch(

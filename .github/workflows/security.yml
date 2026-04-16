@@ -96,14 +96,17 @@ jobs:
         with:
           node-version: 22
 
+      # @anthropic-ai/claude-agent-sdk is exempt: it's Anthropic's own SDK and
+      # we intentionally track upstream releases quickly. All other deps must
+      # clear the 7-day quarantine.
       - name: Check package age (root, 7 days)
-        run: node scripts/check-package-age.mjs --min-days=7 --dir=.
+        run: node scripts/check-package-age.mjs --min-days=7 --dir=. --allow=@anthropic-ai/claude-agent-sdk
 
       - name: Check package age (desktop, 7 days)
-        run: node scripts/check-package-age.mjs --min-days=7 --dir=desktop
+        run: node scripts/check-package-age.mjs --min-days=7 --dir=desktop --allow=@anthropic-ai/claude-agent-sdk
 
       - name: Check package age (site, 7 days)
-        run: node scripts/check-package-age.mjs --min-days=7 --dir=site
+        run: node scripts/check-package-age.mjs --min-days=7 --dir=site --allow=@anthropic-ai/claude-agent-sdk
 
   snyk:
     runs-on: ubuntu-latest
