@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils';
 import { safeParse } from '@/lib/safe-parse';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
-  Square, ChevronDown, ChevronRight, Sparkles,
+  Square, ChevronDown, ChevronUp, ChevronRight, Sparkles,
   FileText, FilePlus, Pencil, FolderSearch, FileSearch, Terminal,
   Globe, Search, Bot, MessageCircle, ListChecks, FileCode,
   MessageSquare, Camera, Monitor, Clock, Wrench, ArrowUp, LayoutGrid,
@@ -257,11 +257,29 @@ function ThinkingItem({ item }: { item: Extract<ChatItem, { type: 'thinking' }> 
     }
   }, [item.content, item.streaming]);
 
+  // Empty thinking block = display: 'omitted' (Claude thought but didn't share).
+  // No expandable content, no chevron, just a sweep while streaming / static pill when done.
+  const hasContent = !!item.content?.trim();
+  if (!hasContent) {
+    return (
+      <div className="flex items-center gap-1.5 text-[11px] py-0.5 my-1">
+        <Brain className="w-3 h-3 text-muted-foreground" />
+        {item.streaming ? (
+          <span className="compacting-sheen font-medium">Thinking</span>
+        ) : (
+          <span className="text-muted-foreground/70 italic">Thought</span>
+        )}
+      </div>
+    );
+  }
+
+  const label = item.streaming ? 'Thinking...' : 'Thought';
+
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="thinking-container my-1">
       <CollapsibleTrigger className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors py-0.5 group">
         <Brain className="w-3 h-3" />
-        <span>{item.streaming ? 'Thinking...' : 'Thought'}</span>
+        <span className={item.streaming ? 'compacting-sheen font-medium' : undefined}>{label}</span>
         <ChevronRight className="w-3 h-3 transition-transform group-data-[state=open]:rotate-90" />
       </CollapsibleTrigger>
       <CollapsibleContent>
@@ -415,6 +433,120 @@ function ToolUseItem({ item }: { item: Extract<ChatItem, { type: 'tool_use' }> }
         </CollapsibleContent>
       </Card>
     </Collapsible>
+  );
+}
+
+// Collapses long user messages so they don't dominate the chat view.
+// When expanded/collapsed, scroll is compensated to keep the arrow button
+// anchored at the same screen position, so content below stays put and
+// the bubble visually grows/shrinks upward.
+const USER_MESSAGE_COLLAPSE_PX = 240;
+
+function UserMessageItem({ item }: { item: Extract<ChatItem, { type: 'user' }> }) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [needsCollapse, setNeedsCollapse] = useState(false);
+
+  // Measure content height to decide whether collapse is needed.
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    const check = () => {
+      setNeedsCollapse(el.scrollHeight > USER_MESSAGE_COLLAPSE_PX + 20);
+    };
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [item.content]);
+
+  const findScrollParent = (el: HTMLElement | null): HTMLElement | null => {
+    let node = el?.parentElement ?? null;
+    while (node) {
+      const overflowY = getComputedStyle(node).overflowY;
+      if (overflowY === 'auto' || overflowY === 'scroll') return node;
+      node = node.parentElement;
+    }
+    return null;
+  };
+
+  const toggle = () => {
+    const btn = btnRef.current;
+    const viewport = findScrollParent(rootRef.current);
+    if (!btn || !viewport) {
+      setExpanded(e => !e);
+      return;
+    }
+    // Record the arrow button's position relative to the viewport, then
+    // after the DOM settles, scroll so it lands in the same spot.
+    const vpTopBefore = viewport.getBoundingClientRect().top;
+    const btnTopBefore = btn.getBoundingClientRect().top;
+    const offsetBefore = btnTopBefore - vpTopBefore;
+
+    setExpanded(e => !e);
+
+    // Two RAFs: first for React commit, second for VirtualChatList re-layout.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!btnRef.current) return;
+        const vpTopAfter = viewport.getBoundingClientRect().top;
+        const btnTopAfter = btnRef.current.getBoundingClientRect().top;
+        const offsetAfter = btnTopAfter - vpTopAfter;
+        const delta = offsetAfter - offsetBefore;
+        if (delta !== 0) {
+          viewport.scrollBy({ top: delta, behavior: 'auto' });
+        }
+      });
+    });
+  };
+
+  const collapsed = needsCollapse && !expanded;
+
+  return (
+    <div ref={rootRef} className="flex gap-2 px-2 py-1.5 my-1 bg-secondary rounded-md min-w-0">
+      <span className="text-primary font-semibold shrink-0">{'>'}</span>
+      <div className="min-w-0 flex-1">
+        {item.images?.length ? (
+          <div className="flex flex-wrap gap-1.5 mb-1.5">
+            {item.images.map((img, j) => (
+              <img
+                key={j}
+                src={`data:${img.mediaType};base64,${img.data}`}
+                alt="attached"
+                className="max-h-32 rounded border border-border/40 object-cover"
+              />
+            ))}
+          </div>
+        ) : null}
+        {item.content && (
+          <div className="relative">
+            <div
+              ref={contentRef}
+              className="text-foreground break-words prose-chat overflow-hidden"
+              style={collapsed ? { maxHeight: `${USER_MESSAGE_COLLAPSE_PX}px` } : undefined}
+            >
+              <Markdown remarkPlugins={[remarkGfm]}>{item.content}</Markdown>
+            </div>
+            {collapsed && (
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-secondary to-transparent" />
+            )}
+            {needsCollapse && (
+              <button
+                ref={btnRef}
+                onClick={toggle}
+                className="relative mt-1 flex w-full items-center justify-center py-0.5 text-muted-foreground hover:text-foreground transition-colors"
+                title={expanded ? 'Collapse' : 'Expand'}
+                aria-label={expanded ? 'Collapse message' : 'Expand message'}
+              >
+                {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -1296,30 +1428,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   const renderItem = (item: ChatItem, i: number) => {
     switch (item.type) {
       case 'user':
-        return (
-          <div key={i} className="flex gap-2 px-2 py-1.5 my-1 bg-secondary rounded-md min-w-0">
-            <span className="text-primary font-semibold shrink-0">{'>'}</span>
-            <div className="min-w-0">
-              {item.images?.length ? (
-                <div className="flex flex-wrap gap-1.5 mb-1.5">
-                  {item.images.map((img, j) => (
-                    <img
-                      key={j}
-                      src={`data:${img.mediaType};base64,${img.data}`}
-                      alt="attached"
-                      className="max-h-32 rounded border border-border/40 object-cover"
-                    />
-                  ))}
-                </div>
-              ) : null}
-              {item.content && (
-                <div className="text-foreground break-words prose-chat">
-                  <Markdown remarkPlugins={[remarkGfm]}>{item.content}</Markdown>
-                </div>
-              )}
-            </div>
-          </div>
-        );
+        return <UserMessageItem key={i} item={item} />;
       case 'text':
         return (
           <div key={i} className="prose-chat py-1.5">

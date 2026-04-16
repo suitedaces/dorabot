@@ -281,6 +281,25 @@ export function SettingsView({ gateway }: Props) {
                   </Select>
                 </div>
 
+                {/* Thinking Display (Opus 4.7 adaptive thinking) */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs font-medium">Thinking Display</div>
+                    <div className="text-[10px] text-muted-foreground">Show reasoning summaries (Opus 4.7, adaptive thinking only)</div>
+                  </div>
+                  <Select
+                    value={cfg?.thinkingDisplay || 'omitted'}
+                    onValueChange={v => set('thinkingDisplay', v === 'omitted' ? null : v)}
+                    disabled={disabled}
+                  >
+                    <SelectTrigger className="w-[140px] h-7 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="omitted">Hidden (default)</SelectItem>
+                      <SelectItem value="summarized">Summarized</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
                 {/* Max Budget */}
                 <div className="flex items-center justify-between">
                   <div>

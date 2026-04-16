@@ -78,10 +78,6 @@ export function classifyToolCall(
     return 'require-approval';
   }
 
-  if (name === 'message') {
-    return 'require-approval';
-  }
-
   if (name === 'browser') {
     return 'require-approval';
   }
