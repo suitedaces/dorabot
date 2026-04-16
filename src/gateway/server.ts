@@ -31,7 +31,7 @@ import { getDb } from '../db.js';
 import { insertEvent, queryEventsBySessionCursor, deleteEventsUpToSeq, cleanupOldEvents } from './event-log.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { closeBrowser } from '../browser/manager.js';
-import { setScheduler } from '../tools/index.js';
+import { setScheduler, setBrowserConfig } from '../tools/index.js';
 import { loadProjects, saveProjects, type Project } from '../tools/projects.js';
 import {
   loadTasks,
@@ -411,6 +411,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const { config } = opts;
   const socketPath = opts.socketPath || GATEWAY_SOCKET_PATH;
   const startedAt = Date.now();
+  // Wire browser.executablePath / profileDir / cdpPort from config into the
+  // module-level browser state so the browser tool honors them in gateway mode
+  // (Electron). Without this, findChromium() always falls back to the system
+  // default and ignores ~/.dorabot/config.json.
+  setBrowserConfig(config.browser || {});
   ensureWorkspace();
   mkdirSync(dirname(socketPath), { recursive: true });
 
