@@ -2170,6 +2170,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     // respect permissionMode and approvalMode
     const approvalMode = config.security?.approvalMode || 'approve-sensitive';
 
+    // auto-approve configured tools (respects lockdown)
+    if (tier === 'require-approval' && approvalMode !== 'lockdown' && config.security?.autoApprove?.includes(cleanName)) {
+      broadcast({ event: 'agent.tool_notify', data: { toolName: cleanName, input, tier: 'notify', timestamp: Date.now() } });
+      return { behavior: 'allow' as const, updatedInput: input };
+    }
+
     if (config.permissionMode === 'bypassPermissions' || config.permissionMode === 'dontAsk' || approvalMode === 'autonomous') {
       if (tier !== 'auto-allow') {
         broadcast({ event: 'agent.tool_notify', data: { toolName: cleanName, input, tier, timestamp: Date.now() } });
@@ -4548,6 +4554,17 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             return { id, result: { key, value } };
           }
 
+          if (key === 'security.autoApprove') {
+            if (!Array.isArray(value) || !value.every(v => typeof v === 'string')) {
+              return { id, error: 'security.autoApprove must be an array of tool names' };
+            }
+            if (!config.security) config.security = {};
+            config.security.autoApprove = value as string[];
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
           if (key === 'autonomy' && typeof value === 'string') {
             const valid = ['supervised', 'autonomous'];
             if (!valid.includes(value)) return { id, error: `autonomy must be one of: ${valid.join(', ')}` };
@@ -4606,7 +4623,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
 
           if (key === 'reasoningEffort') {
-            const valid = ['minimal', 'low', 'medium', 'high', 'max', null];
+            const valid = ['minimal', 'low', 'medium', 'high', 'max', 'xhigh', null];
             if (value !== null && !valid.includes(value as string)) {
               return { id, error: `reasoningEffort must be one of: ${valid.filter(Boolean).join(', ')} (or null to clear)` };
             }
@@ -4626,6 +4643,19 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               config.thinking = value as any;
             } else {
               return { id, error: 'thinking must be "adaptive", "disabled", null, or { type: "enabled", budgetTokens: number }' };
+            }
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          if (key === 'thinkingDisplay') {
+            if (value === null || value === undefined) {
+              config.thinkingDisplay = undefined;
+            } else if (value === 'summarized' || value === 'omitted') {
+              config.thinkingDisplay = value;
+            } else {
+              return { id, error: 'thinkingDisplay must be "summarized", "omitted", or null to clear' };
             }
             saveConfig(config);
             broadcast({ event: 'config.update', data: { key, value } });

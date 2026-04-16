@@ -847,24 +847,25 @@ export class ClaudeProvider implements Provider {
     opts.onRunReady?.(handle);
 
     // ── Map effort + thinking config ──────────────────────────────────
-    const EFFORT_MAP: Record<string, 'low' | 'medium' | 'high' | 'max'> = {
+    const EFFORT_MAP: Record<string, 'low' | 'medium' | 'high' | 'max' | 'xhigh'> = {
       minimal: 'low',
       low: 'low',
       medium: 'medium',
       high: 'high',
       max: 'max',
+      xhigh: 'xhigh',
     };
     const effort = opts.config.reasoningEffort
       ? EFFORT_MAP[opts.config.reasoningEffort]
       : undefined;
 
-    // Build thinking config — auto-coerce to adaptive for 4.6 models (budgetTokens deprecated)
-    let thinking: { type: 'adaptive' } | { type: 'enabled'; budgetTokens: number } | { type: 'disabled' } | undefined;
+    // Build thinking config — auto-coerce to adaptive for 4.6+ models (budgetTokens deprecated/removed)
+    let thinking: { type: 'adaptive'; display?: 'summarized' | 'omitted' } | { type: 'enabled'; budgetTokens: number } | { type: 'disabled' } | undefined;
     const thinkingCfg = opts.config.thinking;
-    const is46Model = opts.model.includes('-4-6');
-    if (is46Model && thinkingCfg && typeof thinkingCfg === 'object' && 'type' in thinkingCfg && (thinkingCfg as any).type === 'enabled') {
-      // budgetTokens is deprecated on 4.6 models — force adaptive
-      console.warn(`[claude] budgetTokens is deprecated on ${opts.model}, using adaptive thinking instead`);
+    const modelNeedAdaptive = opts.model.includes('-4-6') || opts.model.includes('-4-7');
+    if (modelNeedAdaptive && thinkingCfg && typeof thinkingCfg === 'object' && 'type' in thinkingCfg && (thinkingCfg as any).type === 'enabled') {
+      // budgetTokens is deprecated on 4.6, removed on 4.7 (returns 400) — force adaptive
+      console.warn(`[claude] budgetTokens not supported on ${opts.model}, using adaptive thinking instead`);
       thinking = { type: 'adaptive' };
     } else if (thinkingCfg === 'adaptive') {
       thinking = { type: 'adaptive' };
@@ -872,6 +873,11 @@ export class ClaudeProvider implements Provider {
       thinking = { type: 'disabled' };
     } else if (thinkingCfg && typeof thinkingCfg === 'object' && 'type' in thinkingCfg) {
       thinking = thinkingCfg as any;
+    }
+
+    // Apply thinking display preference (4.7+ defaults to omitted)
+    if (thinking && thinking.type === 'adaptive' && opts.config.thinkingDisplay) {
+      thinking.display = opts.config.thinkingDisplay;
     }
 
     // ── SDK query with async generator prompt ───────────────────────

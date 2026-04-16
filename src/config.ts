@@ -114,11 +114,14 @@ export type AutonomyMode = 'supervised' | 'autonomous';
 export type SecurityConfig = {
   approvalMode?: 'approve-sensitive' | 'autonomous' | 'lockdown';
   tools?: ToolPolicyConfig;
+  autoApprove?: string[];
 };
 
 export type ProviderName = 'claude' | 'codex' | 'minimax';
 
-export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'max';
+export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh';
+
+export type ThinkingDisplay = 'summarized' | 'omitted';
 
 export type ThinkingMode = 'adaptive' | 'disabled' | { type: 'enabled'; budgetTokens: number };
 
@@ -156,6 +159,8 @@ export type Config = {
   model: string;
   reasoningEffort?: ReasoningEffort;
   thinking?: ThinkingMode;
+  /** Control thinking visibility: "summarized" shows reasoning, "omitted" (default) hides it */
+  thinkingDisplay?: ThinkingDisplay;
   maxBudgetUsd?: number;
   permissionMode: PermissionMode;
   autonomy?: AutonomyMode;

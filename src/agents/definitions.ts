@@ -112,6 +112,7 @@ Focus on clarity and completeness. Flag any ambiguities.`,
 };
 
 const MODEL_MAP: Record<string, 'sonnet' | 'opus' | 'haiku' | 'inherit'> = {
+  'claude-opus-4-7': 'opus',
   'claude-sonnet-4-6': 'sonnet',
   'claude-opus-4-6': 'opus',
   'claude-haiku-4-5': 'haiku',

@@ -68,7 +68,7 @@ export type ProviderAuthStatus = {
   tokenHealth?: 'valid' | 'expiring' | 'expired';
   nextRefreshAt?: number;
   reconnectRequired?: boolean;
-  /** Model currently configured (e.g. "claude-opus-4-6" or "gpt-5-codex") */
+  /** Model currently configured (e.g. "claude-opus-4-7" or "gpt-5-codex") */
   model?: string;
   /** Claude Code CLI version (e.g. "2.0.76") */
   cliVersion?: string;

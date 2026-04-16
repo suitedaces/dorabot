@@ -844,6 +844,7 @@ const EFFORT_MAP: Record<ReasoningEffort, ModelReasoningEffort> = {
   medium: 'medium',
   high: 'high',
   max: 'xhigh',
+  xhigh: 'xhigh',
 };
 
 // ── Provider ────────────────────────────────────────────────────────

@@ -126,14 +126,21 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   memory_search: Search, memory_read: FileText,
 };
 
-// Codex reasoning effort levels (SDK: minimal | low | medium | high | xhigh)
-// Our config uses 'max' → maps to 'xhigh' in the provider
-const EFFORT_LEVELS = [
+const CLAUDE_EFFORT_LEVELS = [
   { value: 'minimal', label: 'minimal' },
   { value: 'low', label: 'low' },
   { value: 'medium', label: 'medium' },
   { value: 'high', label: 'high' },
-  { value: 'max', label: 'xhigh' },
+  { value: 'max', label: 'max' },
+  { value: 'xhigh', label: 'xhigh' },
+];
+
+const CODEX_EFFORT_LEVELS = [
+  { value: 'minimal', label: 'minimal' },
+  { value: 'low', label: 'low' },
+  { value: 'medium', label: 'medium' },
+  { value: 'high', label: 'high' },
+  { value: 'xhigh', label: 'xhigh' },
 ];
 
 function ModelSelector({ gateway, disabled }: { gateway: ReturnType<typeof useGateway>; disabled: boolean }) {
@@ -210,23 +217,26 @@ function ModelSelector({ gateway, disabled }: { gateway: ReturnType<typeof useGa
           ))}
         </SelectContent>
       </Select>
-      {/* Effort selector — shown for both Claude and Codex */}
-      <Select value={reasoningEffort || 'off'} onValueChange={handleEffortChange} disabled={disabled}>
-        <SelectTrigger size="sm" className="h-7 gap-1 text-[11px] rounded-lg shadow-none w-auto text-muted-foreground">
-          <Sparkles className="w-3 h-3" />
-          <span>{reasoningEffort || 'auto'}</span>
-        </SelectTrigger>
-        <SelectContent position="popper" align="start" className="min-w-[120px]">
-          <SelectItem value="off" className="text-xs">auto</SelectItem>
-          {EFFORT_LEVELS.map(e => (
-            <SelectItem key={e.value} value={e.value} className="text-xs">{e.label}</SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      {/* Thinking mode indicator for Claude 4.6 */}
-      {providerName === 'claude' && claudeModel.includes('-4-6') && (
-        <span className="text-[9px] text-muted-foreground/50 px-1">adaptive</span>
-      )}
+      {/* Effort selector — provider-aware icon and levels */}
+      {(() => {
+        const isClaude = providerName === 'claude';
+        const effortLevels = isClaude ? CLAUDE_EFFORT_LEVELS : CODEX_EFFORT_LEVELS;
+        const EffortIcon = isClaude ? Brain : Sparkles;
+        return (
+          <Select value={reasoningEffort || 'off'} onValueChange={handleEffortChange} disabled={disabled}>
+            <SelectTrigger size="sm" className="h-7 gap-1 text-[11px] rounded-lg shadow-none w-auto text-muted-foreground">
+              <EffortIcon className="w-3 h-3" />
+              <span>{reasoningEffort || 'auto'}</span>
+            </SelectTrigger>
+            <SelectContent position="popper" align="start" className="min-w-[120px]">
+              <SelectItem value="off" className="text-xs">auto</SelectItem>
+              {effortLevels.map(e => (
+                <SelectItem key={e.value} value={e.value} className="text-xs">{e.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        );
+      })()}
     </div>
   );
 }

@@ -276,6 +276,7 @@ export function SettingsView({ gateway }: Props) {
                       <SelectItem value="medium">Medium (default)</SelectItem>
                       <SelectItem value="high">High</SelectItem>
                       <SelectItem value="max">Max</SelectItem>
+                      <SelectItem value="xhigh">xhigh</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -305,7 +306,7 @@ export function SettingsView({ gateway }: Props) {
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="text-xs font-medium">Extended Context (1M)</div>
-                    <div className="text-[10px] text-muted-foreground">Enable 1M token context window (Opus/Sonnet 4.6)</div>
+                    <div className="text-[10px] text-muted-foreground">Enable 1M token context window (Opus 4.7, Opus/Sonnet 4.6)</div>
                   </div>
                   <Switch
                     checked={cfg?.betas?.includes('context-1m-2025-08-07') ?? false}
@@ -718,7 +719,8 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
                 <SelectItem value="low" className="text-[11px]">low</SelectItem>
                 <SelectItem value="medium" className="text-[11px]">medium</SelectItem>
                 <SelectItem value="high" className="text-[11px]">high</SelectItem>
-                <SelectItem value="max" className="text-[11px]">xhigh</SelectItem>
+                <SelectItem value="max" className="text-[11px]">max</SelectItem>
+                <SelectItem value="xhigh" className="text-[11px]">xhigh</SelectItem>
               </SelectContent>
             </Select>
           </SettingRow>
