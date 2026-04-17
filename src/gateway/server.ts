@@ -4878,7 +4878,10 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'fs.list': {
           const dirPath = params?.path as string;
           if (!dirPath) return { id, error: 'path required' };
-          const resolved = resolve(dirPath);
+          // Resolve relative paths against config.cwd (user workspace), not
+          // process.cwd() which points at the app bundle in packaged Electron.
+          const expanded = dirPath.startsWith('~') ? dirPath.replace('~', homedir()) : dirPath;
+          const resolved = pathResolve(config.cwd || homedir(), expanded);
           if (!isPathAllowed(resolved, config)) {
             return { id, error: `path not allowed: ${resolved}` };
           }
