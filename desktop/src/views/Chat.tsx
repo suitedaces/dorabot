@@ -1067,7 +1067,8 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
       })));
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [gateway.connectionState, gateway]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gateway.connectionState, gateway.rpc]);
 
   // Load file entries for @ picker (debounced, path-validated)
   useEffect(() => {
@@ -1077,10 +1078,13 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     const basename = lastSlash >= 0 ? atFilter.slice(lastSlash + 1) : atFilter;
     const listPath = dir || '.';
 
-    // Reject absolute paths and path traversal
+    // Reject absolute paths and path traversal. Close the picker entirely so
+    // Enter/Tab don't stay swallowed by the "atOpen with no entries" branch in
+    // handleKeyDown.
     if (listPath.startsWith('/') || listPath.includes('..')) {
       setAtEntries([]);
       setAtLoading(false);
+      setAtOpen(false);
       return;
     }
 
@@ -1099,7 +1103,10 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         .finally(() => { if (!cancelled) setAtLoading(false); });
     }, 150);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [atOpen, atFilter, gateway]);
+    // gateway.rpc is stable (useCallback with []); depending on the whole
+    // gateway object would re-run this effect on every parent render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [atOpen, atFilter, gateway.rpc]);
 
   const slashItems = useMemo<SlashItem[]>(() => {
     const commands: SlashItem[] = [
@@ -1333,7 +1340,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     }
   };
 
-  const handleInputChange = useCallback((value: string) => {
+  const handleInputChange = useCallback((value: string, cursor?: number) => {
     setInput(value);
     historyIndexRef.current = -1;
     // slash command detection (only at start of input)
@@ -1346,17 +1353,26 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
       setSlashOpen(false);
       setSlashFilter('');
 
-      // @ file picker detection: find @ preceded by whitespace or at start
+      // @ file picker detection: scan backward from cursor (not value.length) to find
+      // the @ that belongs to the token the user is currently editing. This keeps the
+      // picker open when the cursor is inside an @token that has text after it.
+      const scanFrom = typeof cursor === 'number' ? Math.min(cursor, value.length) : value.length;
       let atIdx = -1;
-      for (let i = value.length - 1; i >= 0; i--) {
-        if (value[i] === ' ' || value[i] === '\n') break;
+      for (let i = scanFrom - 1; i >= 0; i--) {
+        if (value[i] === ' ' || value[i] === '\n' || value[i] === '\t') break;
         if (value[i] === '@' && (i === 0 || /\s/.test(value[i - 1]))) {
           atIdx = i;
           break;
         }
       }
       if (atIdx >= 0) {
-        const afterAt = value.slice(atIdx + 1);
+        // Filter is everything between @ and the next whitespace (or end of value)
+        let end = scanFrom;
+        for (let j = atIdx + 1; j < value.length; j++) {
+          if (value[j] === ' ' || value[j] === '\n' || value[j] === '\t') { end = j; break; }
+          end = j + 1;
+        }
+        const afterAt = value.slice(atIdx + 1, end);
         setAtOpen(true);
         setAtFilter(afterAt);
         setAtStartPos(atIdx);
@@ -1648,7 +1664,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                 <Textarea
                   ref={landingInputRef}
                   value={input}
-                  onChange={e => handleInputChange(e.target.value)}
+                  onChange={e => handleInputChange(e.target.value, e.target.selectionStart ?? undefined)}
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
                   placeholder={!connected ? 'waiting for gateway...' : !authenticated ? 'set up your AI provider to get started' : 'what are we building?'}
@@ -1829,7 +1845,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
           <Textarea
             ref={inputRef}
             value={input}
-            onChange={e => handleInputChange(e.target.value)}
+            onChange={e => handleInputChange(e.target.value, e.target.selectionStart ?? undefined)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             placeholder={connected ? 'type a message...' : 'waiting for gateway...'}

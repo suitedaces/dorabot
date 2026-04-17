@@ -9,7 +9,16 @@ import { homedir, tmpdir } from 'node:os';
 import { execSync, execFileSync } from 'node:child_process';
 import { createConnection } from 'node:net';
 
-const resolve = (p: string) => pathResolve(p.startsWith('~') ? p.replace('~', homedir()) : p);
+// Resolve a user-supplied path. Relative paths resolve against `base` when
+// provided (fall back to process.cwd() for legacy callers), NOT against the
+// process CWD, because in packaged Electron the gateway's CWD points at the
+// app bundle (`<app>/Contents/Resources/gateway`), which is not under `~/` and
+// would fail `isPathAllowed`. Callers in RPC handlers should pass
+// `config.cwd || homedir()` so paths resolve into the user's workspace.
+const resolve = (p: string, base?: string) => {
+  const expanded = p.startsWith('~') ? p.replace('~', homedir()) : p;
+  return pathResolve(base || process.cwd(), expanded);
+};
 import type { Config } from '../config.js';
 import { isPathAllowed, saveConfig, ALWAYS_DENIED, type SecurityConfig, type ToolPolicyConfig } from '../config.js';
 import type { WsMessage, WsResponse, WsEvent, GatewayContext } from './types.js';
@@ -4878,10 +4887,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'fs.list': {
           const dirPath = params?.path as string;
           if (!dirPath) return { id, error: 'path required' };
-          // Resolve relative paths against config.cwd (user workspace), not
-          // process.cwd() which points at the app bundle in packaged Electron.
-          const expanded = dirPath.startsWith('~') ? dirPath.replace('~', homedir()) : dirPath;
-          const resolved = pathResolve(config.cwd || homedir(), expanded);
+          const resolved = resolve(dirPath, config.cwd || homedir());
           if (!isPathAllowed(resolved, config)) {
             return { id, error: `path not allowed: ${resolved}` };
           }
@@ -4905,7 +4911,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'fs.read': {
           const filePath = params?.path as string;
           if (!filePath) return { id, error: 'path required' };
-          const resolved = resolve(filePath);
+          const resolved = resolve(filePath, config.cwd || homedir());
           if (!isPathAllowed(resolved, config)) {
             return { id, error: `path not allowed: ${resolved}` };
           }
@@ -4920,7 +4926,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'fs.readBinary': {
           const filePath = params?.path as string;
           if (!filePath) return { id, error: 'path required' };
-          const resolved = resolve(filePath);
+          const resolved = resolve(filePath, config.cwd || homedir());
           if (!isPathAllowed(resolved, config)) {
             return { id, error: `path not allowed: ${resolved}` };
           }
@@ -4938,7 +4944,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const content = params?.content as string;
           if (!filePath) return { id, error: 'path required' };
           if (typeof content !== 'string') return { id, error: 'content required' };
-          const resolved = resolve(filePath);
+          const resolved = resolve(filePath, config.cwd || homedir());
           if (!isPathAllowed(resolved, config)) {
             return { id, error: `path not allowed: ${resolved}` };
           }
@@ -4953,7 +4959,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'fs.mkdir': {
           const dirPath = params?.path as string;
           if (!dirPath) return { id, error: 'path required' };
-          const resolved = resolve(dirPath);
+          const resolved = resolve(dirPath, config.cwd || homedir());
           if (!isPathAllowed(resolved, config)) {
             return { id, error: `path not allowed: ${resolved}` };
           }
@@ -4968,7 +4974,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'fs.delete': {
           const targetPath = params?.path as string;
           if (!targetPath) return { id, error: 'path required' };
-          const resolved = resolve(targetPath);
+          const resolved = resolve(targetPath, config.cwd || homedir());
           if (!isPathAllowed(resolved, config)) {
             return { id, error: `path not allowed: ${resolved}` };
           }
@@ -4984,8 +4990,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const oldPath = params?.oldPath as string;
           const newPath = params?.newPath as string;
           if (!oldPath || !newPath) return { id, error: 'oldPath and newPath required' };
-          const resolvedOld = resolve(oldPath);
-          const resolvedNew = resolve(newPath);
+          const resolvedOld = resolve(oldPath, config.cwd || homedir());
+          const resolvedNew = resolve(newPath, config.cwd || homedir());
           if (!isPathAllowed(resolvedOld, config) || !isPathAllowed(resolvedNew, config)) {
             return { id, error: `path not allowed` };
           }
@@ -5000,7 +5006,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'fs.reveal': {
           const filePath = params?.path as string;
           if (!filePath) return { id, error: 'path required' };
-          const resolved = resolve(filePath);
+          const resolved = resolve(filePath, config.cwd || homedir());
           if (!isPathAllowed(resolved, config)) {
             return { id, error: 'path not allowed' };
           }
@@ -5016,7 +5022,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'fs.stat': {
           const filePath = params?.path as string;
           if (!filePath) return { id, error: 'path required' };
-          const resolved = resolve(filePath);
+          const resolved = resolve(filePath, config.cwd || homedir());
           if (!isPathAllowed(resolved, config)) {
             return { id, error: `path not allowed: ${resolved}` };
           }
@@ -5031,7 +5037,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'fs.watch.start': {
           const watchPath = params?.path as string;
           if (!watchPath) return { id, error: 'path required' };
-          const resolvedWatch = resolve(watchPath);
+          const resolvedWatch = resolve(watchPath, config.cwd || homedir());
           if (!isPathAllowed(resolvedWatch, config)) {
             return { id, error: `path not allowed: ${resolvedWatch}` };
           }
@@ -5046,10 +5052,16 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'fs.watch.stop': {
           const watchPath = params?.path as string;
           if (!watchPath) return { id, error: 'path required' };
-          const resolvedWatch = resolve(watchPath);
-          stopWatching(resolvedWatch);
+          const resolvedWatch = resolve(watchPath, config.cwd || homedir());
+          // Only decrement the ref count if *this* client was actually tracking
+          // the path. Without this guard a duplicate stop call (or a stop
+          // without a matching start) would over-decrement the ref count and
+          // tear down a watcher that other clients still need.
           const tracked = clientWs ? watchedPathsByClient.get(clientWs) : undefined;
-          tracked?.delete(resolvedWatch);
+          if (tracked?.has(resolvedWatch)) {
+            stopWatching(resolvedWatch);
+            tracked.delete(resolvedWatch);
+          }
           return { id, result: { stopped: resolvedWatch } };
         }
 
@@ -5057,7 +5069,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           // Walk up from path to find nearest .git directory
           const detectPath = params?.path as string;
           if (!detectPath) return { id, error: 'path required' };
-          let dir = resolve(detectPath);
+          let dir = resolve(detectPath, config.cwd || homedir());
           if (!isPathAllowed(dir, config)) {
             return { id, error: `path not allowed: ${dir}` };
           }
@@ -5078,7 +5090,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           // Get working tree changes + diff against origin
           const repoRoot = params?.path as string;
           if (!repoRoot) return { id, error: 'path required' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           try {
             const { execFileSync } = await import('node:child_process');
             // Working tree status (staged + unstaged) using NUL-separated output
@@ -5137,7 +5149,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'git.branches': {
           const repoRoot = params?.path as string;
           if (!repoRoot) return { id, error: 'path required' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           try {
             const { execFileSync } = await import('node:child_process');
             const raw = execFileSync('git', [
@@ -5182,7 +5194,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const branch = params?.branch as string;
           const create = params?.create as boolean;
           if (!repoRoot || !branch) return { id, error: 'path and branch required' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           try {
             const { execFileSync } = await import('node:child_process');
             // Create new branch
@@ -5221,7 +5233,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'git.fetch': {
           const repoRoot = params?.path as string;
           if (!repoRoot) return { id, error: 'path required' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           try {
             const { execFileSync } = await import('node:child_process');
             execFileSync('git', ['fetch', '--all', '--prune'], {
@@ -5238,7 +5250,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'git.pull': {
           const repoRoot = params?.path as string;
           if (!repoRoot) return { id, error: 'path required' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           try {
             const { execFileSync } = await import('node:child_process');
             const output = execFileSync('git', ['pull'], {
@@ -5255,7 +5267,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'git.push': {
           const repoRoot = params?.path as string;
           if (!repoRoot) return { id, error: 'path required' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           try {
             const { execFileSync } = await import('node:child_process');
             const output = execFileSync('git', ['push'], {
@@ -5277,7 +5289,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!repoRoot || !filePath) return { id, error: 'path and file required' };
           // Validate ref is safe (alphanumeric, /, -, _, ~, ^, .)
           if (!/^[a-zA-Z0-9/_\-.~^]+$/.test(ref)) return { id, error: 'invalid ref' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           // Validate file path stays within repo
           if (!pathResolve(resolved, filePath).startsWith(resolved)) return { id, error: 'path traversal not allowed' };
           try {
@@ -5302,7 +5314,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const repoRoot = params?.path as string;
           const filePath = params?.file as string;
           if (!repoRoot || !filePath) return { id, error: 'path and file required' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           if (!pathResolve(resolved, filePath).startsWith(resolved)) return { id, error: 'path traversal not allowed' };
           try {
             const { execFileSync } = await import('node:child_process');
@@ -5319,7 +5331,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const repoRoot = params?.path as string;
           const filePath = params?.file as string;
           if (!repoRoot || !filePath) return { id, error: 'path and file required' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           if (!pathResolve(resolved, filePath).startsWith(resolved)) return { id, error: 'path traversal not allowed' };
           try {
             const { execFileSync } = await import('node:child_process');
@@ -5336,7 +5348,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const repoRoot = params?.path as string;
           const filePath = params?.file as string;
           if (!repoRoot || !filePath) return { id, error: 'path and file required' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           if (!pathResolve(resolved, filePath).startsWith(resolved)) return { id, error: 'path traversal not allowed' };
           try {
             const { execFileSync } = await import('node:child_process');
@@ -5362,7 +5374,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'git.stageAll': {
           const repoRoot = params?.path as string;
           if (!repoRoot) return { id, error: 'path required' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           try {
             const { execFileSync } = await import('node:child_process');
             execFileSync('git', ['add', '-A'], {
@@ -5377,7 +5389,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'git.unstageAll': {
           const repoRoot = params?.path as string;
           if (!repoRoot) return { id, error: 'path required' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           try {
             const { execFileSync } = await import('node:child_process');
             execFileSync('git', ['reset', 'HEAD'], {
@@ -5393,7 +5405,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const repoRoot = params?.path as string;
           const message = params?.message as string;
           if (!repoRoot || !message) return { id, error: 'path and message required' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           try {
             const { execFileSync } = await import('node:child_process');
             const output = execFileSync('git', ['commit', '-m', message], {
@@ -5410,7 +5422,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const rawCount = Number(params?.count) || 20;
           const count = Math.max(1, Math.min(200, Math.floor(rawCount)));
           if (!repoRoot) return { id, error: 'path required' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           try {
             const { execFileSync } = await import('node:child_process');
             const raw = execFileSync('git', [
@@ -5432,7 +5444,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const filePath = params?.file as string;
           const staged = params?.staged as boolean;
           if (!repoRoot || !filePath) return { id, error: 'path and file required' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           if (!pathResolve(resolved, filePath).startsWith(resolved)) return { id, error: 'path traversal not allowed' };
           try {
             const { execFileSync } = await import('node:child_process');
@@ -5449,7 +5461,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'git.worktrees': {
           const repoRoot = params?.path as string;
           if (!repoRoot) return { id, error: 'path required' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           try {
             const { execFileSync } = await import('node:child_process');
             const raw = execFileSync('git', ['worktree', 'list', '--porcelain'], {
@@ -5504,8 +5516,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const branch = params?.branch as string | undefined;
           const removeBranch = params?.removeBranch as boolean | undefined;
           if (!repoRoot || !worktreePath) return { id, error: 'path and worktreePath required' };
-          const resolvedRepo = resolve(repoRoot);
-          const resolvedWt = resolve(worktreePath);
+          const resolvedRepo = resolve(repoRoot, config.cwd || homedir());
+          const resolvedWt = resolve(worktreePath, config.cwd || homedir());
           // Path containment: worktree path must be under the repo or the well-known worktrees dir
           if (!resolvedWt.startsWith(resolvedRepo + '/') && !resolvedWt.includes('/.dorabot/worktrees/')) {
             return { id, error: 'worktree path must be within repo or ~/.dorabot/worktrees/' };
@@ -5525,7 +5537,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'git.prs': {
           const repoRoot = params?.path as string;
           if (!repoRoot) return { id, error: 'path required' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           try {
             const raw = execFileSync('gh', [
               'pr', 'list', '--state', 'open', '--author', '@me',
@@ -5548,7 +5560,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!repoRoot || !Number.isInteger(prNumber) || prNumber <= 0) {
             return { id, error: 'path and a positive integer number required' };
           }
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           try {
             const repoFullName = getGhRepoNameWithOwner(resolved);
             const pull = ghApiJson<any>(resolved, `repos/${repoFullName}/pulls/${prNumber}`);
@@ -5629,7 +5641,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!repoRoot || !Number.isInteger(prNumber) || prNumber <= 0) {
             return { id, error: 'path and a positive integer number required' };
           }
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           try {
             const repoFullName = getGhRepoNameWithOwner(resolved);
             const issueComments = ghApiPaginatedArray<any>(resolved, `repos/${repoFullName}/issues/${prNumber}/comments?per_page=100`);
@@ -5692,7 +5704,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const repoRoot = params?.path as string;
           const prNumber = Number(params?.number);
           if (!repoRoot || !Number.isInteger(prNumber) || prNumber <= 0) return { id, error: 'path and a positive integer number required' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           try {
             const repoFullName = getGhRepoNameWithOwner(resolved);
             const files = ghApiPaginatedArray<{
@@ -5732,7 +5744,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!repoRoot || !filePath || !Number.isInteger(prNumber) || prNumber <= 0) {
             return { id, error: 'path, file, and a positive integer number required' };
           }
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           if (!pathResolve(resolved, filePath).startsWith(resolved)) {
             return { id, error: 'path traversal not allowed' };
           }
@@ -5801,7 +5813,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const branchRe = /^[a-zA-Z0-9/_\-.~^]+$/;
           if (!branchRe.test(base) || !branchRe.test(compare)) return { id, error: 'invalid branch name' };
           if (base.includes('..') || compare.includes('..')) return { id, error: 'invalid branch name' };
-          const resolved = resolve(repoRoot);
+          const resolved = resolve(repoRoot, config.cwd || homedir());
           try {
             const { execFileSync } = await import('node:child_process');
             // Get file-level diff stats
