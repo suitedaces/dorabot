@@ -122,7 +122,7 @@ ${skillList}
 
   // memory
   const todayDir = getTodayMemoryDir(timezone);
-  const recentMemories = loadRecentMemories(3);
+  const recentMemories = loadRecentMemories(1);
   const recentMemoriesSection = recentMemories.length > 0
     ? '\n\nRecent journal entries:\n' + recentMemories.map(m => `<memory date="${m.date}">\n${m.content}\n</memory>`).join('\n')
     : '';
