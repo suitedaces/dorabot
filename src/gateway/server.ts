@@ -2360,12 +2360,23 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           .map(s => ({ channel: s.channel, chatId: ownerChatIds.get(s.channel)! }));
         const pulseItem = scheduler?.listItems().find(i => i.id === AUTONOMOUS_SCHEDULE_ID);
         const lastPulseAt = pulseItem?.lastRunAt ? new Date(pulseItem.lastRunAt).getTime() : undefined;
+
+        // Per-session model override: if this session has its own model set, clone
+        // config and apply the override so it doesn't mutate the shared default.
+        let runConfig = config;
+        if (session?.sessionId) {
+          const sessionMeta = fileSessionManager.getMetadata(session.sessionId);
+          if (sessionMeta?.model && sessionMeta.model !== config.model) {
+            runConfig = { ...config, model: sessionMeta.model };
+          }
+        }
+
         const gen = streamAgent({
           prompt,
           images,
           sessionId: session?.sessionId,
           resumeId,
-          config,
+          config: runConfig,
           cwd,
           channel,
           connectedChannels: connected,
@@ -3573,7 +3584,19 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             const { renameSession } = await import('@anthropic-ai/claude-agent-sdk');
             await renameSession(sessionId, name);
           } catch { /* SDK rename is best-effort */ }
+          broadcast({ event: 'sessions.update', data: { sessionId, name } });
           return { id, result: { renamed: true } };
+        }
+
+        case 'sessions.setModel': {
+          const sessionId = params?.sessionId as string;
+          const model = params?.model;
+          if (!sessionId) return { id, error: 'sessionId required' };
+          // Allow empty string / null to clear the per-session override
+          const normalizedModel = typeof model === 'string' && model.length > 0 ? model : '';
+          fileSessionManager.setMetadata(sessionId, { model: normalizedModel });
+          broadcast({ event: 'sessions.update', data: { sessionId, model: normalizedModel || undefined } });
+          return { id, result: { sessionId, model: normalizedModel || undefined } };
         }
 
         case 'channels.status': {

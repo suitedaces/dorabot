@@ -254,6 +254,8 @@ export default function App() {
   const [quickOpenLoading, setQuickOpenLoading] = useState(false);
   const [quickOpenError, setQuickOpenError] = useState<string | null>(null);
   const [quickOpenSelected, setQuickOpenSelected] = useState(0);
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [renamingSessionValue, setRenamingSessionValue] = useState('');
   const quickOpenCacheRef = useRef<{ root: string; files: QuickOpenFile[] } | null>(null);
   const quickOpenRequestRef = useRef(0);
   const quickOpenInputRef = useRef<HTMLInputElement>(null);
@@ -1345,6 +1347,41 @@ export default function App() {
                     const isActive = tabState.activeTab && isChatTab(tabState.activeTab) && tabState.activeTab.sessionId === s.id;
                     const isVisible = !isActive && visibleSessionIds.has(s.id);
                     const unread = unreadBySessionId[s.id] || 0;
+                    const isRenaming = renamingSessionId === s.id;
+                    const commitRename = () => {
+                      const name = renamingSessionValue.trim();
+                      setRenamingSessionId(null);
+                      if (!name || name === (s.name || '')) return;
+                      gw.renameSession(s.id, name).then(() => {
+                        toast.success('Renamed');
+                        gw.refreshSessions();
+                      }).catch(err => toast.error(String(err)));
+                      const matchingTab = tabState.tabs.find(t => isChatTab(t) && (t as any).sessionId === s.id);
+                      if (matchingTab) tabState.updateTabLabel(matchingTab.id, name);
+                    };
+                    if (isRenaming) {
+                      return (
+                        <div
+                          key={s.id}
+                          className={`flex items-center gap-1.5 w-full px-2.5 py-1 rounded-md text-[10px] ${
+                            isActive ? 'bg-secondary' : 'bg-secondary/60'
+                          }`}
+                        >
+                          <span className="w-3 h-3 shrink-0 flex items-center justify-center">{channelIcon(s.channel)}</span>
+                          <input
+                            autoFocus
+                            value={renamingSessionValue}
+                            onChange={(e) => setRenamingSessionValue(e.target.value)}
+                            onBlur={commitRename}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') { e.preventDefault(); commitRename(); }
+                              else if (e.key === 'Escape') { e.preventDefault(); setRenamingSessionId(null); }
+                            }}
+                            className="flex-1 bg-background/70 border border-border rounded px-1 py-0 text-[10px] text-foreground outline-none focus:ring-1 focus:ring-primary"
+                          />
+                        </div>
+                      );
+                    }
                     return (
                       <button
                         key={s.id}
@@ -1356,11 +1393,12 @@ export default function App() {
                             : 'text-muted-foreground hover:bg-secondary/50'
                         }`}
                         onClick={() => handleViewSession(s.id, s.channel, s.chatId, s.chatType)}
+                        onDoubleClick={(e) => { e.preventDefault(); setRenamingSessionValue(s.name || s.preview || ''); setRenamingSessionId(s.id); }}
                         onContextMenu={(e) => {
                           e.preventDefault();
                           const actions = [
                             { label: 'Fork session', action: () => gw.forkSession(s.id).then(r => { toast.success(`Forked → ${r.sessionId.slice(0, 12)}...`); gw.refreshSessions(); }).catch(err => toast.error(String(err))) },
-                            { label: 'Rename', action: () => { const name = prompt('Session name:', s.name || s.preview || ''); if (name) { gw.renameSession(s.id, name).then(() => { toast.success('Renamed'); gw.refreshSessions(); }).catch(err => toast.error(String(err))); const matchingTab = tabState.tabs.find(t => isChatTab(t) && (t as any).sessionId === s.id); if (matchingTab) tabState.updateTabLabel(matchingTab.id, name); } } },
+                            { label: 'Rename', action: () => { setRenamingSessionValue(s.name || s.preview || ''); setRenamingSessionId(s.id); } },
                             { label: 'Tag', action: () => { const tag = prompt('Tag (empty to clear):'); gw.tagSession(s.id, tag || null).then(() => { toast.success(tag ? `Tagged: ${tag}` : 'Tag cleared'); gw.refreshSessions(); }).catch(err => toast.error(String(err))); } },
                           ];
                           // Simple popover via native context menu workaround using toast actions

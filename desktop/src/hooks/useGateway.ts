@@ -548,7 +548,10 @@ export function useGateway() {
 
   const [channelMessages, setChannelMessages] = useState<ChannelMessage[]>([]);
   const [channelStatuses, setChannelStatuses] = useState<ChannelStatusInfo[]>([]);
+  // Default model (config-backed). Used for new sessions and as fallback.
   const [model, setModel] = useState<string>('');
+  // Per-session model overrides. Keyed by sessionId (not sessionKey), mirrors server DB state.
+  const [modelsBySession, setModelsBySession] = useState<Record<string, string>>({});
   const [configData, setConfigData] = useState<Record<string, unknown> | null>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<ToolApproval[]>([]);
@@ -1428,6 +1431,28 @@ export function useGateway() {
       case 'config.update': {
         const d = data as { key: string; value: unknown };
         setConfigData(prev => prev ? setNestedKey(prev, d.key, d.value) : prev);
+        if (d.key === 'model' && typeof d.value === 'string') {
+          setModel(d.value);
+        }
+        break;
+      }
+
+      case 'sessions.update': {
+        const d = data as { sessionId?: string; name?: string; model?: string };
+        if (!d.sessionId) break;
+        if (d.model !== undefined) {
+          setModelsBySession(prev => {
+            const next = { ...prev };
+            if (d.model) next[d.sessionId!] = d.model;
+            else delete next[d.sessionId!];
+            return next;
+          });
+        }
+        // Refresh sessions list so sidebar picks up name/model changes
+        rpc('sessions.list').then((res) => {
+          const arr = res as SessionInfo[];
+          if (Array.isArray(arr)) setSessions(arr);
+        }).catch(() => {});
         break;
       }
 
@@ -1676,7 +1701,15 @@ export function useGateway() {
     }).catch(() => {});
     rpc('sessions.list').then((res) => {
       const arr = res as SessionInfo[];
-      if (Array.isArray(arr)) setSessions(arr);
+      if (Array.isArray(arr)) {
+        setSessions(arr);
+        // Hydrate per-session models from server state
+        const map: Record<string, string> = {};
+        for (const s of arr) {
+          if ((s as any).model) map[s.id] = (s as any).model as string;
+        }
+        setModelsBySession(map);
+      }
     }).catch(() => {});
     rpc('channels.status').then((res) => {
       const arr = res as ChannelStatusInfo[];
@@ -1846,10 +1879,46 @@ export function useGateway() {
     return { sessionKey: sk, chatId: newChatId };
   }, []);
 
+  // Change the default model (config-level). Affects new sessions and sessions without an override.
   const changeModel = useCallback(async (newModel: string) => {
     await rpc('config.set', { key: 'model', value: newModel });
     setModel(newModel);
   }, [rpc]);
+
+  // Change the model for a specific session. Persists server-side in sessions.model column.
+  // Pass empty string to clear the override and fall back to default.
+  const changeSessionModel = useCallback(async (sessionId: string, newModel: string) => {
+    if (!sessionId) return;
+    // Optimistic local update
+    setModelsBySession(prev => {
+      const next = { ...prev };
+      if (newModel) next[sessionId] = newModel;
+      else delete next[sessionId];
+      return next;
+    });
+    try {
+      await rpc('sessions.setModel', { sessionId, model: newModel });
+    } catch (err) {
+      // Revert on failure by refetching
+      rpc('sessions.list').then((res) => {
+        const arr = res as SessionInfo[];
+        if (Array.isArray(arr)) {
+          const map: Record<string, string> = {};
+          for (const s of arr) {
+            if ((s as any).model) map[s.id] = (s as any).model as string;
+          }
+          setModelsBySession(map);
+        }
+      }).catch(() => {});
+      throw err;
+    }
+  }, [rpc]);
+
+  // Read the effective model for a session: per-session override or default fallback.
+  const getSessionModel = useCallback((sessionId: string | undefined): string => {
+    if (sessionId && modelsBySession[sessionId]) return modelsBySession[sessionId];
+    return model;
+  }, [modelsBySession, model]);
 
   const setConfig = useCallback(async (key: string, value: unknown) => {
     // optimistic local update
@@ -2154,6 +2223,9 @@ export function useGateway() {
     }, []),
     model,
     changeModel,
+    modelsBySession,
+    changeSessionModel,
+    getSessionModel,
     configData,
     setConfig,
     refreshConfig,

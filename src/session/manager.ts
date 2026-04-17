@@ -8,6 +8,7 @@ export type SessionMetadata = {
   senderName?: string;
   sdkSessionId?: string;
   name?: string;
+  model?: string;
 };
 
 export type SessionInfo = {
@@ -22,6 +23,7 @@ export type SessionInfo = {
   senderName?: string;
   preview?: string;
   name?: string;
+  model?: string;
 };
 
 export type MessageMetadata = {
@@ -64,6 +66,7 @@ export class SessionManager {
       if (meta.senderName !== undefined) { sets.push('sender_name = ?'); vals.push(meta.senderName); }
       if (meta.sdkSessionId !== undefined) { sets.push('sdk_session_id = ?'); vals.push(meta.sdkSessionId); }
       if (meta.name !== undefined) { sets.push('name = ?'); vals.push(meta.name); }
+      if (meta.model !== undefined) { sets.push('model = ?'); vals.push(meta.model || null); }
       if (sets.length > 0) {
         sets.push('updated_at = ?');
         vals.push(new Date().toISOString());
@@ -72,8 +75,8 @@ export class SessionManager {
       }
     } else {
       db.prepare(`
-        INSERT INTO sessions (id, channel, chat_id, chat_type, sender_name, sdk_session_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO sessions (id, channel, chat_id, chat_type, sender_name, sdk_session_id, name, model, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         sessionId,
         meta.channel || null,
@@ -81,6 +84,8 @@ export class SessionManager {
         meta.chatType || null,
         meta.senderName || null,
         meta.sdkSessionId || null,
+        meta.name || null,
+        meta.model || null,
         new Date().toISOString(),
         new Date().toISOString(),
       );
@@ -89,12 +94,14 @@ export class SessionManager {
 
   getMetadata(sessionId: string): SessionMetadata | undefined {
     const db = getDb();
-    const row = db.prepare('SELECT channel, chat_id, chat_type, sender_name, sdk_session_id FROM sessions WHERE id = ?').get(sessionId) as {
+    const row = db.prepare('SELECT channel, chat_id, chat_type, sender_name, sdk_session_id, name, model FROM sessions WHERE id = ?').get(sessionId) as {
       channel: string | null;
       chat_id: string | null;
       chat_type: string | null;
       sender_name: string | null;
       sdk_session_id: string | null;
+      name: string | null;
+      model: string | null;
     } | undefined;
     if (!row) return undefined;
     return {
@@ -103,6 +110,8 @@ export class SessionManager {
       chatType: row.chat_type || undefined,
       senderName: row.sender_name || undefined,
       sdkSessionId: row.sdk_session_id || undefined,
+      name: row.name || undefined,
+      model: row.model || undefined,
     };
   }
 
@@ -213,6 +222,7 @@ export class SessionManager {
         s.chat_type,
         s.sender_name,
         s.name,
+        s.model,
         s.message_count,
         s.created_at,
         s.updated_at,
@@ -232,6 +242,7 @@ export class SessionManager {
       chat_type: string | null;
       sender_name: string | null;
       name: string | null;
+      model: string | null;
       message_count: number;
       created_at: string | null;
       updated_at: string | null;
@@ -250,6 +261,7 @@ export class SessionManager {
       senderName: row.sender_name || undefined,
       preview: extractFirstUserPreview(row.first_user_content),
       name: row.name || undefined,
+      model: row.model || undefined,
     }));
   }
 

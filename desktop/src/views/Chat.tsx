@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, useCallback, createContext, useContext, type KeyboardEvent, type ClipboardEvent, type DragEvent } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback, createContext, useContext, Fragment, type KeyboardEvent, type ClipboardEvent, type DragEvent } from 'react';
 import { DorabotSprite } from '../components/DorabotSprite';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -24,7 +24,7 @@ import {
   Globe, Search, Bot, MessageCircle, ListChecks, FileCode,
   MessageSquare, Camera, Monitor, Clock, Wrench, ArrowUp, LayoutGrid,
   Smile, Image, Brain, MapPin, PenLine, GitPullRequest, Radio,
-  Paperclip, X, ExternalLink, Check, Circle, Loader2, Keyboard,
+  Paperclip, X, ExternalLink, Check, Circle, Loader2, Keyboard, Copy,
   type LucideIcon,
 } from 'lucide-react';
 import { SHORTCUTS as ALL_SHORTCUTS } from '@/components/ShortcutHelp';
@@ -143,9 +143,10 @@ const CODEX_EFFORT_LEVELS = [
   { value: 'xhigh', label: 'xhigh' },
 ];
 
-function ModelSelector({ gateway, disabled }: { gateway: ReturnType<typeof useGateway>; disabled: boolean }) {
+function ModelSelector({ gateway, disabled, sessionId }: { gateway: ReturnType<typeof useGateway>; disabled: boolean; sessionId?: string }) {
   const providerName = (gateway.configData as any)?.provider?.name || 'claude';
-  const claudeModel = gateway.model || DEFAULT_CLAUDE_MODEL;
+  // Per-session model if set, otherwise fall back to the default (config-level) model
+  const claudeModel = gateway.getSessionModel(sessionId) || DEFAULT_CLAUDE_MODEL;
   const codexModel = (gateway.configData as any)?.provider?.codex?.model || DEFAULT_CODEX_MODEL;
   const [codexAuthMethod, setCodexAuthMethod] = useState<string | undefined>(undefined);
   const codexOptions = codexModelsForAuth(codexAuthMethod, codexModel);
@@ -167,7 +168,12 @@ function ModelSelector({ gateway, disabled }: { gateway: ReturnType<typeof useGa
     const [provider, model] = encoded.split(':') as [string, string];
     if (provider === 'claude') {
       if (providerName !== 'claude') await gateway.setProvider('claude');
-      gateway.changeModel(model);
+      // If we have a session, set the model per-session; otherwise change the default.
+      if (sessionId) {
+        gateway.changeSessionModel(sessionId, model);
+      } else {
+        gateway.changeModel(model);
+      }
     } else {
       if (providerName !== 'codex') await gateway.setProvider('codex');
       await gateway.setConfig('provider.codex.model', model);
@@ -442,6 +448,64 @@ function ToolUseItem({ item }: { item: Extract<ChatItem, { type: 'tool_use' }> }
 // the bubble visually grows/shrinks upward.
 const USER_MESSAGE_COLLAPSE_PX = 240;
 
+function CopyMessageButton({
+  getText,
+  variant = 'inline',
+  className,
+}: {
+  getText: () => string;
+  variant?: 'inline' | 'overlay';
+  className?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const timeoutRef = useRef<number | null>(null);
+  useEffect(() => () => { if (timeoutRef.current) window.clearTimeout(timeoutRef.current); }, []);
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const text = getText();
+    if (!text) return;
+    const write = async () => {
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          ta.remove();
+        }
+        setCopied(true);
+        if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
+        timeoutRef.current = window.setTimeout(() => setCopied(false), 1100);
+      } catch { /* noop */ }
+    };
+    void write();
+  };
+  const base = variant === 'overlay'
+    ? 'absolute top-1 right-1 inline-flex items-center justify-center w-6 h-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-background/60 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity'
+    : 'inline-flex items-center gap-1 h-5 px-1.5 rounded text-[10px] text-muted-foreground/70 hover:text-foreground hover:bg-secondary/60 transition-colors';
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className={cn(base, className)}
+      title={copied ? 'Copied' : 'Copy message'}
+      aria-label={copied ? 'Copied' : 'Copy message'}
+    >
+      {copied
+        ? <Check className="w-3 h-3" />
+        : <Copy className="w-3 h-3" />}
+      {variant === 'inline' && (
+        <span className="select-none">{copied ? 'copied' : 'copy'}</span>
+      )}
+    </button>
+  );
+}
+
 function UserMessageItem({ item }: { item: Extract<ChatItem, { type: 'user' }> }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -505,7 +569,7 @@ function UserMessageItem({ item }: { item: Extract<ChatItem, { type: 'user' }> }
   const collapsed = needsCollapse && !expanded;
 
   return (
-    <div ref={rootRef} className="flex gap-2 px-2 py-1.5 my-1 bg-secondary rounded-md min-w-0">
+    <div ref={rootRef} className="group relative flex gap-2 px-2 py-1.5 my-1 bg-secondary rounded-md min-w-0">
       <span className="text-primary font-semibold shrink-0">{'>'}</span>
       <div className="min-w-0 flex-1">
         {item.images?.length ? (
@@ -546,6 +610,9 @@ function UserMessageItem({ item }: { item: Extract<ChatItem, { type: 'user' }> }
           </div>
         )}
       </div>
+      {item.content && (
+        <CopyMessageButton variant="overlay" getText={() => item.content} />
+      )}
     </div>
   );
 }
@@ -1425,7 +1492,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     return new Date(ts).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
   };
 
-  const renderItem = (item: ChatItem, i: number) => {
+  const renderItemBase = (item: ChatItem, i: number) => {
     switch (item.type) {
       case 'user':
         return <UserMessageItem key={i} item={item} />;
@@ -1474,6 +1541,56 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
           </div>
         );
     }
+  };
+
+  // Returns text to copy for the assistant thread ending at endIdx.
+  // A thread = run of non-user items between two user messages (or list ends).
+  const getThreadCopyText = (endIdx: number): string => {
+    let start = 0;
+    for (let j = endIdx; j >= 0; j--) {
+      if (chatItems[j].type === 'user') { start = j + 1; break; }
+      if (j === 0) start = 0;
+    }
+    const parts: string[] = [];
+    for (let j = start; j <= endIdx; j++) {
+      const it = chatItems[j];
+      if (it.type === 'text' && it.content.trim()) parts.push(it.content);
+    }
+    return parts.join('\n\n').trim();
+  };
+
+  // True when the next item (if any) starts a new user turn AND this item
+  // belongs to an assistant thread that has at least one text block to copy.
+  const isAssistantThreadEnd = (i: number): boolean => {
+    const item = chatItems[i];
+    if (!item || item.type === 'user') return false;
+    // Skip trailing 'result' markers; show the footer above them
+    if (item.type === 'result' || item.type === 'compacting') return false;
+    const next = chatItems[i + 1];
+    // Still streaming tail — wait until the turn ends
+    if (!next && isRunning) return false;
+    if (next && next.type !== 'user') return false;
+    // Need at least some text to copy
+    let hasText = false;
+    for (let j = i; j >= 0; j--) {
+      const it = chatItems[j];
+      if (it.type === 'user') break;
+      if (it.type === 'text' && it.content.trim()) { hasText = true; break; }
+    }
+    return hasText;
+  };
+
+  const renderItem = (item: ChatItem, i: number) => {
+    const base = renderItemBase(item, i);
+    if (!isAssistantThreadEnd(i)) return base;
+    return (
+      <Fragment key={i}>
+        {base}
+        <div className="flex items-center justify-start -mt-0.5 mb-1.5 pl-0.5 opacity-70 hover:opacity-100 transition-opacity">
+          <CopyMessageButton getText={() => getThreadCopyText(i)} />
+        </div>
+      </Fragment>
+    );
   };
 
   const toolActions = useMemo(() => ({ onOpenFile, onOpenDiff }), [onOpenFile, onOpenDiff]);
@@ -1559,7 +1676,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                   >
                     <Paperclip className="w-4 h-4 text-muted-foreground" />
                   </Button>
-                  <ModelSelector gateway={gateway} disabled={!connected} />
+                  <ModelSelector gateway={gateway} disabled={!connected} sessionId={activeState?.sessionId} />
                   {input.trim() && (
                     <span className="text-[9px] text-muted-foreground/60 ml-2 select-none hidden @sm:inline">{'\u21E7\u21B5 new line'}</span>
                   )}
@@ -1740,7 +1857,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             >
               <Paperclip className="w-4 h-4 text-muted-foreground" />
             </Button>
-            <ModelSelector gateway={gateway} disabled={!connected} />
+            <ModelSelector gateway={gateway} disabled={!connected} sessionId={activeState?.sessionId} />
             {input.trim() && (
               <span className="text-[9px] text-muted-foreground/60 ml-2 select-none hidden @sm:inline">{'\u21E7\u21B5 new line'}</span>
             )}
