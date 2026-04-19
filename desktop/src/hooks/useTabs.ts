@@ -579,7 +579,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     return tab.id;
   }, [tabs, focusTab, openTab]);
 
-  const openViewTab = useCallback((type: Exclude<TabType, 'chat' | 'file' | 'diff' | 'terminal' | 'task' | 'pr'>, label: string, groupId?: GroupId) => {
+  const openViewTab = useCallback((type: Exclude<TabType, 'chat' | 'file' | 'diff' | 'terminal' | 'task' | 'pr' | 'browser'>, label: string, groupId?: GroupId) => {
     const id = `view:${type}`;
     const existing = tabs.find(t => t.id === id);
     if (existing) {
@@ -696,6 +696,29 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
       type: 'browser',
       label: 'New Tab',
       closable: true,
+      url,
+    };
+    setTabs(prev => [...prev, tab]);
+    setActiveTabId(id);
+    layout.addTabToGroup(id, groupId);
+    return id;
+  }, [layout]);
+
+  // Adopt a page the main process already created (e.g. agent-initiated)
+  // into a UI tab. The tab starts with pageId pre-assigned so BrowserView
+  // attaches to the existing WebContentsView instead of creating a new one.
+  const adoptBrowserTab = useCallback((pageId: string, url?: string, label?: string, groupId?: GroupId) => {
+    let fallbackLabel = 'New Tab';
+    if (!label && url) {
+      try { fallbackLabel = new URL(url).host; } catch {}
+    }
+    const id = `browser:${crypto.randomUUID()}`;
+    const tab: BrowserTab = {
+      id,
+      type: 'browser',
+      label: label || fallbackLabel,
+      closable: true,
+      pageId,
       url,
     };
     setTabs(prev => [...prev, tab]);
@@ -926,6 +949,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     openDiffTab,
     openTerminalTab,
     openBrowserTab,
+    adoptBrowserTab,
     patchBrowserTab,
     openSessionTab,
     openTaskTab,

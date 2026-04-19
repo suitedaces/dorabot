@@ -39,6 +39,10 @@ export type TabSummary = {
   userFocused: boolean;
   lastUserInteractionAt: number;
   lastAgentActionAt: number;
+  // who created this tab — 'user' from the UI, 'agent' from an agent RPC.
+  // the renderer uses this to decide whether to adopt the pageId into a new
+  // UI tab (agent) or just attach to an existing one (user).
+  origin: 'user' | 'agent';
 };
 
 type ConsoleEntry = {
@@ -93,6 +97,7 @@ type Entry = {
   url: string;
   favicon: string | null;
   buffers: PageBuffers;
+  origin: 'user' | 'agent';
 };
 
 const SESSION_PARTITION = 'persist:dora-browser';
@@ -141,7 +146,7 @@ export class BrowserController extends EventEmitter {
     return session.fromPartition(SESSION_PARTITION);
   }
 
-  async createPage(opts: { url?: string; background?: boolean } = {}): Promise<PageId> {
+  async createPage(opts: { url?: string; background?: boolean; origin?: 'user' | 'agent' } = {}): Promise<PageId> {
     const pageId = makePageId();
     const view = new WebContentsView({
       webPreferences: {
@@ -165,6 +170,7 @@ export class BrowserController extends EventEmitter {
       url: opts.url || 'about:blank',
       favicon: null,
       buffers: makeBuffers(),
+      origin: opts.origin || 'user',
     };
     this.entries.set(pageId, entry);
 
@@ -540,7 +546,9 @@ export class BrowserController extends EventEmitter {
     });
 
     wc.setWindowOpenHandler(({ url }) => {
-      this.createPage({ url, background: true }).catch((e) => {
+      // popups inherit origin from their opener so agent-driven window.open()
+      // still surfaces as an agent tab in the UI.
+      this.createPage({ url, background: true, origin: entry.origin }).catch((e) => {
         console.error('[browser-controller] popup createPage failed:', e);
       });
       return { action: 'deny' };
@@ -559,6 +567,7 @@ export class BrowserController extends EventEmitter {
       userFocused: entry.userFocused,
       lastUserInteractionAt: entry.lastUserInteractionAt,
       lastAgentActionAt: entry.lastAgentActionAt,
+      origin: entry.origin,
     };
   }
 

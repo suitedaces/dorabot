@@ -93,7 +93,7 @@ export async function handleAgentRpc(
 
     case 'browser.create_page': {
       const { url, background } = params as { url?: string; background?: boolean };
-      const pageId = await controller.createPage({ url, background });
+      const pageId = await controller.createPage({ url, background, origin: 'agent' });
       return { pageId };
     }
 

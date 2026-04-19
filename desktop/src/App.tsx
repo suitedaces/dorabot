@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { dorabotImg, whatsappImg, telegramImg } from './assets';
 import { useGateway, type NotifiableEvent } from './hooks/useGateway';
-import { useTabs, isChatTab } from './hooks/useTabs';
+import { useTabs, isChatTab, isBrowserTab } from './hooks/useTabs';
 import type { Tab, TabType } from './hooks/useTabs';
 import { useLayout } from './hooks/useLayout';
 import { useTheme } from './hooks/useTheme';
@@ -672,7 +672,7 @@ export default function App() {
       } else {
         tabState.newChatTab();
       }
-    } else if (navId !== 'file' && navId !== 'diff' && navId !== 'terminal' && navId !== 'task' && navId !== 'pr') {
+    } else if (navId !== 'file' && navId !== 'diff' && navId !== 'terminal' && navId !== 'task' && navId !== 'pr' && navId !== 'browser') {
       tabState.openViewTab(navId, ALL_NAV_ITEMS.find(n => n.id === navId)?.label || navId);
     }
   }, [tabState, gw.sessionStates]);
@@ -870,6 +870,36 @@ export default function App() {
     return () => cleanup?.();
   }, [shortcutActions]);
 
+  // Agent → UI sync: when the agent creates a browser tab via the browser tool,
+  // surface it as a UI tab. If the agent acts on an existing pageId, focus
+  // that tab. Refs keep the subscription stable across tab list changes.
+  const tabsRef = useRef(tabState.tabs);
+  useEffect(() => { tabsRef.current = tabState.tabs; }, [tabState.tabs]);
+  useEffect(() => {
+    const api = window.electronAPI?.browser;
+    if (!api) return;
+    const unsubCreated = api.onTabCreated?.((summary) => {
+      if (summary.origin !== 'agent') return;
+      const existing = tabsRef.current.find(t => isBrowserTab(t) && t.pageId === summary.pageId);
+      if (existing) {
+        tabState.focusTab(existing.id);
+        return;
+      }
+      const label = summary.title?.trim() || undefined;
+      tabState.adoptBrowserTab(summary.pageId, summary.url || undefined, label);
+    });
+    const unsubActivity = api.onTabAgentActivity?.((payload) => {
+      const existing = tabsRef.current.find(t => isBrowserTab(t) && t.pageId === payload.pageId);
+      if (existing && existing.id !== tabState.activeTabId) {
+        tabState.focusTab(existing.id);
+      }
+    });
+    return () => {
+      unsubCreated?.();
+      unsubActivity?.();
+    };
+  }, [tabState]);
+
   // --- Drag and drop ---
   const handleDragStart = useCallback((event: DragStartEvent) => {
     const tabId = event.active.data.current?.tabId as string | undefined;
@@ -986,6 +1016,10 @@ export default function App() {
     onNewTerminal: () => {
       layout.focusGroup(groupId);
       tabState.openTerminalTab(undefined, groupId);
+    },
+    onNewBrowser: () => {
+      layout.focusGroup(groupId);
+      tabState.openBrowserTab(undefined, groupId);
     },
     onNavClick: (navId: string) => handleNavClick(navId as TabType),
     onSplitRight: () => layout.addColumnAt(groupId, 'right'),

@@ -99,6 +99,7 @@ export type BrowserTabSummary = {
   userFocused: boolean;
   lastUserInteractionAt: number;
   lastAgentActionAt: number;
+  origin: 'user' | 'agent';
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);
