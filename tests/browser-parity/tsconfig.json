@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "rootDir": "../..",
+    "outDir": "out",
+    "sourceMap": true,
+    "declaration": false,
+    "noImplicitAny": false
+  },
+  "include": [
+    "src/**/*.ts",
+    "../../desktop/electron/browser-controller.ts",
+    "../../desktop/electron/browser-ipc.ts",
+    "../../desktop/electron/dorabot-paths.ts",
+    "../../src/browser/actions.ts",
+    "../../src/browser/cdp-backend.ts",
+    "../../src/browser/snapshot.ts",
+    "../../src/browser/refs.ts",
+    "../../src/image-utils.ts",
+    "../../src/gateway/browser-host-registry.ts"
+  ]
+}

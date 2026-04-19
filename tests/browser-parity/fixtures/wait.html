@@ -1,0 +1,13 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Wait Fixture</title></head>
+<body>
+  <h1>Wait</h1>
+  <div id="delayed"></div>
+  <script>
+    setTimeout(() => {
+      document.getElementById('delayed').textContent = 'ready now';
+    }, 300);
+  </script>
+</body>
+</html>

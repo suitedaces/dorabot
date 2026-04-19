@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"><title>Hover Fixture</title>
+  <style>
+    #hover-btn { padding: 10px 20px; background: #eee; }
+    #hover-btn:hover { background: #cfc; }
+  </style>
+</head>
+<body>
+  <h1>Hover</h1>
+  <button id="hover-btn" type="button">hover me</button>
+  <div id="state">idle</div>
+  <script>
+    const btn = document.getElementById('hover-btn');
+    const state = document.getElementById('state');
+    btn.addEventListener('mouseover', () => { state.textContent = 'hovered'; });
+    btn.addEventListener('mouseout', () => { state.textContent = 'idle'; });
+  </script>
+</body>
+</html>

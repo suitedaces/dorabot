@@ -39,7 +39,7 @@ import { validateTelegramToken } from '../channels/telegram/bot.js';
 import { getDb } from '../db.js';
 import { insertEvent, queryEventsBySessionCursor, deleteEventsUpToSeq, cleanupOldEvents } from './event-log.js';
 import { getChannelHandler } from '../tools/messaging.js';
-import { closeBrowser } from '../browser/manager.js';
+import { addBrowserHost, removeBrowserHost, tryResolveResponse as tryResolveBrowserResponse } from './browser-host-registry.js';
 import { setScheduler, setBrowserConfig } from '../tools/index.js';
 import { loadProjects, saveProjects, type Project } from '../tools/projects.js';
 import {
@@ -455,6 +455,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     connectId: string;
     bufferedAmountMax: number;
     disconnectReason: string | null;
+    capabilities: Set<string>;
   };
   const clients = new Map<WebSocket, ClientState>();
   let connectCounter = 0;
@@ -3105,6 +3106,18 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const state = clientWs ? clients.get(clientWs) : undefined;
           if (state) state.lastSeen = Date.now();
           return { id, result: { ok: true, timestamp: Date.now() } };
+        }
+
+        case 'client.register': {
+          const state = clientWs ? clients.get(clientWs) : undefined;
+          if (!state || !clientWs) return { id, error: 'not connected' };
+          const caps = Array.isArray(params?.capabilities) ? (params!.capabilities as string[]) : [];
+          for (const c of caps) state.capabilities.add(c);
+          if (state.capabilities.has('browser')) {
+            addBrowserHost(clientWs);
+            console.log(`[gateway] browser host registered (connectId=${state.connectId})`);
+          }
+          return { id, result: { ok: true, capabilities: Array.from(state.capabilities) } };
         }
 
         case 'status': {
@@ -6426,6 +6439,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       connectId,
       bufferedAmountMax: 0,
       disconnectReason: null,
+      capabilities: new Set(),
     });
     watchedPathsByClient.set(ws, new Set());
     shellsByClient.set(ws, new Set());
@@ -6449,6 +6463,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       } catch {
         ws.send(JSON.stringify({ error: 'invalid json' }));
         return;
+      }
+
+      // Responses to browser RPC we initiated (host → us). No `method`, but has `id`.
+      if (!msg.method && (msg as any).id != null) {
+        if (tryResolveBrowserResponse(msg as any)) return;
       }
 
       if (!msg.method) {
@@ -6551,6 +6570,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       clearTimeout(authTimeout);
       releaseClientWatches();
       releaseClientShells();
+      removeBrowserHost(ws);
       const batch = streamBatches.get(ws);
       if (batch?.timer) clearTimeout(batch.timer);
       streamBatches.delete(ws);
@@ -6637,7 +6657,6 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       runEventPruneTimers.clear();
       scheduler?.stop();
       await channelManager.stopAll();
-      await closeBrowser();
       await disposeAllProviders();
 
       // close all file watchers

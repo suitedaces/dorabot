@@ -21,6 +21,7 @@ type ShortcutActions = {
   focusGroupUp: () => void;
   focusGroupDown: () => void;
   openTerminal: () => void;
+  openBrowser: () => void;
   openGlobalSearch: () => void;
   openShortcutHelp: () => void;
 };
@@ -120,6 +121,13 @@ export function useKeyboardShortcuts(actions: ShortcutActions, options: Shortcut
       if (e.key === '`' && !e.shiftKey) {
         e.preventDefault();
         actions.openTerminal();
+        return;
+      }
+
+      // Cmd+Shift+B — open embedded browser tab
+      if (e.key.toLowerCase() === 'b' && e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        actions.openBrowser();
         return;
       }
 

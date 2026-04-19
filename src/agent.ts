@@ -18,8 +18,10 @@ function resolveSandbox(sandbox: SandboxSettings, channel?: string): SandboxSett
 
   return { ...sandbox, enabled };
 }
-import { buildSystemPrompt } from './system-prompt.js';
+import { buildSystemPrompt, type BrowserTabInfo } from './system-prompt.js';
 import { createAgentMcpServer } from './tools/index.js';
+import { listPages as listBrowserTabs } from './browser/cdp-backend.js';
+import { hasBrowserHost } from './gateway/browser-host-registry.js';
 import { getEligibleSkills, matchSkillToPrompt, type Skill } from './skills/loader.js';
 import { createDefaultHooks, mergeHooks, type HookEvent, type HookCallbackMatcher } from './hooks/index.js';
 import { getAllAgents } from './agents/definitions.js';
@@ -108,6 +110,24 @@ function getShellEnv(): Record<string, string> {
     }
   }
   return { ..._resolvedShellEnv };
+}
+
+// fetch open browser tabs for the system prompt. Silent on failure — agent
+// shouldn't be blocked by a missing browser host.
+async function fetchBrowserTabs(): Promise<BrowserTabInfo[]> {
+  if (!hasBrowserHost()) return [];
+  try {
+    const tabs = await listBrowserTabs();
+    return tabs.map(t => ({
+      pageId: t.pageId,
+      url: t.url,
+      title: t.title,
+      userFocused: t.userFocused,
+      paused: t.paused,
+    }));
+  } catch {
+    return [];
+  }
 }
 
 // clean env for SDK subprocess - strip vscode vars that cause file watcher crashes
@@ -203,6 +223,9 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
   ensureWorkspace();
   const workspaceFiles = loadWorkspaceFiles();
 
+  // fetch open browser tabs for the prompt
+  const browserTabs = await fetchBrowserTabs();
+
   // build system prompt
   const systemPrompt = buildSystemPrompt({
     config,
@@ -214,6 +237,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     extraContext,
     workspaceFiles,
     lastPulseAt,
+    browserTabs,
   });
 
   // create MCP server for custom tools
@@ -383,6 +407,9 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
   ensureWorkspace();
   const workspaceFiles = loadWorkspaceFiles();
 
+  // fetch open browser tabs for the prompt
+  const browserTabs = await fetchBrowserTabs();
+
   const systemPrompt = buildSystemPrompt({
     config,
     skills,
@@ -393,6 +420,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
     extraContext,
     workspaceFiles,
     lastPulseAt,
+    browserTabs,
   });
 
   const mcpServer = createAgentMcpServer();

@@ -1,6 +1,6 @@
 import type { EditorGroup } from '../hooks/useLayout';
 import type { Tab } from '../hooks/useTabs';
-import { isChatTab, isFileTab, isDiffTab, isTerminalTab, isTaskTab, isPrTab } from '../hooks/useTabs';
+import { isChatTab, isFileTab, isDiffTab, isTerminalTab, isTaskTab, isPrTab, isBrowserTab } from '../hooks/useTabs';
 import type { useGateway } from '../hooks/useGateway';
 import type { useTabs } from '../hooks/useTabs';
 import { useDroppable } from '@dnd-kit/core';
@@ -20,6 +20,7 @@ import { FileViewer } from './FileViewer';
 import { DiffViewer } from './viewers/DiffViewer';
 import { ImageDiffViewer } from './viewers/ImageDiffViewer';
 import { TerminalView } from './TerminalView';
+import { BrowserView } from './BrowserView';
 import { ErrorBoundary } from './ErrorBoundary';
 import { useTheme } from '../hooks/useTheme';
 import { cn } from '@/lib/utils';
@@ -130,6 +131,8 @@ export function EditorGroupPanel({
         );
       case 'terminal':
         return null; // Terminals are rendered persistently below to preserve buffer
+      case 'browser':
+        return null; // Browser tabs render persistently below; overlay stays alive when hidden
       case 'chat': {
         const ss = gateway.sessionStates[activeTab.sessionKey] || {
           chatItems: [],
@@ -256,7 +259,7 @@ export function EditorGroupPanel({
       />
       <div className="@container flex-1 min-h-0 min-w-0 relative">
         <ErrorBoundary>
-          <div className="relative z-10" style={{ display: activeTab && !isTerminalTab(activeTab) ? 'contents' : 'none' }}>
+          <div className="relative z-10" style={{ display: activeTab && !isTerminalTab(activeTab) && !isBrowserTab(activeTab) ? 'contents' : 'none' }}>
             {renderContent()}
           </div>
           {/* Keep all terminal tabs mounted so xterm preserves its buffer */}
@@ -273,6 +276,20 @@ export function EditorGroupPanel({
                 onShellEvent={gateway.onShellEvent}
                 palette={palette}
                 focused={t.id === activeTab?.id}
+              />
+            </div>
+          ))}
+          {/* Keep all browser tabs mounted so the WebContentsView stays alive */}
+          {groupTabs.filter(isBrowserTab).map(t => (
+            <div
+              key={t.id}
+              className="absolute inset-0"
+              style={{ visibility: t.id === activeTab?.id ? 'visible' : 'hidden', zIndex: t.id === activeTab?.id ? 1 : 0 }}
+            >
+              <BrowserView
+                tab={t}
+                isActive={t.id === activeTab?.id}
+                onPatch={(patch) => tabState.patchBrowserTab(t.id, patch)}
               />
             </div>
           ))}

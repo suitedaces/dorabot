@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import type { useGateway } from './useGateway';
 import type { useLayout, GroupId } from './useLayout';
 
-export type TabType = 'chat' | 'channels' | 'goals' | 'automation' | 'extensions' | 'agents' | 'memory' | 'research' | 'settings' | 'file' | 'diff' | 'terminal' | 'task' | 'pr';
+export type TabType = 'chat' | 'channels' | 'goals' | 'automation' | 'extensions' | 'agents' | 'memory' | 'research' | 'settings' | 'file' | 'diff' | 'terminal' | 'task' | 'pr' | 'browser';
 
 export type ChatTab = {
   id: string;
@@ -60,14 +60,24 @@ export type PrTab = {
   prNumber: number;
 };
 
+export type BrowserTab = {
+  id: string;
+  type: 'browser';
+  label: string;
+  closable: true;
+  /** Assigned by BrowserController once the WebContentsView is created. */
+  pageId?: string;
+  url?: string;
+};
+
 export type ViewTab = {
   id: string;
-  type: Exclude<TabType, 'chat' | 'file' | 'diff' | 'terminal' | 'task' | 'pr'>;
+  type: Exclude<TabType, 'chat' | 'file' | 'diff' | 'terminal' | 'task' | 'pr' | 'browser'>;
   label: string;
   closable: true;
 };
 
-export type Tab = ChatTab | ViewTab | FileTab | DiffTab | TerminalTab | TaskTab | PrTab;
+export type Tab = ChatTab | ViewTab | FileTab | DiffTab | TerminalTab | TaskTab | PrTab | BrowserTab;
 
 export function isChatTab(tab: Tab): tab is ChatTab {
   return tab.type === 'chat';
@@ -93,6 +103,10 @@ export function isPrTab(tab: Tab): tab is PrTab {
   return tab.type === 'pr';
 }
 
+export function isBrowserTab(tab: Tab): tab is BrowserTab {
+  return tab.type === 'browser';
+}
+
 const TABS_STORAGE_KEY = 'dorabot:tabs';
 const ACTIVE_TAB_STORAGE_KEY = 'dorabot:activeTabId';
 
@@ -115,7 +129,8 @@ function loadTabsFromStorage(): Tab[] {
     const parsed = JSON.parse(raw) as Tab[];
     if (!Array.isArray(parsed) || parsed.length === 0) return [];
     return parsed
-      // Terminal tabs are kept; TerminalView re-spawns/reclaims the shell on mount
+      // Terminal tabs are kept; TerminalView re-spawns/reclaims the shell on mount.
+      // Browser tabs drop their stale pageId — BrowserView recreates the WebContentsView on mount.
       .map((tab) => {
         if ((tab as any).type === 'plans' || (tab as any).type === 'ideas' || (tab as any).type === 'roadmap') {
           return {
@@ -128,6 +143,10 @@ function loadTabsFromStorage(): Tab[] {
         // Migrate old "Goals" label
         if ((tab as any).type === 'goals' && (tab as any).label === 'Goals') {
           return { ...tab, label: 'Projects' } as Tab;
+        }
+        if ((tab as any).type === 'browser') {
+          const { pageId, ...rest } = tab as BrowserTab;
+          return rest as Tab;
         }
         return tab;
       });
@@ -454,6 +473,10 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     if (closing && isTerminalTab(closing)) {
       gw.rpc('shell.kill', { shellId: closing.shellId }).catch(() => {});
     }
+    // Tear down WebContentsView for browser tabs
+    if (closing && isBrowserTab(closing) && closing.pageId) {
+      try { window.electronAPI?.browser?.destroy(closing.pageId); } catch {}
+    }
 
     const remainingTabs = tabs.filter(t => t.id !== tabId);
 
@@ -666,6 +689,28 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     }
   }, [focusTab, gw, layout]);
 
+  const openBrowserTab = useCallback((url?: string, groupId?: GroupId) => {
+    const id = `browser:${crypto.randomUUID()}`;
+    const tab: BrowserTab = {
+      id,
+      type: 'browser',
+      label: 'New Tab',
+      closable: true,
+      url,
+    };
+    setTabs(prev => [...prev, tab]);
+    setActiveTabId(id);
+    layout.addTabToGroup(id, groupId);
+    return id;
+  }, [layout]);
+
+  // Called by BrowserView once the WebContentsView is created and whenever
+  // the controller emits tab-updated (url/title changes). Updates are in-memory
+  // only; pageId is stripped when persisting tabs.
+  const patchBrowserTab = useCallback((tabId: string, patch: Partial<Pick<BrowserTab, 'pageId' | 'url' | 'label'>>) => {
+    setTabs(prev => prev.map(t => (t.id === tabId && isBrowserTab(t)) ? { ...t, ...patch } : t));
+  }, []);
+
   const openTaskTab = useCallback((taskId: string, taskTitle: string, groupId?: GroupId) => {
     const id = `task:${taskId}`;
     const existing = tabs.find(t => t.id === id);
@@ -738,6 +783,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     for (const tab of closingTabs) {
       if (isChatTab(tab)) gw.untrackSession(tab.sessionKey);
       if (isTerminalTab(tab)) gw.rpc('shell.kill', { shellId: tab.shellId }).catch(() => {});
+      if (isBrowserTab(tab) && tab.pageId) { try { window.electronAPI?.browser?.destroy(tab.pageId); } catch {} }
       layout.removeTabFromGroup(tab.id, gid);
     }
     focusTab(tabId, gid);
@@ -762,6 +808,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     for (const tab of closingTabs) {
       if (isChatTab(tab)) gw.untrackSession(tab.sessionKey);
       if (isTerminalTab(tab)) gw.rpc('shell.kill', { shellId: tab.shellId }).catch(() => {});
+      if (isBrowserTab(tab) && tab.pageId) { try { window.electronAPI?.browser?.destroy(tab.pageId); } catch {} }
       layout.removeTabFromGroup(tab.id, gid);
     }
     if (fallback.tab) {
@@ -786,6 +833,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     for (const tab of closingTabs) {
       if (isChatTab(tab)) gw.untrackSession(tab.sessionKey);
       if (isTerminalTab(tab)) gw.rpc('shell.kill', { shellId: tab.shellId }).catch(() => {});
+      if (isBrowserTab(tab) && tab.pageId) { try { window.electronAPI?.browser?.destroy(tab.pageId); } catch {} }
       layout.removeTabFromGroup(tab.id, gid);
     }
     focusTab(tabId, gid);
@@ -877,6 +925,8 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     openFileTab,
     openDiffTab,
     openTerminalTab,
+    openBrowserTab,
+    patchBrowserTab,
     openSessionTab,
     openTaskTab,
     openPrTab,

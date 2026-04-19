@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Basic Fixture</title></head>
+<body>
+  <h1>Basic Fixture</h1>
+  <button id="btn" type="button">Click me</button>
+  <div id="out">idle</div>
+  <label>Name: <input id="txt" placeholder="type here"></label>
+  <div id="typed"></div>
+  <script>
+    document.getElementById('btn').addEventListener('click', () => {
+      document.getElementById('out').textContent = 'clicked!';
+    });
+    document.getElementById('txt').addEventListener('input', (e) => {
+      document.getElementById('typed').textContent = e.target.value;
+    });
+  </script>
+</body>
+</html>

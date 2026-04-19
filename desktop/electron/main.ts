@@ -5,7 +5,10 @@ import * as path from 'path';
 import { existsSync, readFileSync, appendFileSync, mkdirSync } from 'fs';
 import { GatewayManager } from './gateway-manager';
 import { GatewayBridge } from './gateway-bridge';
+import { BrowserController } from './browser-controller';
+import { registerBrowserIpc, handleAgentRpc } from './browser-ipc';
 import { GATEWAY_LOG_PATH, DORABOT_LOGS_DIR } from './dorabot-paths';
+import { migrateBrowserProfile } from '../../scripts/migrate-browser-profile';
 
 function readGatewayLogs(): string {
   try {
@@ -23,6 +26,7 @@ let tray: Tray | null = null;
 let isQuitting = false;
 let gatewayManager: GatewayManager | null = null;
 let gatewayBridge: GatewayBridge | null = null;
+let browserController: BrowserController | null = null;
 let updateCheckInterval: ReturnType<typeof setInterval> | null = null;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -220,10 +224,12 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     mainWindow = null;
     gatewayBridge?.setWindow(null);
+    browserController?.setHostWindow(null);
   });
 
   // Wire up gateway bridge to this window
   gatewayBridge?.setWindow(mainWindow);
+  browserController?.setHostWindow(mainWindow);
 }
 
 function createTray(): void {
@@ -271,8 +277,22 @@ app.on('ready', async () => {
     app.dock.setIcon(getIconPath());
   }
 
+  // Create browser controller (owns WebContentsView tabs)
+  browserController = new BrowserController();
+  registerBrowserIpc(browserController, () => mainWindow);
+
+  // one-time cookie migration from legacy playwright profile. fire-and-forget;
+  // sentinel at ~/.dorabot/browser-migrated ensures we only run once.
+  migrateBrowserProfile(browserController.getSession()).catch((err) => {
+    console.error('[main] browser profile migration threw:', err);
+  });
+
   // Create gateway bridge (main process WebSocket to gateway)
   gatewayBridge = new GatewayBridge();
+  gatewayBridge.setBrowserRpcHandler(async (method, params) => {
+    if (!browserController) throw new Error('browser not initialised');
+    return await handleAgentRpc(browserController, method, params);
+  });
 
   // IPC: renderer sends messages through the bridge
   ipcMain.on('gateway:send', (_event, data: string) => {
@@ -344,6 +364,7 @@ app.on('activate', () => {
 app.on('before-quit', () => {
   isQuitting = true;
   if (updateCheckInterval) clearInterval(updateCheckInterval);
+  browserController?.shutdown();
   gatewayBridge?.disconnect();
   gatewayManager?.stop();
 });

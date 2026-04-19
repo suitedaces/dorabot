@@ -37,6 +37,68 @@ const electronAPI = {
     ipcRenderer.on('gateway:state', handler);
     return () => { ipcRenderer.removeListener('gateway:state', handler); };
   },
+  // Embedded browser IPC (main process owns WebContentsView + CDP debugger)
+  browser: {
+    create: (opts: { url?: string; background?: boolean } = {}): Promise<string> =>
+      ipcRenderer.invoke('browser:create', opts),
+    destroy: (pageId: string): Promise<true> =>
+      ipcRenderer.invoke('browser:destroy', pageId),
+    setBounds: (pageId: string, bounds: { x: number; y: number; width: number; height: number }): Promise<true> =>
+      ipcRenderer.invoke('browser:set-bounds', pageId, bounds),
+    hide: (pageId: string): Promise<true> =>
+      ipcRenderer.invoke('browser:hide', pageId),
+    setUserFocus: (pageId: string | null): Promise<true> =>
+      ipcRenderer.invoke('browser:set-user-focus', pageId),
+    navigate: (pageId: string, params: { type: 'url' | 'back' | 'forward' | 'reload'; url?: string }): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('browser:navigate', pageId, params),
+    pause: (pageId: string, paused: boolean): Promise<true> =>
+      ipcRenderer.invoke('browser:pause', pageId, paused),
+    listPages: (): Promise<BrowserTabSummary[]> =>
+      ipcRenderer.invoke('browser:list-pages'),
+    onTabCreated: (cb: (summary: BrowserTabSummary) => void) => {
+      const handler = (_e: any, payload: BrowserTabSummary) => cb(payload);
+      ipcRenderer.on('browser:tab-created', handler);
+      return () => { ipcRenderer.removeListener('browser:tab-created', handler); };
+    },
+    onTabUpdated: (cb: (summary: BrowserTabSummary) => void) => {
+      const handler = (_e: any, payload: BrowserTabSummary) => cb(payload);
+      ipcRenderer.on('browser:tab-updated', handler);
+      return () => { ipcRenderer.removeListener('browser:tab-updated', handler); };
+    },
+    onTabClosed: (cb: (payload: { pageId: string }) => void) => {
+      const handler = (_e: any, payload: { pageId: string }) => cb(payload);
+      ipcRenderer.on('browser:tab-closed', handler);
+      return () => { ipcRenderer.removeListener('browser:tab-closed', handler); };
+    },
+    onTabPaused: (cb: (payload: { pageId: string; paused: boolean }) => void) => {
+      const handler = (_e: any, payload: any) => cb(payload);
+      ipcRenderer.on('browser:tab-paused', handler);
+      return () => { ipcRenderer.removeListener('browser:tab-paused', handler); };
+    },
+    onTabUserActivity: (cb: (payload: { pageId: string; at: number }) => void) => {
+      const handler = (_e: any, payload: any) => cb(payload);
+      ipcRenderer.on('browser:tab-user-activity', handler);
+      return () => { ipcRenderer.removeListener('browser:tab-user-activity', handler); };
+    },
+    onTabAgentActivity: (cb: (payload: { pageId: string; at: number }) => void) => {
+      const handler = (_e: any, payload: any) => cb(payload);
+      ipcRenderer.on('browser:tab-agent-activity', handler);
+      return () => { ipcRenderer.removeListener('browser:tab-agent-activity', handler); };
+    },
+  },
+};
+
+export type BrowserTabSummary = {
+  pageId: string;
+  url: string;
+  title: string;
+  favicon: string | null;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  paused: boolean;
+  userFocused: boolean;
+  lastUserInteractionAt: number;
+  lastAgentActionAt: number;
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);

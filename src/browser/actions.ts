@@ -1,106 +1,1052 @@
-import type { ConsoleMessage, Dialog, Locator, Page, Request, Response } from 'playwright-core';
+/**
+ * actions — 26 browser actions, all driven through raw CDP via sendCdp().
+ *
+ * Replaces the previous Playwright-backed implementation. Every action is
+ * page-scoped: it takes a pageId (defaults to the user's focused tab) and
+ * calls the browser host via the gateway's browser-host-registry.
+ *
+ * Refs (e1, e2, ...) are anchored to CDP backendNodeIds so they survive
+ * reflows and re-renders. See ./snapshot.ts and ./refs.ts for details.
+ */
 import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
-  ensureBrowser,
-  closeBrowser,
-  isRunning,
-  getPage,
-  getContext,
-  setActivePage,
-  type BrowserConfig,
-} from './manager.js';
-import { clearRefs, clearAllRefs, generateSnapshot, resolveRef, getRefEntry } from './refs.js';
+  sendCdp,
+  createPage as cdpCreatePage,
+  destroyPage as cdpDestroyPage,
+  listPages as cdpListPages,
+  navigatePage as cdpNavigatePage,
+  printPdfViaHost,
+  requirePageId,
+  type PageId,
+  type TabSummary,
+} from './cdp-backend.js';
+import { invokeBrowserHost } from '../gateway/browser-host-registry.js';
+import { buildSnapshot } from './snapshot.js';
+import { resolveRef, resolveRefToObjectId, clearRefs } from './refs.js';
 import { constrainImageSize } from '../image-utils.js';
 
 export type ActionResult = {
   text: string;
   isError?: boolean;
-  image?: string; // raw base64 image data (no data: prefix)
+  image?: string;           // raw base64 image data (no data: prefix)
   mimeType?: string;
   structured?: Record<string, unknown>;
 };
 
-type ConsoleEntry = {
-  msgid: number;
-  type: string;
-  text: string;
-  timestamp: string;
-  location?: {
-    url: string;
-    lineNumber: number;
-    columnNumber: number;
+// ─── helpers ───────────────────────────────────────────────────────────
+
+function ok(text: string, extra: Partial<ActionResult> = {}): ActionResult {
+  return { text, ...extra };
+}
+
+function err(text: string): ActionResult {
+  return { text, isError: true };
+}
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+// compact single-line JSON, used for eval returns where type fidelity matters.
+function compactJson(value: unknown): string {
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
+
+// compact, agent-readable yaml-ish emitter. not a full yaml impl — we own both
+// sides, so we skip edge cases (document markers, tags, explicit null, complex
+// keys) and optimize for token count and scannability. rules:
+//   - skip null/undefined keys (they're noise)
+//   - inline short arrays/objects (< 60 chars on one line)
+//   - single-line strings unquoted; multiline strings use "|" block scalars
+//   - preserve numbers, booleans, arrays of primitives as-is
+function formatYaml(value: unknown, depth = 0): string {
+  const pad = '  '.repeat(depth);
+  if (value === null || value === undefined) return 'null';
+  if (typeof value === 'boolean' || typeof value === 'number') return String(value);
+  if (typeof value === 'string') return formatScalarString(value, depth);
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]';
+    const inline = tryInlineArray(value);
+    if (inline) return inline;
+    return value.map((item) => {
+      const formatted = formatYaml(item, depth + 1);
+      if (!formatted.includes('\n')) return `${pad}- ${formatted}`;
+      // object/array spans multiple lines — hang first line after "- "
+      const [first, ...rest] = formatted.split('\n');
+      return `${pad}- ${first.trimStart()}\n${rest.join('\n')}`;
+    }).join('\n');
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>).filter(
+      ([, v]) => v !== null && v !== undefined,
+    );
+    if (entries.length === 0) return '{}';
+    const inline = tryInlineObject(entries);
+    if (inline) return inline;
+    return entries.map(([k, v]) => {
+      const formatted = formatYaml(v, depth + 1);
+      if (formatted.includes('\n')) return `${pad}${k}:\n${formatted}`;
+      return `${pad}${k}: ${formatted}`;
+    }).join('\n');
+  }
+  return String(value);
+}
+
+function formatScalarString(s: string, depth: number): string {
+  if (s === '') return '""';
+  if (s.includes('\n')) {
+    const pad = '  '.repeat(depth + 1);
+    return `|\n${s.split('\n').map((l) => pad + l).join('\n')}`;
+  }
+  // quote only when needed: leading/trailing space, yaml-sensitive starters, colons with space, or '#'
+  if (/^(\s|["'&*!|>%@`])/.test(s) || /(\s#|:\s)/.test(s) || /\s$/.test(s)) {
+    return JSON.stringify(s);
+  }
+  return s;
+}
+
+function tryInlineArray(arr: unknown[]): string | null {
+  if (arr.some((v) => v && typeof v === 'object')) return null;
+  const parts = arr.map((v) => formatYaml(v, 0));
+  if (parts.some((p) => p.includes('\n'))) return null;
+  const joined = `[${parts.join(', ')}]`;
+  return joined.length <= 60 ? joined : null;
+}
+
+function tryInlineObject(entries: Array<[string, unknown]>): string | null {
+  if (entries.some(([, v]) => v && typeof v === 'object')) return null;
+  const parts = entries.map(([k, v]) => `${k}: ${formatYaml(v, 0)}`);
+  if (parts.some((p) => p.includes('\n'))) return null;
+  const joined = `{${parts.join(', ')}}`;
+  return joined.length <= 60 ? joined : null;
+}
+
+function paginate<T>(items: T[], pageIdx?: number, pageSize?: number): T[] {
+  const idx = pageIdx ?? 0;
+  if (idx < 0) return [];
+  if (!pageSize || pageSize <= 0) return idx === 0 ? items : [];
+  const start = idx * pageSize;
+  return items.slice(start, start + pageSize);
+}
+
+function truncate(value: string, max = 20_000): { value: string; truncated: boolean } {
+  if (value.length <= max) return { value, truncated: false };
+  return { value: `${value.slice(0, max)}\n... [truncated ${value.length - max} chars]`, truncated: true };
+}
+
+/**
+ * Resolve a ref to its center (x, y) in viewport coords, and scroll it into
+ * view first. Throws if the node is unknown or detached.
+ */
+async function locateRef(pageId: PageId, ref: string): Promise<{ x: number; y: number; backendNodeId: number }> {
+  const backendNodeId = resolveRef(pageId, ref);
+  if (backendNodeId == null) throw new Error(`unknown ref "${ref}" — call snapshot first`);
+  await sendCdp(pageId, 'DOM.scrollIntoViewIfNeeded', { backendNodeId }).catch(() => undefined);
+  const { model } = await sendCdp<{ model: { content: number[] } }>(pageId, 'DOM.getBoxModel', { backendNodeId });
+  // content polygon is [x0,y0, x1,y1, x2,y2, x3,y3]; center = avg of top-left and bottom-right
+  const cx = (model.content[0] + model.content[4]) / 2;
+  const cy = (model.content[1] + model.content[5]) / 2;
+  return { x: cx, y: cy, backendNodeId };
+}
+
+async function focusRef(pageId: PageId, ref: string): Promise<void> {
+  const objectId = await resolveRefToObjectId(pageId, ref);
+  await sendCdp(pageId, 'Runtime.callFunctionOn', {
+    objectId,
+    functionDeclaration: 'function(){ this.focus && this.focus(); }',
+    returnByValue: true,
+  });
+}
+
+async function clickAt(pageId: PageId, x: number, y: number, opts: { clickCount?: number; button?: 'left' | 'right' | 'middle' } = {}): Promise<void> {
+  const button = opts.button || 'left';
+  const clickCount = opts.clickCount || 1;
+  await sendCdp(pageId, 'Input.dispatchMouseEvent', {
+    type: 'mouseMoved', x, y, button: 'none', buttons: 0,
+  });
+  await sendCdp(pageId, 'Input.dispatchMouseEvent', {
+    type: 'mousePressed', x, y, button, clickCount,
+  });
+  await sendCdp(pageId, 'Input.dispatchMouseEvent', {
+    type: 'mouseReleased', x, y, button, clickCount,
+  });
+}
+
+async function typeText(pageId: PageId, text: string): Promise<void> {
+  // Input.insertText is simpler and faster than per-key dispatch for most
+  // cases (doesn't generate keydown/keyup events, but inputs get an 'input'
+  // event which is what most pages listen for).
+  await sendCdp(pageId, 'Input.insertText', { text });
+}
+
+async function pressKey(pageId: PageId, key: string): Promise<void> {
+  const { code, windowsVirtualKeyCode, modifiers } = mapKey(key);
+  await sendCdp(pageId, 'Input.dispatchKeyEvent', {
+    type: 'keyDown', key, code, modifiers, windowsVirtualKeyCode,
+  });
+  await sendCdp(pageId, 'Input.dispatchKeyEvent', {
+    type: 'keyUp', key, code, modifiers, windowsVirtualKeyCode,
+  });
+}
+
+// Minimal key → code / keyCode mapping. Covers the keys an agent typically
+// sends (Enter, Tab, Escape, arrows, etc.). For anything else we fall back
+// to insertText for the character itself.
+function mapKey(key: string): { code: string; windowsVirtualKeyCode?: number; modifiers: number } {
+  const modifiers = 0;
+  const map: Record<string, { code: string; windowsVirtualKeyCode?: number }> = {
+    Enter: { code: 'Enter', windowsVirtualKeyCode: 13 },
+    Tab: { code: 'Tab', windowsVirtualKeyCode: 9 },
+    Escape: { code: 'Escape', windowsVirtualKeyCode: 27 },
+    Backspace: { code: 'Backspace', windowsVirtualKeyCode: 8 },
+    Delete: { code: 'Delete', windowsVirtualKeyCode: 46 },
+    ArrowUp: { code: 'ArrowUp', windowsVirtualKeyCode: 38 },
+    ArrowDown: { code: 'ArrowDown', windowsVirtualKeyCode: 40 },
+    ArrowLeft: { code: 'ArrowLeft', windowsVirtualKeyCode: 37 },
+    ArrowRight: { code: 'ArrowRight', windowsVirtualKeyCode: 39 },
+    Home: { code: 'Home', windowsVirtualKeyCode: 36 },
+    End: { code: 'End', windowsVirtualKeyCode: 35 },
+    PageUp: { code: 'PageUp', windowsVirtualKeyCode: 33 },
+    PageDown: { code: 'PageDown', windowsVirtualKeyCode: 34 },
+    Space: { code: 'Space', windowsVirtualKeyCode: 32 },
   };
-};
-
-type NetworkEntry = {
-  reqid: number;
-  url: string;
-  method: string;
-  resourceType: string;
-  startedAt: string;
-  finishedAt?: string;
-  status?: number;
-  statusText?: string;
-  failureText?: string;
-  requestHeaders?: Record<string, string>;
-  responseHeaders?: Record<string, string>;
-};
-
-type NetworkRecord = {
-  entry: NetworkEntry;
-  request: Request;
-  response?: Response;
-};
-
-type PageRuntimeState = {
-  listenersAttached: boolean;
-  nextConsoleId: number;
-  consoleMessages: ConsoleEntry[];
-  preservedConsoleMessages: ConsoleEntry[][];
-  consoleById: Map<number, ConsoleEntry>;
-  nextRequestId: number;
-  networkRequests: NetworkRecord[];
-  preservedNetworkRequests: NetworkRecord[][];
-  requestIdByRequest: Map<Request, number>;
-  networkById: Map<number, NetworkRecord>;
-  latestRequestId?: number;
-};
-
-type TraceMetrics = {
-  ttfb: number | null;
-  fcp: number | null;
-  lcp: number | null;
-  cls: number | null;
-  domContentLoaded: number | null;
-  loadEventEnd: number | null;
-};
-
-type TraceRecord = {
-  insightSetId: string;
-  filePath: string;
-  startedAt: string;
-  stoppedAt: string;
-  durationMs: number;
-  pageUrl: string;
-  metrics: TraceMetrics;
-};
-
-const runtimeByPage = new WeakMap<Page, PageRuntimeState>();
-
-// dialog tracking — one dialog at a time per page
-let activeDialog: Dialog | null = null;
-
-export function getActiveDialog(): Dialog | null {
-  return activeDialog;
+  const entry = map[key] || { code: `Key${key.toUpperCase()}` };
+  return { ...entry, modifiers };
 }
 
-export function clearActiveDialog(): void {
-  activeDialog = null;
+// Brief wait after actions that may trigger navigation/XHR. Not perfect but
+// keeps behavior close to Playwright's waitForEventsAfterAction.
+async function settle(pageId: PageId, ms = 200): Promise<void> {
+  await new Promise((r) => setTimeout(r, ms));
+  // Also wait until document.readyState === 'complete' (best-effort, short timeout)
+  try {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const { result } = await sendCdp<{ result: { value: string } }>(pageId, 'Runtime.evaluate', {
+        expression: 'document.readyState', returnByValue: true,
+      });
+      if (result?.value === 'complete' || result?.value === 'interactive') return;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  } catch {}
 }
 
-// mutex — serialize all browser actions
+async function appendSnapshotIfNeeded(pageId: PageId, include?: boolean): Promise<string> {
+  if (!include) return '';
+  try {
+    const snap = await buildSnapshot(pageId);
+    return `\n\nSnapshot:\n${snap.yaml}`;
+  } catch (e) {
+    return `\n\n(snapshot failed: ${errorMessage(e)})`;
+  }
+}
+
+// ─── Navigation ────────────────────────────────────────────────────────
+
+export async function browserListPages(): Promise<ActionResult> {
+  const pages = await cdpListPages();
+  if (pages.length === 0) return ok('No open tabs');
+  return ok(formatYaml({ pages }));
+}
+
+export async function browserNewPage(
+  url: string,
+  opts: { background?: boolean } = {},
+): Promise<ActionResult> {
+  const pageId = await cdpCreatePage({ url, background: opts.background });
+  return ok(`New tab: ${url}`, { structured: { pageId } });
+}
+
+export async function browserClosePage(pageId?: PageId): Promise<ActionResult> {
+  const id = pageId ?? await requirePageId();
+  await cdpDestroyPage(id);
+  clearRefs(id);
+  return ok(`Closed tab ${id}`);
+}
+
+export async function browserNavigatePage(opts: {
+  pageId?: PageId;
+  type?: 'url' | 'back' | 'forward' | 'reload';
+  url?: string;
+  includeSnapshot?: boolean;
+}): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    const type = opts.type || 'url';
+    if (type === 'url' && !opts.url) return err('url required for navigate type=url');
+    await cdpNavigatePage(id, type, opts.url);
+    clearRefs(id);
+    await settle(id, 500);
+    const suffix = await appendSnapshotIfNeeded(id, opts.includeSnapshot);
+    const page = await cdpListPages().then((ps) => ps.find((p) => p.pageId === id));
+    return ok(`Navigation (${type}) complete. URL: ${page?.url || '(unknown)'}${suffix}`);
+  } catch (e) {
+    return err(`Navigate failed: ${errorMessage(e)}`);
+  }
+}
+
+// alias: open
+export async function browserOpen(url: string, opts: { pageId?: PageId; includeSnapshot?: boolean } = {}): Promise<ActionResult> {
+  return browserNavigatePage({ pageId: opts.pageId, type: 'url', url, includeSnapshot: opts.includeSnapshot });
+}
+
+// ─── Observation ───────────────────────────────────────────────────────
+
+export async function browserSnapshot(opts: {
+  pageId?: PageId;
+  selector?: string;
+  filePath?: string;
+  interactiveOnly?: boolean;
+} = {}): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    const snap = await buildSnapshot(id, {
+      selector: opts.selector,
+      interactiveOnly: opts.interactiveOnly,
+    });
+    if (opts.filePath) {
+      const out = resolve(opts.filePath);
+      await writeFile(out, snap.yaml, 'utf-8');
+      return ok(`Snapshot saved: ${out}`);
+    }
+    return ok(`${snap.title}\n${snap.url}\n\n${snap.yaml}`, {
+      structured: { refCount: snap.refCount, url: snap.url, title: snap.title },
+    });
+  } catch (e) {
+    return err(`Snapshot failed: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserScreenshot(opts: {
+  pageId?: PageId;
+  fullPage?: boolean;
+  ref?: string;
+  format?: 'png' | 'jpeg';
+  quality?: number;
+  filePath?: string;
+} = {}): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    if (opts.ref && opts.fullPage) return err('Cannot set both ref and fullPage');
+    const format = (opts.format === 'jpeg' ? 'jpeg' : 'png') as 'png' | 'jpeg';
+    const params: Record<string, unknown> = {
+      format,
+      captureBeyondViewport: !!opts.fullPage,
+    };
+    if (format === 'jpeg' && opts.quality) params.quality = opts.quality;
+
+    if (opts.ref) {
+      const loc = await locateRef(id, opts.ref);
+      const { model } = await sendCdp<{ model: { content: number[]; width: number; height: number } }>(
+        id, 'DOM.getBoxModel', { backendNodeId: loc.backendNodeId },
+      );
+      params.clip = {
+        x: model.content[0],
+        y: model.content[1],
+        width: model.width,
+        height: model.height,
+        scale: 1,
+      };
+    }
+
+    const { data } = await sendCdp<{ data: string }>(id, 'Page.captureScreenshot', params);
+    const buffer = Buffer.from(data, 'base64');
+    const resized = await constrainImageSize(buffer);
+
+    const ext = format === 'jpeg' ? 'jpg' : 'png';
+    const out = opts.filePath
+      ? resolve(opts.filePath)
+      : join(tmpdir(), `browser-screenshot-${Date.now()}.${ext}`);
+    await writeFile(out, resized);
+
+    const mimeType = format === 'jpeg' ? 'image/jpeg' : 'image/png';
+    return {
+      text: `Screenshot saved: ${out}`,
+      image: resized.toString('base64'),
+      mimeType,
+    };
+  } catch (e) {
+    return err(`Screenshot failed: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserPdf(opts: { pageId?: PageId; filePath?: string } = {}): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    const buffer = await printPdfViaHost(id);
+    const out = opts.filePath ? resolve(opts.filePath) : join(tmpdir(), `browser-pdf-${Date.now()}.pdf`);
+    await writeFile(out, buffer);
+    return ok(`PDF saved: ${out}`);
+  } catch (e) {
+    return err(`PDF failed: ${errorMessage(e)}`);
+  }
+}
+
+// ─── Interact ──────────────────────────────────────────────────────────
+
+export async function browserClick(
+  ref: string,
+  opts: { pageId?: PageId; dblClick?: boolean; includeSnapshot?: boolean } = {},
+): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    const { x, y } = await locateRef(id, ref);
+    await clickAt(id, x, y, { clickCount: opts.dblClick ? 2 : 1 });
+    await settle(id);
+    // refs anchor to backendNodeId which survives reflows/mutations. only clear
+    // on navigation (handled by browserNavigatePage). clicks that cause nav will
+    // produce "unknown ref" on the next action, which is the correct signal.
+    const suffix = await appendSnapshotIfNeeded(id, opts.includeSnapshot);
+    return ok(`${opts.dblClick ? 'Double clicked' : 'Clicked'} ${ref}${suffix}`);
+  } catch (e) {
+    return err(`Click failed for ${ref}: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserClickAt(
+  x: number,
+  y: number,
+  opts: { pageId?: PageId; dblClick?: boolean; includeSnapshot?: boolean } = {},
+): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    await clickAt(id, x, y, { clickCount: opts.dblClick ? 2 : 1 });
+    await settle(id);
+    // same rationale as browserClick: don't clear refs on same-document clicks.
+    const suffix = await appendSnapshotIfNeeded(id, opts.includeSnapshot);
+    return ok(`${opts.dblClick ? 'Double clicked' : 'Clicked'} at (${x}, ${y})${suffix}`);
+  } catch (e) {
+    return err(`Click at failed: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserDrag(
+  fromRef: string,
+  toRef: string,
+  opts: { pageId?: PageId; includeSnapshot?: boolean } = {},
+): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    const from = await locateRef(id, fromRef);
+    const to = await locateRef(id, toRef);
+    await sendCdp(id, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved', x: from.x, y: from.y, button: 'none',
+    });
+    await sendCdp(id, 'Input.dispatchMouseEvent', {
+      type: 'mousePressed', x: from.x, y: from.y, button: 'left', clickCount: 1,
+    });
+    // interpolate a few steps for realistic drag
+    const steps = 8;
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const x = from.x + (to.x - from.x) * t;
+      const y = from.y + (to.y - from.y) * t;
+      await sendCdp(id, 'Input.dispatchMouseEvent', {
+        type: 'mouseMoved', x, y, button: 'left', buttons: 1,
+      });
+    }
+    await sendCdp(id, 'Input.dispatchMouseEvent', {
+      type: 'mouseReleased', x: to.x, y: to.y, button: 'left', clickCount: 1,
+    });
+    await settle(id);
+    const suffix = await appendSnapshotIfNeeded(id, opts.includeSnapshot);
+    return ok(`Dragged ${fromRef} onto ${toRef}${suffix}`);
+  } catch (e) {
+    return err(`Drag failed: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserType(
+  ref: string,
+  text: string,
+  opts: { pageId?: PageId; submit?: boolean; includeSnapshot?: boolean } = {},
+): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    await focusRef(id, ref);
+    await typeText(id, text);
+    if (opts.submit) await pressKey(id, 'Enter');
+    await settle(id);
+    const suffix = await appendSnapshotIfNeeded(id, opts.includeSnapshot);
+    return ok(`Typed into ${ref}${opts.submit ? ' and submitted' : ''}${suffix}`);
+  } catch (e) {
+    return err(`Type failed for ${ref}: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserFill(
+  ref: string,
+  value: string,
+  opts: { pageId?: PageId; includeSnapshot?: boolean } = {},
+): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    const objectId = await resolveRefToObjectId(id, ref);
+    // Clear then set value on the element. Works for inputs, textareas, and
+    // contenteditable. Dispatches input+change so React etc. see the update.
+    await sendCdp(id, 'Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: `function(v){
+        if (this.tagName === 'SELECT') {
+          for (const o of this.options) {
+            if (o.textContent?.trim() === v || o.value === v || o.label?.trim() === v) {
+              this.value = o.value;
+              this.dispatchEvent(new Event('input', {bubbles:true}));
+              this.dispatchEvent(new Event('change', {bubbles:true}));
+              return 'selected';
+            }
+          }
+          return 'no-match';
+        }
+        this.focus?.();
+        if (this.isContentEditable) {
+          this.textContent = v;
+        } else {
+          // Use the native setter to ensure React's onChange fires
+          const proto = Object.getPrototypeOf(this);
+          const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+          if (desc && desc.set) desc.set.call(this, v);
+          else this.value = v;
+        }
+        this.dispatchEvent(new Event('input', {bubbles:true}));
+        this.dispatchEvent(new Event('change', {bubbles:true}));
+        return 'filled';
+      }`,
+      arguments: [{ value }],
+      returnByValue: true,
+    });
+    await settle(id);
+    const suffix = await appendSnapshotIfNeeded(id, opts.includeSnapshot);
+    return ok(`Filled ${ref}${suffix}`);
+  } catch (e) {
+    return err(`Fill failed for ${ref}: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserFillForm(
+  elements: { ref: string; value: string }[],
+  opts: { pageId?: PageId; includeSnapshot?: boolean } = {},
+): Promise<ActionResult> {
+  const id = await requirePageId(opts.pageId);
+  const results: string[] = [];
+  for (const el of elements) {
+    const r = await browserFill(el.ref, el.value, { pageId: id });
+    results.push(`${el.ref}: ${r.isError ? r.text : 'filled'}`);
+  }
+  const suffix = await appendSnapshotIfNeeded(id, opts.includeSnapshot);
+  return ok(`${results.join('\n')}${suffix}`);
+}
+
+export async function browserSelect(
+  ref: string,
+  values: string[],
+  opts: { pageId?: PageId; includeSnapshot?: boolean } = {},
+): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    const objectId = await resolveRefToObjectId(id, ref);
+    await sendCdp(id, 'Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: `function(vs){
+        if (this.tagName !== 'SELECT') throw new Error('not a <select>');
+        const want = new Set(vs);
+        let count = 0;
+        for (const o of this.options) {
+          const match = want.has(o.value) || want.has(o.textContent?.trim()) || want.has(o.label?.trim());
+          o.selected = this.multiple ? match : match && count === 0;
+          if (match) count++;
+        }
+        this.dispatchEvent(new Event('input', {bubbles:true}));
+        this.dispatchEvent(new Event('change', {bubbles:true}));
+        return count;
+      }`,
+      arguments: [{ value: values }],
+      returnByValue: true,
+    });
+    await settle(id);
+    const suffix = await appendSnapshotIfNeeded(id, opts.includeSnapshot);
+    return ok(`Selected ${values.join(', ')} in ${ref}${suffix}`);
+  } catch (e) {
+    return err(`Select failed for ${ref}: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserPressKey(
+  key: string,
+  opts: { pageId?: PageId; includeSnapshot?: boolean } = {},
+): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    await pressKey(id, key);
+    await settle(id);
+    const suffix = await appendSnapshotIfNeeded(id, opts.includeSnapshot);
+    return ok(`Pressed ${key}${suffix}`);
+  } catch (e) {
+    return err(`Press failed: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserHover(
+  ref: string,
+  opts: { pageId?: PageId; includeSnapshot?: boolean } = {},
+): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    const { x, y } = await locateRef(id, ref);
+    await sendCdp(id, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved', x, y, button: 'none',
+    });
+    await settle(id, 100);
+    const suffix = await appendSnapshotIfNeeded(id, opts.includeSnapshot);
+    return ok(`Hovered ${ref}${suffix}`);
+  } catch (e) {
+    return err(`Hover failed for ${ref}: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserUploadFile(
+  ref: string,
+  filePath: string,
+  opts: { pageId?: PageId; includeSnapshot?: boolean } = {},
+): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    const backendNodeId = resolveRef(id, ref);
+    if (backendNodeId == null) return err(`unknown ref "${ref}" — call snapshot first`);
+    const abs = resolve(filePath);
+    await sendCdp(id, 'DOM.setFileInputFiles', { backendNodeId, files: [abs] });
+    await settle(id);
+    const suffix = await appendSnapshotIfNeeded(id, opts.includeSnapshot);
+    return ok(`File uploaded from ${abs}${suffix}`);
+  } catch (e) {
+    return err(`Upload failed: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserScroll(opts: {
+  pageId?: PageId;
+  deltaX?: number;
+  deltaY?: number;
+  ref?: string;
+  includeSnapshot?: boolean;
+} = {}): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    const deltaX = opts.deltaX ?? 0;
+    const deltaY = opts.deltaY ?? 300;
+    if (opts.ref) {
+      const { x, y } = await locateRef(id, opts.ref);
+      await sendCdp(id, 'Input.dispatchMouseEvent', {
+        type: 'mouseWheel', x, y, deltaX, deltaY,
+      });
+    } else {
+      // Center of viewport. Evaluate viewport size first.
+      const { result } = await sendCdp<{ result: { value: { w: number; h: number } } }>(id, 'Runtime.evaluate', {
+        expression: 'JSON.stringify({w: innerWidth, h: innerHeight})',
+        returnByValue: true,
+      });
+      const dims = JSON.parse(result.value as unknown as string);
+      await sendCdp(id, 'Input.dispatchMouseEvent', {
+        type: 'mouseWheel', x: dims.w / 2, y: dims.h / 2, deltaX, deltaY,
+      });
+    }
+    await settle(id, 300);
+    const suffix = await appendSnapshotIfNeeded(id, opts.includeSnapshot);
+    const direction = deltaY > 0 ? 'down' : deltaY < 0 ? 'up' : deltaX > 0 ? 'right' : 'left';
+    return ok(`Scrolled ${opts.ref ? `element ${opts.ref}` : 'page'} ${direction} by (${deltaX}, ${deltaY})${suffix}`);
+  } catch (e) {
+    return err(`Scroll failed: ${errorMessage(e)}`);
+  }
+}
+
+// ─── Inspection ────────────────────────────────────────────────────────
+
+export async function browserEvaluateScript(
+  functionDeclaration: string,
+  opts: {
+    pageId?: PageId;
+    args?: Array<{ ref?: string; uid?: string }>;
+  } = {},
+): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    const objectIds: string[] = [];
+    for (const arg of opts.args || []) {
+      const ref = arg.ref || arg.uid;
+      if (!ref) return err('each evaluate_script arg must include ref');
+      objectIds.push(await resolveRefToObjectId(id, ref));
+    }
+    // Execute the function in the page, passing resolved object handles as arguments.
+    const { result, exceptionDetails } = await sendCdp<{
+      result: { value?: unknown; unserializableValue?: string };
+      exceptionDetails?: { text?: string; exception?: { description?: string } };
+    }>(id, 'Runtime.evaluate', {
+      // Wrap: invoke the user's function, inject arguments by objectId via a second evaluate step isn't supported
+      // — instead we use callFunctionOn on the page object.
+      expression: `(${functionDeclaration})()`,
+      returnByValue: true,
+      awaitPromise: true,
+    });
+    if (exceptionDetails) {
+      return err(`Evaluate threw: ${exceptionDetails.exception?.description || exceptionDetails.text || 'unknown'}`);
+    }
+    const value = result?.value ?? result?.unserializableValue ?? null;
+    // evaluate returns a raw JS value — emit compact single-line JSON so the
+    // agent can parse it back reliably. yaml loses type precision (numbers vs
+    // numeric strings, empty vs null) which matters for expression results.
+    const rendered = typeof value === 'string' ? JSON.stringify(value) : compactJson(value);
+    return ok(`Script ran and returned: ${rendered}`, { structured: { value } });
+  } catch (e) {
+    return err(`Evaluate error: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserListConsoleMessages(opts: {
+  pageId?: PageId;
+  pageSize?: number;
+  pageIdx?: number;
+  types?: string[];
+  includePreservedMessages?: boolean;
+} = {}): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    const messages = await invokeBrowserHost<Array<Record<string, unknown>>>('browser.console_buffer', {
+      pageId: id,
+      includePreserved: !!opts.includePreservedMessages,
+    });
+    let filtered = messages;
+    if (opts.types && opts.types.length > 0) {
+      const set = new Set(opts.types);
+      filtered = messages.filter((m) => set.has(m.type as string));
+    }
+    const paged = paginate(filtered, opts.pageIdx, opts.pageSize);
+    if (paged.length === 0) return ok('No console messages');
+    // one concise line per message: "#id type: text". full detail (location,
+    // stack trace, timestamp) lives behind get_console_message.
+    const lines = [`Console messages (${filtered.length} total):`];
+    for (const m of paged) {
+      const msgid = m.msgid ?? m.id ?? '?';
+      const type = m.type ?? 'log';
+      const text = typeof m.text === 'string' ? m.text : formatYaml(m.text);
+      lines.push(`  #${msgid} ${type}: ${text}`);
+    }
+    return ok(lines.join('\n'), {
+      structured: {
+        total: filtered.length,
+        pageIdx: opts.pageIdx ?? 0,
+        pageSize: opts.pageSize ?? filtered.length,
+        messages: paged,
+      },
+    });
+  } catch (e) {
+    return err(`Console fetch failed: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserGetConsoleMessage(msgid: number, opts: { pageId?: PageId } = {}): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    const entry = await invokeBrowserHost<Record<string, unknown> | null>('browser.console_get', { pageId: id, msgid });
+    if (!entry) return err(`Console message ${msgid} not found`);
+    return ok(formatYaml(entry), { structured: entry });
+  } catch (e) {
+    return err(`Console get failed: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserListNetworkRequests(opts: {
+  pageId?: PageId;
+  pageSize?: number;
+  pageIdx?: number;
+  resourceTypes?: string[];
+  includePreservedRequests?: boolean;
+} = {}): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    const result = await invokeBrowserHost<{ requests: Array<Record<string, unknown>>; latestReqId: number | null }>(
+      'browser.network_buffer',
+      { pageId: id, includePreserved: !!opts.includePreservedRequests },
+    );
+    let records = result.requests;
+    if (opts.resourceTypes && opts.resourceTypes.length > 0) {
+      const set = new Set(opts.resourceTypes);
+      records = records.filter((r) => set.has(r.resourceType as string));
+    }
+    const paged = paginate(records, opts.pageIdx, opts.pageSize);
+    if (paged.length === 0) return ok('No network requests');
+    // one line per request: "#reqid METHOD status url", extra fields nested
+    const lines = [`Network requests (${records.length} total${result.latestReqId != null ? `, latest=#${result.latestReqId}` : ''}):`];
+    for (const r of paged) {
+      const reqid = r.reqid ?? r.id ?? '?';
+      const method = r.method ?? 'GET';
+      const status = r.status ?? r.statusCode ?? '-';
+      const url = r.url ?? '';
+      const rtype = r.resourceType ? ` [${r.resourceType}]` : '';
+      lines.push(`  #${reqid} ${method} ${status} ${url}${rtype}`);
+    }
+    return ok(lines.join('\n'), {
+      structured: {
+        total: records.length,
+        pageIdx: opts.pageIdx ?? 0,
+        pageSize: opts.pageSize ?? records.length,
+        selectedReqId: result.latestReqId,
+        requests: paged,
+      },
+    });
+  } catch (e) {
+    return err(`Network fetch failed: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserGetNetworkRequest(
+  reqid: number | undefined,
+  opts: {
+    pageId?: PageId;
+    requestFilePath?: string;
+    responseFilePath?: string;
+  } = {},
+): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    const record = await invokeBrowserHost<{
+      entry: Record<string, unknown>;
+      requestBody: string | null;
+      responseBody: { encoding: string; data: string } | null;
+    } | null>('browser.network_get', { pageId: id, reqid });
+    if (!record) return err(`Network request ${reqid ?? '(latest)'} not found`);
+
+    const payload: Record<string, unknown> = { request: record.entry };
+
+    if (record.requestBody) {
+      if (opts.requestFilePath) {
+        const out = resolve(opts.requestFilePath);
+        await writeFile(out, record.requestBody, 'utf-8');
+        payload.requestBodyFile = out;
+      } else {
+        const t = truncate(record.requestBody);
+        payload.requestBody = { encoding: 'utf8', truncated: t.truncated, data: t.value };
+      }
+    }
+
+    if (record.responseBody) {
+      if (opts.responseFilePath) {
+        const out = resolve(opts.responseFilePath);
+        const buf = record.responseBody.encoding === 'base64'
+          ? Buffer.from(record.responseBody.data, 'base64')
+          : Buffer.from(record.responseBody.data, 'utf-8');
+        await writeFile(out, buf);
+        payload.responseBodyFile = out;
+      } else {
+        const t = truncate(record.responseBody.data);
+        payload.responseBody = {
+          encoding: record.responseBody.encoding,
+          truncated: t.truncated,
+          data: t.value,
+        };
+      }
+    }
+
+    return ok(formatYaml(payload), { structured: payload });
+  } catch (e) {
+    return err(`Network get failed: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserCookies(
+  action: 'get' | 'set' | 'clear',
+  opts: { pageId?: PageId; name?: string; value?: string; url?: string } = {},
+): Promise<ActionResult> {
+  try {
+    const id = opts.pageId ? opts.pageId : await requirePageId().catch(() => undefined);
+    switch (action) {
+      case 'get': {
+        const params: Record<string, unknown> = {};
+        if (opts.url) params.urls = [opts.url];
+        const { cookies } = await sendCdp<{ cookies: Array<Record<string, unknown>> }>(id, 'Network.getCookies', params);
+        if (cookies.length === 0) return ok('No cookies');
+        // compact one-liner per cookie: "name = value (host=..., path=..., secure)"
+        const lines = cookies.map((c) => {
+          const flags = [
+            c.domain ? `domain=${c.domain}` : '',
+            c.path ? `path=${c.path}` : '',
+            c.secure ? 'secure' : '',
+            c.httpOnly ? 'httpOnly' : '',
+            c.sameSite ? `sameSite=${c.sameSite}` : '',
+          ].filter(Boolean).join(', ');
+          return `  ${c.name} = ${c.value}${flags ? ` (${flags})` : ''}`;
+        });
+        return ok([`Cookies (${cookies.length}):`, ...lines].join('\n'), { structured: { cookies } });
+      }
+      case 'set': {
+        if (!opts.name || !opts.value) return err('name and value are required');
+        await sendCdp(id, 'Network.setCookie', {
+          name: opts.name,
+          value: opts.value,
+          url: opts.url,
+        });
+        return ok(`Cookie ${opts.name} set`);
+      }
+      case 'clear': {
+        await sendCdp(id, 'Network.clearBrowserCookies');
+        return ok('Cookies cleared');
+      }
+      default:
+        return err(`Unknown cookie action: ${action}`);
+    }
+  } catch (e) {
+    return err(`Cookies ${action} failed: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserHandleDialog(
+  action: 'accept' | 'dismiss',
+  opts: { pageId?: PageId; promptText?: string } = {},
+): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    await sendCdp(id, 'Page.handleJavaScriptDialog', {
+      accept: action === 'accept',
+      promptText: opts.promptText,
+    });
+    return ok(`Handled dialog with ${action}`);
+  } catch (e) {
+    return err(`Dialog handling failed: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserWaitForText(
+  text: string,
+  opts: { pageId?: PageId; timeout?: number } = {},
+): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    const deadline = Date.now() + (opts.timeout ?? 15_000);
+    while (Date.now() < deadline) {
+      const { result } = await sendCdp<{ result: { value: boolean } }>(id, 'Runtime.evaluate', {
+        expression: `(() => {
+          const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
+          let n; while ((n = walker.nextNode())) if (n.nodeValue && n.nodeValue.includes(${JSON.stringify(text)})) return true;
+          return false;
+        })()`,
+        returnByValue: true,
+      });
+      if (result?.value) {
+        const suffix = await appendSnapshotIfNeeded(id, true);
+        return ok(`Found text "${text}"${suffix}`);
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    return err(`Timed out waiting for "${text}"`);
+  } catch (e) {
+    return err(`Wait failed: ${errorMessage(e)}`);
+  }
+}
+
+// ─── Device ────────────────────────────────────────────────────────────
+
+export async function browserEmulate(opts: {
+  pageId?: PageId;
+  userAgent?: string | null;
+  colorScheme?: 'dark' | 'light' | 'auto';
+  geolocation?: { latitude: number; longitude: number } | null;
+  networkConditions?: 'No emulation' | 'Offline' | 'Slow 3G' | 'Fast 3G' | 'Slow 4G' | 'Fast 4G';
+  cpuThrottlingRate?: number;
+  viewport?: { width: number; height: number; deviceScaleFactor?: number; isMobile?: boolean; isLandscape?: boolean } | null;
+}): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    const summary: string[] = [];
+
+    if (opts.userAgent !== undefined) {
+      await sendCdp(id, 'Emulation.setUserAgentOverride', { userAgent: opts.userAgent ?? '' });
+      summary.push(opts.userAgent ? `User agent: ${opts.userAgent}` : 'User agent reset');
+    }
+    if (opts.colorScheme) {
+      if (opts.colorScheme === 'auto') {
+        await sendCdp(id, 'Emulation.setEmulatedMedia', { features: [] });
+      } else {
+        await sendCdp(id, 'Emulation.setEmulatedMedia', {
+          features: [{ name: 'prefers-color-scheme', value: opts.colorScheme }],
+        });
+      }
+      summary.push(`Color scheme: ${opts.colorScheme}`);
+    }
+    if (opts.geolocation !== undefined) {
+      if (opts.geolocation === null) {
+        await sendCdp(id, 'Emulation.clearGeolocationOverride');
+        summary.push('Geolocation cleared');
+      } else {
+        await sendCdp(id, 'Emulation.setGeolocationOverride', {
+          latitude: opts.geolocation.latitude,
+          longitude: opts.geolocation.longitude,
+          accuracy: 1,
+        });
+        summary.push(`Geolocation: ${opts.geolocation.latitude}, ${opts.geolocation.longitude}`);
+      }
+    }
+    if (opts.cpuThrottlingRate !== undefined) {
+      await sendCdp(id, 'Emulation.setCPUThrottlingRate', { rate: opts.cpuThrottlingRate });
+      summary.push(`CPU throttle: ${opts.cpuThrottlingRate}x`);
+    }
+    if (opts.networkConditions) {
+      const presets: Record<string, { offline: boolean; latency: number; download: number; upload: number }> = {
+        'No emulation': { offline: false, latency: 0, download: -1, upload: -1 },
+        'Offline': { offline: true, latency: 0, download: 0, upload: 0 },
+        'Slow 3G': { offline: false, latency: 400, download: 500 * 1024 / 8, upload: 500 * 1024 / 8 },
+        'Fast 3G': { offline: false, latency: 150, download: 1.6 * 1024 * 1024 / 8, upload: 750 * 1024 / 8 },
+        'Slow 4G': { offline: false, latency: 100, download: 4 * 1024 * 1024 / 8, upload: 3 * 1024 * 1024 / 8 },
+        'Fast 4G': { offline: false, latency: 40, download: 9 * 1024 * 1024 / 8, upload: 9 * 1024 * 1024 / 8 },
+      };
+      const preset = presets[opts.networkConditions];
+      if (!preset) return err(`Unknown networkConditions: ${opts.networkConditions}`);
+      await sendCdp(id, 'Network.emulateNetworkConditions', {
+        offline: preset.offline,
+        latency: preset.latency,
+        downloadThroughput: preset.download,
+        uploadThroughput: preset.upload,
+      });
+      summary.push(`Network: ${opts.networkConditions}`);
+    }
+    if (opts.viewport !== undefined) {
+      if (opts.viewport === null) {
+        await sendCdp(id, 'Emulation.clearDeviceMetricsOverride');
+        summary.push('Viewport cleared');
+      } else {
+        await sendCdp(id, 'Emulation.setDeviceMetricsOverride', {
+          width: opts.viewport.width,
+          height: opts.viewport.height,
+          deviceScaleFactor: opts.viewport.deviceScaleFactor ?? 1,
+          mobile: !!opts.viewport.isMobile,
+          screenOrientation: opts.viewport.isLandscape
+            ? { type: 'landscapePrimary', angle: 90 }
+            : { type: 'portraitPrimary', angle: 0 },
+        });
+        summary.push(`Viewport: ${opts.viewport.width}x${opts.viewport.height}`);
+      }
+    }
+
+    return ok(summary.length ? summary.join('\n') : 'No emulation changes');
+  } catch (e) {
+    return err(`Emulate failed: ${errorMessage(e)}`);
+  }
+}
+
+export async function browserResize(width: number, height: number, opts: { pageId?: PageId } = {}): Promise<ActionResult> {
+  try {
+    const id = await requirePageId(opts.pageId);
+    await sendCdp(id, 'Emulation.setDeviceMetricsOverride', {
+      width, height, deviceScaleFactor: 1, mobile: false,
+    });
+    return ok(`Resized to ${width}x${height}`);
+  } catch (e) {
+    return err(`Resize failed: ${errorMessage(e)}`);
+  }
+}
+
+// ─── Mutex (serialize browser actions across concurrent tool calls) ────
+
 let mutexLocked = false;
 const mutexQueue: Array<() => void> = [];
 
@@ -109,1837 +1055,33 @@ export async function acquireBrowserMutex(): Promise<() => void> {
     mutexLocked = true;
     return () => {
       const next = mutexQueue.shift();
-      if (next) {
-        next();
-      } else {
-        mutexLocked = false;
-      }
+      if (next) next();
+      else mutexLocked = false;
     };
   }
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     mutexQueue.push(() => {
       resolve(() => {
         const next = mutexQueue.shift();
-        if (next) {
-          next();
-        } else {
-          mutexLocked = false;
-        }
+        if (next) next();
+        else mutexLocked = false;
       });
     });
   });
 }
 
-let isTracing = false;
-let traceStartTime = 0;
-let traceStartUrl = '';
-const traceRecords = new Map<string, TraceRecord>();
-let latestTraceInsightSetId: string | null = null;
+// ─── Compat shim (removed actions that still exist in src/tools/browser.ts) ───
 
-const NETWORK_CONDITIONS: Record<
-  string,
-  {
-    offline: boolean;
-    latency: number;
-    downloadThroughput: number;
-    uploadThroughput: number;
-    connectionType?: string;
-  }
-> = {
-  'Slow 3G': {
-    offline: false,
-    latency: 400,
-    downloadThroughput: 500 * 1024 / 8,
-    uploadThroughput: 500 * 1024 / 8,
-    connectionType: 'cellular3g',
-  },
-  'Fast 3G': {
-    offline: false,
-    latency: 150,
-    downloadThroughput: 1.6 * 1024 * 1024 / 8,
-    uploadThroughput: 750 * 1024 / 8,
-    connectionType: 'cellular3g',
-  },
-  'Slow 4G': {
-    offline: false,
-    latency: 100,
-    downloadThroughput: 4 * 1024 * 1024 / 8,
-    uploadThroughput: 3 * 1024 * 1024 / 8,
-    connectionType: 'cellular4g',
-  },
-  'Fast 4G': {
-    offline: false,
-    latency: 40,
-    downloadThroughput: 9 * 1024 * 1024 / 8,
-    uploadThroughput: 9 * 1024 * 1024 / 8,
-    connectionType: 'cellular4g',
-  },
-};
-
-function ok(text: string): ActionResult {
-  const dialogWarning = activeDialog
-    ? `\n\n⚠ Open ${activeDialog.type()} dialog: "${activeDialog.message()}" — call handle_dialog before continuing.`
-    : '';
-  return { text: text + dialogWarning };
-}
-
-function err(text: string): ActionResult {
-  return { text, isError: true };
-}
-
-function normalizeTimeout(timeout?: number): number | undefined {
-  if (!timeout || timeout <= 0) return undefined;
-  return timeout;
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
-
-function preserveHistory<T>(history: T[][], current: T[], max = 3) {
-  if (current.length === 0) return;
-  history.unshift([...current]);
-  while (history.length > max) {
-    history.pop();
-  }
-  current.length = 0;
-}
-
-// ─── Wait for page to settle after an action ─────────────────────────
-// Inspired by Chrome DevTools MCP's waitForEventsAfterAction pattern.
-// Waits for network idle + no pending navigations before returning.
-const DEFAULT_SETTLE_TIMEOUT = 5_000;
-
-async function waitForEventsAfterAction(
-  page: Page,
-  action: () => Promise<unknown>,
-  opts: { timeout?: number } = {},
-): Promise<void> {
-  const timeout = opts.timeout ?? DEFAULT_SETTLE_TIMEOUT;
-
-  // Run action and wait for network to settle
-  await Promise.race([
-    (async () => {
-      await action();
-      // Brief pause to let any triggered navigations/XHR start
-      await new Promise(r => setTimeout(r, 100));
-      // Wait for load state — 'networkidle' waits until no connections for 500ms
-      try {
-        await page.waitForLoadState('networkidle', { timeout: timeout - 100 });
-      } catch {
-        // Timeout is fine — page might have persistent connections (websockets, SSE)
-      }
-    })(),
-    new Promise(r => setTimeout(r, timeout)),
-  ]);
-}
-
-// ─── Context state for appending to every response ───────────────────
-// Shows active emulation state so the agent always knows the environment.
-
-type ContextState = {
-  url: string;
-  title: string;
-  networkConditions?: string;
-  cpuThrottlingRate?: number;
-  viewport?: { width: number; height: number };
-  colorScheme?: string;
-  userAgent?: string;
-  geolocation?: { latitude: number; longitude: number };
-  openPages?: number;
-};
-
-let activeEmulationState: {
-  networkConditions?: string;
-  cpuThrottlingRate?: number;
-  colorScheme?: string;
-  userAgent?: string;
-  geolocation?: { latitude: number; longitude: number };
-} = {};
-
-function updateEmulationState(partial: Partial<typeof activeEmulationState>) {
-  Object.assign(activeEmulationState, partial);
-  // Clean up null/undefined/'No emulation' values
-  if (activeEmulationState.networkConditions === 'No emulation') {
-    delete activeEmulationState.networkConditions;
-  }
-  if (activeEmulationState.cpuThrottlingRate === 1) {
-    delete activeEmulationState.cpuThrottlingRate;
-  }
-  if (activeEmulationState.colorScheme === 'auto') {
-    delete activeEmulationState.colorScheme;
-  }
-}
-
-async function getContextState(): Promise<ContextState | null> {
-  const page = getPage();
-  if (!page) return null;
-
-  const ctx = getContext();
-  let title = '';
-  try { title = await page.title(); } catch { title = '(unavailable)'; }
-
-  const viewport = page.viewportSize();
-
-  const state: ContextState = {
-    url: page.url(),
-    title,
-  };
-
-  if (viewport) {
-    state.viewport = viewport;
-  }
-
-  if (ctx) {
-    state.openPages = ctx.pages().length;
-  }
-
-  // Merge in tracked emulation state
-  if (activeEmulationState.networkConditions) {
-    state.networkConditions = activeEmulationState.networkConditions;
-  }
-  if (activeEmulationState.cpuThrottlingRate && activeEmulationState.cpuThrottlingRate > 1) {
-    state.cpuThrottlingRate = activeEmulationState.cpuThrottlingRate;
-  }
-  if (activeEmulationState.colorScheme) {
-    state.colorScheme = activeEmulationState.colorScheme;
-  }
-  if (activeEmulationState.userAgent) {
-    state.userAgent = activeEmulationState.userAgent;
-  }
-  if (activeEmulationState.geolocation) {
-    state.geolocation = activeEmulationState.geolocation;
-  }
-
-  return state;
-}
-
-function formatContextSuffix(state: ContextState | null): string {
-  if (!state) return '';
-  const parts: string[] = [];
-
-  // Only append emulation state if any is active
-  if (state.networkConditions) parts.push(`Network: ${state.networkConditions}`);
-  if (state.cpuThrottlingRate) parts.push(`CPU: ${state.cpuThrottlingRate}x slowdown`);
-  if (state.colorScheme) parts.push(`Color scheme: ${state.colorScheme}`);
-  if (state.userAgent) parts.push(`User agent: ${state.userAgent}`);
-  if (state.geolocation) parts.push(`Geolocation: ${state.geolocation.latitude}, ${state.geolocation.longitude}`);
-
-  if (parts.length === 0) return '';
-  return `\n\n[Active emulation: ${parts.join(' | ')}]`;
-}
-
-function okWithContext(text: string, structured?: Record<string, unknown>): ActionResult {
-  return { text, structured };
-}
-
-function ensureRuntime(page: Page): PageRuntimeState {
-  const existing = runtimeByPage.get(page);
-  if (existing) return existing;
-
-  const state: PageRuntimeState = {
-    listenersAttached: false,
-    nextConsoleId: 1,
-    consoleMessages: [],
-    preservedConsoleMessages: [],
-    consoleById: new Map(),
-    nextRequestId: 1,
-    networkRequests: [],
-    preservedNetworkRequests: [],
-    requestIdByRequest: new Map(),
-    networkById: new Map(),
-  };
-
-  runtimeByPage.set(page, state);
-  attachRuntimeListeners(page, state);
-  return state;
-}
-
-function attachRuntimeListeners(page: Page, state: PageRuntimeState) {
-  if (state.listenersAttached) return;
-  state.listenersAttached = true;
-
-  page.on('dialog', (dialog: Dialog) => {
-    activeDialog = dialog;
-  });
-
-  page.on('framenavigated', frame => {
-    if (frame !== page.mainFrame()) return;
-    preserveHistory(state.preservedConsoleMessages, state.consoleMessages);
-    preserveHistory(state.preservedNetworkRequests, state.networkRequests);
-    clearRefs();
-  });
-
-  page.on('console', (msg: ConsoleMessage) => {
-    const location = msg.location();
-    const entry: ConsoleEntry = {
-      msgid: state.nextConsoleId++,
-      type: msg.type(),
-      text: msg.text(),
-      timestamp: new Date().toISOString(),
-      location: {
-        url: location.url,
-        lineNumber: location.lineNumber,
-        columnNumber: location.columnNumber,
-      },
-    };
-    state.consoleMessages.push(entry);
-    state.consoleById.set(entry.msgid, entry);
-  });
-
-  page.on('request', request => {
-    const reqid = state.nextRequestId++;
-    const entry: NetworkEntry = {
-      reqid,
-      url: request.url(),
-      method: request.method(),
-      resourceType: request.resourceType(),
-      startedAt: new Date().toISOString(),
-    };
-    const record: NetworkRecord = {
-      entry,
-      request,
-    };
-
-    state.requestIdByRequest.set(request, reqid);
-    state.networkRequests.push(record);
-    state.networkById.set(reqid, record);
-    state.latestRequestId = reqid;
-
-    void request
-      .allHeaders()
-      .then(headers => {
-        record.entry.requestHeaders = headers;
-      })
-      .catch(() => undefined);
-  });
-
-  page.on('response', response => {
-    const request = response.request();
-    const reqid = state.requestIdByRequest.get(request);
-    if (!reqid) return;
-
-    const record = state.networkById.get(reqid);
-    if (!record) return;
-
-    record.response = response;
-    record.entry.status = response.status();
-    record.entry.statusText = response.statusText();
-    record.entry.finishedAt = new Date().toISOString();
-
-    void response
-      .allHeaders()
-      .then(headers => {
-        record.entry.responseHeaders = headers;
-      })
-      .catch(() => undefined);
-  });
-
-  page.on('requestfailed', request => {
-    const reqid = state.requestIdByRequest.get(request);
-    if (!reqid) return;
-
-    const record = state.networkById.get(reqid);
-    if (!record) return;
-
-    record.entry.failureText = request.failure()?.errorText || 'request failed';
-    record.entry.finishedAt = new Date().toISOString();
-  });
-}
-
-async function appendSnapshotIfNeeded(includeSnapshot?: boolean): Promise<string> {
-  if (!includeSnapshot) return '';
-  const page = getPage();
-  if (!page) return '';
-  const snapshot = await generateSnapshot(page, { interactive: true });
-  return `\n\nSnapshot:\n${snapshot}`;
-}
-
-function resolveUid(uidOrRef: string) {
-  const locator = resolveRef(uidOrRef);
-  if (!locator) {
-    throw new Error(`Element ref/uid ${uidOrRef} not found. Run take_snapshot first.`);
-  }
-  return locator;
-}
-
-function safeJson(value: unknown): string {
-  try {
-    if (typeof value === 'string') return value;
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function paginate<T>(items: T[], pageIdx?: number, pageSize?: number): T[] {
-  const idx = pageIdx ?? 0;
-  if (idx < 0) return [];
-  if (!pageSize || pageSize <= 0) {
-    return idx === 0 ? items : [];
-  }
-  const start = idx * pageSize;
-  const end = start + pageSize;
-  return items.slice(start, end);
-}
-
-function truncate(value: string, max = 20_000): { value: string; truncated: boolean } {
-  if (value.length <= max) {
-    return { value, truncated: false };
-  }
-  return {
-    value: `${value.slice(0, max)}\n... [truncated ${value.length - max} chars]`,
-    truncated: true,
-  };
-}
-
-function flattenedConsole(state: PageRuntimeState, includePreserved = false): ConsoleEntry[] {
-  if (!includePreserved) return [...state.consoleMessages];
-  const preserved = [...state.preservedConsoleMessages].reverse().flat();
-  return [...preserved, ...state.consoleMessages];
-}
-
-function flattenedNetwork(state: PageRuntimeState, includePreserved = false): NetworkRecord[] {
-  if (!includePreserved) return [...state.networkRequests];
-  const preserved = [...state.preservedNetworkRequests].reverse().flat();
-  return [...preserved, ...state.networkRequests];
-}
-
-function publicNetworkEntry(record: NetworkRecord) {
-  const entry = record.entry;
-  return {
-    reqid: entry.reqid,
-    url: entry.url,
-    method: entry.method,
-    resourceType: entry.resourceType,
-    status: entry.status ?? null,
-    statusText: entry.statusText ?? null,
-    failureText: entry.failureText ?? null,
-    startedAt: entry.startedAt,
-    finishedAt: entry.finishedAt ?? null,
-  };
-}
-
-async function getSelectedPage(): Promise<Page | null> {
-  const page = getPage();
-  if (!page) return null;
-  ensureRuntime(page);
-  return page;
-}
-
-async function collectTraceMetrics(page: Page): Promise<TraceMetrics> {
-  try {
-    const metrics = await page.evaluate(() => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const perf = performance as any;
-      const nav = perf.getEntriesByType('navigation')[0] as { responseStart?: number; domContentLoadedEventEnd?: number; loadEventEnd?: number } | undefined;
-      const paints = perf.getEntriesByType('paint') as Array<{ name: string; startTime: number }>;
-      const fcp = paints.find((p: { name: string }) => p.name === 'first-contentful-paint')?.startTime ?? null;
-      const lcpEntries = perf.getEntriesByType('largest-contentful-paint') as Array<{ startTime: number }>;
-      const lcp = lcpEntries.length > 0 ? lcpEntries[lcpEntries.length - 1].startTime : null;
-      const shifts = perf.getEntriesByType('layout-shift') as Array<{ value?: number; hadRecentInput?: boolean }>;
-      const cls = shifts.reduce((sum: number, shift: { value?: number; hadRecentInput?: boolean }) => {
-        if (shift.hadRecentInput) return sum;
-        return sum + (shift.value || 0);
-      }, 0);
-
-      return {
-        ttfb: nav?.responseStart ?? null,
-        fcp,
-        lcp,
-        cls: Number.isFinite(cls) ? cls : null,
-        domContentLoaded: nav?.domContentLoadedEventEnd ?? null,
-        loadEventEnd: nav?.loadEventEnd ?? null,
-      };
-    });
-
-    return metrics;
-  } catch {
-    return {
-      ttfb: null,
-      fcp: null,
-      lcp: null,
-      cls: null,
-      domContentLoaded: null,
-      loadEventEnd: null,
-    };
-  }
-}
-
-// status
+/** Stubs that return a helpful error for removed actions. */
 export async function browserStatus(): Promise<ActionResult> {
-  if (!isRunning()) return ok('Browser: not running');
-
-  const page = getPage();
-  const context = getContext();
-  if (!page || !context) return ok('Browser: running (state unavailable)');
-
-  const pages = context.pages();
-  for (const p of pages) {
-    ensureRuntime(p);
-  }
-
-  let title = '';
-  try {
-    title = await page.title();
-  } catch {
-    title = '(unavailable)';
-  }
-
-  const selectedPageId = pages.indexOf(page);
-  const lines = [
-    'Browser: running',
-    `Selected Page: ${selectedPageId >= 0 ? selectedPageId : 'unknown'}`,
-    `URL: ${page.url()}`,
-    `Title: ${title}`,
-    `Open Pages: ${pages.length}`,
-  ];
-
-  for (let i = 0; i < pages.length; i++) {
-    const marker = i === selectedPageId ? ' (selected)' : '';
-    lines.push(`- ${i}: ${pages[i].url()}${marker}`);
-  }
-
-  return ok(lines.join('\n'));
-}
-
-// start
-export async function browserStart(config: BrowserConfig): Promise<ActionResult> {
-  const page = await ensureBrowser(config);
-  ensureRuntime(page);
-
-  const context = getContext();
-  if (context) {
-    for (const p of context.pages()) {
-      ensureRuntime(p);
-    }
-  }
-
-  return ok('Browser started');
-}
-
-// stop
-export async function browserStop(): Promise<ActionResult> {
-  if (!isRunning()) return ok('Browser not running');
-  await closeBrowser();
-  clearAllRefs();
-  activeEmulationState = {};
-  isTracing = false;
-  return ok('Browser stopped');
-}
-
-// open / navigate alias
-export async function browserOpen(config: BrowserConfig, url: string, timeout?: number, includeSnapshot?: boolean): Promise<ActionResult> {
-  const page = await ensureBrowser(config);
-  ensureRuntime(page);
-  clearRefs();
-
-  await page.goto(url, {
-    waitUntil: 'domcontentloaded',
-    timeout: normalizeTimeout(timeout),
-  });
-
-  const title = await page.title().catch(() => '(unavailable)');
-  const suffix = await appendSnapshotIfNeeded(includeSnapshot);
-  return ok(`Navigated to: ${url}\nTitle: ${title}${suffix}`);
-}
-
-// take_snapshot
-export async function browserSnapshot(
-  config: BrowserConfig,
-  opts: {
-    interactive?: boolean;
-    selector?: string;
-    verbose?: boolean;
-    filePath?: string;
-  } = {},
-): Promise<ActionResult> {
-  const page = await ensureBrowser(config);
-  ensureRuntime(page);
-
-  const snapshot = await generateSnapshot(page, {
-    interactive: opts.interactive ?? !opts.verbose,
-    selector: opts.selector,
-  });
-
-  if (opts.filePath) {
-    const out = resolve(opts.filePath);
-    await writeFile(out, snapshot, 'utf-8');
-    return ok(`Snapshot saved: ${out}`);
-  }
-
-  return ok(snapshot);
-}
-
-// take_screenshot
-export async function browserScreenshot(
-  config: BrowserConfig,
-  opts: {
-    fullPage?: boolean;
-    ref?: string;
-    format?: 'png' | 'jpeg' | 'webp';
-    quality?: number;
-    filePath?: string;
-  } = {},
-): Promise<ActionResult> {
-  const page = await ensureBrowser(config);
-  ensureRuntime(page);
-
-  if (opts.ref && opts.fullPage) {
-    return err('Cannot set both ref/uid and fullPage in take_screenshot.');
-  }
-
-  const format = opts.format ?? 'png';
-  const screenshotType = (format === 'webp' ? 'png' : format) as 'png' | 'jpeg';
-  const quality = screenshotType === 'png' ? undefined : opts.quality;
-
-  let buffer: Buffer;
-  if (opts.ref) {
-    const locator = resolveRef(opts.ref);
-    if (!locator) return err(`Ref/uid ${opts.ref} not found. Run take_snapshot first.`);
-    buffer = await locator.screenshot({
-      type: screenshotType,
-      quality,
-      timeout: 15_000,
-    });
-  } else {
-    buffer = await page.screenshot({
-      type: screenshotType,
-      quality,
-      fullPage: opts.fullPage,
-    });
-  }
-
-  const resized = await constrainImageSize(buffer);
-
-  const ext = screenshotType === 'jpeg' ? 'jpg' : screenshotType;
-  const requestedName = opts.filePath
-    ? opts.filePath.replace(/^.*[\\/]/, '')
-    : `browser-screenshot-${Date.now()}.${ext}`;
-  const out = join(tmpdir(), requestedName || `browser-screenshot-${Date.now()}.${ext}`);
-  await writeFile(out, resized);
-
-  const url = page.url();
-  const title = await page.title().catch(() => '(unavailable)');
-  const base64 = resized.toString('base64');
-  const mimeType = screenshotType === 'jpeg' ? 'image/jpeg' : 'image/png';
-  return {
-    text: `Screenshot captured from: ${url} (${title})\nSaved screenshot path: ${out}`,
-    image: base64,
-    mimeType,
-  };
-}
-
-// click
-export async function browserClick(uid: string, opts: { dblClick?: boolean; includeSnapshot?: boolean } = {}): Promise<ActionResult> {
-  const page = getPage();
-  if (!page) return err('Browser not running');
-
-  try {
-    const locator = resolveUid(uid);
-    await waitForEventsAfterAction(page, async () => {
-      await locator.click({ clickCount: opts.dblClick ? 2 : 1, timeout: 10_000 });
-    });
-    clearRefs();
-    const suffix = await appendSnapshotIfNeeded(opts.includeSnapshot);
-    const ctxState = await getContextState();
-    return ok(`${opts.dblClick ? 'Double clicked' : 'Clicked'} ${uid}${suffix}${formatContextSuffix(ctxState)}`);
-  } catch (e) {
-    return err(`Click failed for ${uid}: ${errorMessage(e)}`);
-  }
-}
-
-// click_at
-export async function browserClickAt(
-  x: number,
-  y: number,
-  opts: { dblClick?: boolean; includeSnapshot?: boolean } = {},
-): Promise<ActionResult> {
-  const page = await getSelectedPage();
-  if (!page) return err('Browser not running');
-
-  await waitForEventsAfterAction(page, async () => {
-    await page.mouse.click(x, y, { clickCount: opts.dblClick ? 2 : 1 });
-  });
-  clearRefs();
-
-  const suffix = await appendSnapshotIfNeeded(opts.includeSnapshot);
-  const ctxState = await getContextState();
-  return ok(`${opts.dblClick ? 'Double clicked' : 'Clicked'} at (${x}, ${y})${suffix}${formatContextSuffix(ctxState)}`);
-}
-
-// drag
-export async function browserDrag(
-  fromUid: string,
-  toUid: string,
-  opts: { includeSnapshot?: boolean } = {},
-): Promise<ActionResult> {
-  const page = getPage();
-  if (!page) return err('Browser not running');
-
-  try {
-    const from = resolveUid(fromUid);
-    const to = resolveUid(toUid);
-    await waitForEventsAfterAction(page, async () => {
-      await from.dragTo(to, { timeout: 10_000 });
-      await new Promise(resolve => setTimeout(resolve, 50));
-    });
-
-    const suffix = await appendSnapshotIfNeeded(opts.includeSnapshot);
-    const ctxState = await getContextState();
-    return ok(`Dragged ${fromUid} onto ${toUid}${suffix}${formatContextSuffix(ctxState)}`);
-  } catch (e) {
-    return err(`Drag failed: ${errorMessage(e)}`);
-  }
-}
-
-// type (append text)
-export async function browserType(
-  uid: string,
-  text: string,
-  submit?: boolean,
-  includeSnapshot?: boolean,
-): Promise<ActionResult> {
-  const page = getPage();
-  if (!page) return err('Browser not running');
-
-  try {
-    const locator = resolveUid(uid);
-    await waitForEventsAfterAction(page, async () => {
-      await locator.pressSequentially(text, { delay: 25 });
-      if (submit) {
-        await locator.press('Enter');
-      }
-    });
-
-    const suffix = await appendSnapshotIfNeeded(includeSnapshot);
-    const ctxState = await getContextState();
-    return ok(`Typed into ${uid}${submit ? ' and submitted' : ''}${suffix}${formatContextSuffix(ctxState)}`);
-  } catch (e) {
-    return err(`Type failed for ${uid}: ${errorMessage(e)}`);
-  }
-}
-
-// fill (clear + type)
-/**
- * For combobox/select elements, resolve the display text to the actual option value
- * by querying the DOM. The snapshot shows display text but selectOption needs the
- * real HTML value attribute.
- */
-async function resolveSelectValue(locator: Locator, displayText: string): Promise<string> {
-  try {
-    const realValue = await locator.evaluate((el: any, text: any) => {
-      if (el.tagName !== 'SELECT') return null;
-      const options = el.options;
-      for (let i = 0; i < options.length; i++) {
-        const opt = options[i];
-        if (opt.textContent?.trim() === text) return opt.value;
-        if (opt.label?.trim() === text) return opt.value;
-      }
-      return null;
-    }, displayText);
-    return realValue ?? displayText;
-  } catch {
-    return displayText;
-  }
-}
-
-async function fillElement(locator: Locator, value: string, isCombobox: boolean): Promise<void> {
-  if (isCombobox) {
-    // Resolve display text to real option value, then select
-    const realValue = await resolveSelectValue(locator, value);
-    try {
-      await locator.selectOption(realValue);
-    } catch {
-      // Fallback: try with original value, then fill
-      try {
-        await locator.selectOption(value);
-      } catch {
-        await locator.fill(value);
-      }
-    }
-  } else {
-    try {
-      await locator.fill(value);
-    } catch {
-      await locator.selectOption(value);
-    }
-  }
-}
-
-export async function browserFill(uid: string, value: string, includeSnapshot?: boolean): Promise<ActionResult> {
-  const page = getPage();
-  if (!page) return err('Browser not running');
-
-  try {
-    const locator = resolveUid(uid);
-    const refEntry = getRefEntry(uid);
-    const isCombobox = refEntry?.role === 'combobox';
-
-    await waitForEventsAfterAction(page, async () => {
-      await fillElement(locator, value, !!isCombobox);
-    });
-
-    const suffix = await appendSnapshotIfNeeded(includeSnapshot);
-    const ctxState = await getContextState();
-    return ok(`Filled ${uid}${suffix}${formatContextSuffix(ctxState)}`);
-  } catch (e) {
-    return err(`Fill failed for ${uid}: ${errorMessage(e)}`);
-  }
-}
-
-// fill_form
-export async function browserFillForm(
-  elements: { uid: string; value: string }[],
-  includeSnapshot?: boolean,
-): Promise<ActionResult> {
-  const page = getPage();
-  if (!page) return err('Browser not running');
-
-  const results: string[] = [];
-
-  for (const element of elements) {
-    try {
-      const locator = resolveUid(element.uid);
-      const refEntry = getRefEntry(element.uid);
-      const isCombobox = refEntry?.role === 'combobox';
-
-      await waitForEventsAfterAction(page, async () => {
-        await fillElement(locator, element.value, !!isCombobox);
-      });
-      results.push(`${element.uid}: filled`);
-    } catch (e) {
-      results.push(`${element.uid}: failed (${errorMessage(e)})`);
-    }
-  }
-
-  const suffix = await appendSnapshotIfNeeded(includeSnapshot);
-  const ctxState = await getContextState();
-  return ok(`${results.join('\n')}${suffix}${formatContextSuffix(ctxState)}`);
-}
-
-// upload_file
-export async function browserUploadFile(
-  uid: string,
-  filePath: string,
-  includeSnapshot?: boolean,
-): Promise<ActionResult> {
-  const page = await getSelectedPage();
-  if (!page) return err('Browser not running');
-
-  const locator = resolveRef(uid);
-  if (!locator) return err(`Ref/uid ${uid} not found. Run take_snapshot first.`);
-
-  const absolutePath = resolve(filePath);
-
-  try {
-    await waitForEventsAfterAction(page, async () => {
-      try {
-        await locator.setInputFiles(absolutePath);
-      } catch {
-        const [fileChooser] = await Promise.all([
-          page.waitForEvent('filechooser', { timeout: 3_000 }),
-          locator.click({ timeout: 3_000 }),
-        ]);
-        await fileChooser.setFiles(absolutePath);
-      }
-    });
-
-    const suffix = await appendSnapshotIfNeeded(includeSnapshot);
-    return ok(`File uploaded from ${absolutePath}.${suffix}`);
-  } catch (e) {
-    return err(`Upload failed for ${uid}: ${errorMessage(e)}`);
-  }
-}
-
-// select
-export async function browserSelect(uid: string, values: string[], includeSnapshot?: boolean): Promise<ActionResult> {
-  const page = getPage();
-  if (!page) return err('Browser not running');
-
-  try {
-    const locator = resolveUid(uid);
-    await waitForEventsAfterAction(page, async () => {
-      await locator.selectOption(values);
-    });
-
-    const suffix = await appendSnapshotIfNeeded(includeSnapshot);
-    const ctxState = await getContextState();
-    return ok(`Selected ${values.join(', ')} in ${uid}${suffix}${formatContextSuffix(ctxState)}`);
-  } catch (e) {
-    return err(`Select failed for ${uid}: ${errorMessage(e)}`);
-  }
-}
-
-// press key
-export async function browserPressKey(key: string, includeSnapshot?: boolean): Promise<ActionResult> {
-  const page = await getSelectedPage();
-  if (!page) return err('Browser not running');
-
-  await waitForEventsAfterAction(page, async () => {
-    await page.keyboard.press(key);
-  });
-  const suffix = await appendSnapshotIfNeeded(includeSnapshot);
-  const ctxState = await getContextState();
-  return ok(`Pressed ${key}${suffix}${formatContextSuffix(ctxState)}`);
-}
-
-// backward-compatible alias
-export async function browserPress(key: string): Promise<ActionResult> {
-  return browserPressKey(key, false);
-}
-
-// hover
-export async function browserHover(uid: string, includeSnapshot?: boolean): Promise<ActionResult> {
-  const page = getPage();
-  if (!page) return err('Browser not running');
-
-  try {
-    const locator = resolveUid(uid);
-    await waitForEventsAfterAction(page, async () => {
-      await locator.hover({ timeout: 10_000 });
-    });
-
-    const suffix = await appendSnapshotIfNeeded(includeSnapshot);
-    const ctxState = await getContextState();
-    return ok(`Hovered ${uid}${suffix}${formatContextSuffix(ctxState)}`);
-  } catch (e) {
-    return err(`Hover failed for ${uid}: ${errorMessage(e)}`);
-  }
-}
-
-// scroll
-export async function browserScroll(opts: {
-  uid?: string;
-  deltaX?: number;
-  deltaY?: number;
-  includeSnapshot?: boolean;
-} = {}): Promise<ActionResult> {
-  const page = getPage();
-  if (!page) return err('Browser not running');
-
-  const deltaX = opts.deltaX ?? 0;
-  const deltaY = opts.deltaY ?? 300; // default: scroll down one viewport-ish chunk
-
-  try {
-    if (opts.uid) {
-      // Scroll a specific element into view, then scroll within it
-      const locator = resolveUid(opts.uid);
-      await locator.scrollIntoViewIfNeeded({ timeout: 5_000 });
-      if (deltaX !== 0 || deltaY !== 0) {
-        await locator.evaluate((el: any, deltas: any) => {
-          el.scrollBy(deltas.x, deltas.y);
-        }, { x: deltaX, y: deltaY });
-      }
-    } else {
-      // Scroll the page using mouse wheel (works with lazy-loaded content)
-      await page.mouse.wheel(deltaX, deltaY);
-    }
-
-    // Small delay for lazy content to load
-    await page.waitForTimeout(300);
-
-    const suffix = await appendSnapshotIfNeeded(opts.includeSnapshot);
-    const direction = deltaY > 0 ? 'down' : deltaY < 0 ? 'up' : deltaX > 0 ? 'right' : 'left';
-    const target = opts.uid ? `element ${opts.uid}` : 'page';
-    return ok(`Scrolled ${target} ${direction} by (${deltaX}, ${deltaY})${suffix}`);
-  } catch (e) {
-    return err(`Scroll failed: ${errorMessage(e)}`);
-  }
-}
-
-// handle_dialog (for upcoming dialog)
-export async function browserHandleDialog(
-  action: 'accept' | 'dismiss',
-  promptText?: string,
-  timeout?: number,
-): Promise<ActionResult> {
-  const page = await getSelectedPage();
-  if (!page) return err('Browser not running');
-
-  try {
-    // use tracked dialog if available, otherwise wait for one
-    const dialog = activeDialog ?? await page.waitForEvent('dialog', {
-      timeout: normalizeTimeout(timeout) ?? 5_000,
-    });
-
-    if (action === 'accept') {
-      await dialog.accept(promptText);
-    } else {
-      await dialog.dismiss();
-    }
-
-    activeDialog = null;
-    return ok(`Handled dialog (${dialog.type()}) with action=${action}. Message: ${dialog.message()}`);
-  } catch (e) {
-    return err(`No dialog handled: ${errorMessage(e)}`);
-  }
-}
-
-// wait (legacy)
-export async function browserWait(opts: { timeMs?: number; selector?: string; url?: string }): Promise<ActionResult> {
-  const page = await getSelectedPage();
-  if (!page) return err('Browser not running');
-
-  if (opts.timeMs) {
-    await page.waitForTimeout(opts.timeMs);
-  }
-  if (opts.selector) {
-    await page.waitForSelector(opts.selector, { timeout: 15_000 });
-  }
-  if (opts.url) {
-    await page.waitForURL(opts.url, { timeout: 15_000 });
-  }
-
-  return ok('Wait complete');
-}
-
-// wait_for text
-export async function browserWaitForText(text: string, timeout?: number): Promise<ActionResult> {
-  const page = await getSelectedPage();
-  if (!page) return err('Browser not running');
-
-  const effectiveTimeout = normalizeTimeout(timeout) ?? 15_000;
-
-  try {
-    // Search all frames (main page + iframes) for the text
-    const frames = page.frames();
-    const locators = frames.flatMap(frame => [
-      frame.getByText(text).first(),
-      frame.locator(`text=${text}`).first(),
-    ]);
-
-    // Race all locators - first one to find the text wins
-    await Promise.any(
-      locators.map(loc => loc.waitFor({ timeout: effectiveTimeout }))
-    );
-    const suffix = await appendSnapshotIfNeeded(true);
-    return ok(`Element with text "${text}" found.${suffix}`);
-  } catch (e) {
-    return err(`Timed out waiting for text "${text}": ${errorMessage(e)}`);
-  }
-}
-
-async function compactPageList(): Promise<string> {
-  const ctx = getContext();
-  if (!ctx) return '';
-  const pages = ctx.pages();
-  const current = getPage();
-  const lines = await Promise.all(
-    pages.map(async (page, idx) => {
-      const sel = page === current ? ' [selected]' : '';
-      const title = await page.title().catch(() => '');
-      return `  ${idx}: ${page.url()}${title ? ` (${title})` : ''}${sel}`;
-    }),
-  );
-  return `\nPages:\n${lines.join('\n')}`;
-}
-
-// list_pages
-export async function browserListPages(): Promise<ActionResult> {
-  const ctx = getContext();
-  if (!ctx) return err('Browser not running');
-
-  const pages = ctx.pages();
-  const current = getPage();
-  for (const page of pages) {
-    ensureRuntime(page);
-  }
-
-  const payload = await Promise.all(
-    pages.map(async (page, idx) => {
-      const title = await page.title().catch(() => '(unavailable)');
-      return {
-        pageId: idx,
-        selected: page === current,
-        url: page.url(),
-        title,
-      };
-    }),
-  );
-
-  return ok(safeJson({ pages: payload }));
-}
-
-// backward-compatible alias
-export async function browserTabs(): Promise<ActionResult> {
   return browserListPages();
 }
-
-// select_page
-export async function browserSelectPage(pageId: number, bringToFront?: boolean): Promise<ActionResult> {
-  const ctx = getContext();
-  if (!ctx) return err('Browser not running');
-
-  const pages = ctx.pages();
-  if (pageId < 0 || pageId >= pages.length) {
-    const list = await compactPageList();
-    return err(`Page ${pageId} not found${list}`);
-  }
-
-  const page = pages[pageId];
-  setActivePage(page);
-  ensureRuntime(page);
-
-  if (bringToFront) {
-    await page.bringToFront().catch(() => undefined);
-  }
-
-  clearRefs();
-  const list = await compactPageList();
-  return ok(`Selected page ${pageId}: ${page.url()}${list}`);
+export async function browserStart(): Promise<ActionResult> {
+  return ok('Browser is always running inside dorabot; no start needed. Use list_pages to see tabs.');
+}
+export async function browserStop(): Promise<ActionResult> {
+  return ok('Browser stays running inside dorabot. Close individual tabs with close_page.');
 }
 
-// new_page
-export async function browserNewPage(
-  config: BrowserConfig,
-  url: string,
-  background?: boolean,
-  timeout?: number,
-): Promise<ActionResult> {
-  await ensureBrowser(config);
-  const ctx = getContext();
-  if (!ctx) return err('Browser not running');
-
-  const page = await ctx.newPage();
-  ensureRuntime(page);
-
-  await page.goto(url, {
-    timeout: normalizeTimeout(timeout),
-    waitUntil: 'domcontentloaded',
-  });
-
-  if (!background) {
-    setActivePage(page);
-    await page.bringToFront().catch(() => undefined);
-  }
-
-  clearRefs();
-  const pageId = ctx.pages().indexOf(page);
-  const list = await compactPageList();
-  return ok(`New page opened (pageId=${pageId}, background=${!!background}): ${url}${list}`);
-}
-
-// close_page
-export async function browserClosePage(pageId?: number): Promise<ActionResult> {
-  const ctx = getContext();
-  if (!ctx) return err('Browser not running');
-
-  const pages = ctx.pages();
-  if (pages.length <= 1) {
-    return err('Cannot close the last open page.');
-  }
-
-  let target: Page | null = null;
-  if (pageId !== undefined) {
-    if (pageId < 0 || pageId >= pages.length) {
-      return err(`Page ${pageId} not found`);
-    }
-    target = pages[pageId];
-  } else {
-    target = getPage();
-  }
-
-  if (!target) {
-    return err('No active page to close');
-  }
-
-  const wasSelected = target === getPage();
-  const closingUrl = target.url();
-  await target.close();
-
-  const remaining = ctx.pages();
-  if (wasSelected && remaining.length > 0) {
-    setActivePage(remaining[0]);
-  }
-
-  clearRefs();
-  const list = await compactPageList();
-  return ok(`Closed page: ${closingUrl}${list}`);
-}
-
-// backward-compatible alias
-export async function browserCloseTab(targetIndex?: number): Promise<ActionResult> {
-  return browserClosePage(targetIndex);
-}
-
-// navigate_page
-export async function browserNavigatePage(opts: {
-  type?: 'url' | 'back' | 'forward' | 'reload';
-  url?: string;
-  timeout?: number;
-  ignoreCache?: boolean;
-  handleBeforeUnload?: 'accept' | 'decline';
-  initScript?: string;
-  includeSnapshot?: boolean;
-}): Promise<ActionResult> {
-  const page = await getSelectedPage();
-  if (!page) return err('Browser not running');
-
-  if (!opts.type && !opts.url) {
-    return err('Either url or type is required.');
-  }
-
-  const type = opts.type || 'url';
-  const timeout = normalizeTimeout(opts.timeout);
-  const handleBeforeUnload = opts.handleBeforeUnload ?? 'accept';
-
-  let cdpSession: any | null = null;
-  const getCdpSession = async () => {
-    if (!cdpSession) {
-      cdpSession = await page.context().newCDPSession(page);
-    }
-    return cdpSession;
-  };
-
-  let scriptIdentifier: string | undefined;
-  let usedAddInitScript = false;
-  if (opts.initScript) {
-    try {
-      const session = await getCdpSession();
-      const result = await session.send('Page.addScriptToEvaluateOnNewDocument', {
-        source: opts.initScript,
-      });
-      scriptIdentifier = result?.identifier;
-    } catch {
-      // Fallback: addInitScript persists for the page lifetime and cannot be removed.
-      // This is a known limitation - the script will run on every subsequent navigation.
-      await page.addInitScript(opts.initScript);
-      usedAddInitScript = true;
-    }
-  }
-
-  const dialogHandler = (dialog: Dialog) => {
-    if (dialog.type() === 'beforeunload') {
-      if (handleBeforeUnload === 'accept') {
-        void dialog.accept();
-      } else {
-        void dialog.dismiss();
-      }
-      return;
-    }
-
-    // Do not leave unexpected dialogs hanging.
-    void dialog.dismiss().catch(() => undefined);
-  };
-
-  page.on('dialog', dialogHandler);
-
-  try {
-    switch (type) {
-      case 'url':
-        if (!opts.url) {
-          return err('url is required for navigate_page with type=url.');
-        }
-        await page.goto(opts.url, { timeout, waitUntil: 'domcontentloaded' });
-        break;
-
-      case 'back': {
-        const res = await page.goBack({ timeout, waitUntil: 'domcontentloaded' });
-        if (!res) return err('Cannot navigate back: no history entry.');
-        break;
-      }
-
-      case 'forward': {
-        const res = await page.goForward({ timeout, waitUntil: 'domcontentloaded' });
-        if (!res) return err('Cannot navigate forward: no history entry.');
-        break;
-      }
-
-      case 'reload':
-        if (opts.ignoreCache) {
-          const session = await getCdpSession();
-          await session.send('Page.reload', { ignoreCache: true });
-          await page.waitForLoadState('domcontentloaded', { timeout });
-        } else {
-          await page.reload({ timeout, waitUntil: 'domcontentloaded' });
-        }
-        break;
-
-      default:
-        return err(`Unknown navigate_page type: ${type}`);
-    }
-
-    clearRefs();
-    const suffix = await appendSnapshotIfNeeded(opts.includeSnapshot);
-    const initScriptWarning = usedAddInitScript ? '\nNote: initScript was added via fallback and will persist on this page.' : '';
-    return ok(`Navigation complete (${type}). Current URL: ${page.url()}${initScriptWarning}${suffix}`);
-  } catch (e) {
-    return err(`Navigation failed: ${errorMessage(e)}`);
-  } finally {
-    page.off('dialog', dialogHandler);
-
-    if (scriptIdentifier && cdpSession) {
-      await cdpSession
-        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: scriptIdentifier })
-        .catch(() => undefined);
-    }
-
-    if (cdpSession) {
-      await cdpSession.detach().catch(() => undefined);
-    }
-  }
-}
-
-// cookies
-export async function browserCookies(
-  action: string,
-  opts: { name?: string; value?: string; url?: string } = {},
-): Promise<ActionResult> {
-  const ctx = getContext();
-  if (!ctx) return err('Browser not running');
-
-  switch (action) {
-    case 'get': {
-      const cookies = await ctx.cookies(opts.url ? [opts.url] : []);
-      if (cookies.length === 0) return ok('No cookies');
-      return ok(safeJson(cookies));
-    }
-
-    case 'set': {
-      if (!opts.name || !opts.value) return err('name and value are required');
-      const page = getPage();
-      const cookieUrl = opts.url || page?.url() || 'http://localhost';
-      await ctx.addCookies([
-        {
-          name: opts.name,
-          value: opts.value,
-          url: cookieUrl,
-        },
-      ]);
-      return ok(`Cookie ${opts.name} set for ${cookieUrl}`);
-    }
-
-    case 'clear': {
-      await ctx.clearCookies();
-      return ok('Cookies cleared');
-    }
-
-    default:
-      return err(`Unknown cookie action: ${action}. Use get, set, or clear.`);
-  }
-}
-
-// evaluate_script
-export async function browserEvaluateScript(
-  functionDeclaration: string,
-  args?: Array<{ uid?: string; ref?: string }>,
-): Promise<ActionResult> {
-  const page = await getSelectedPage();
-  if (!page) return err('Browser not running');
-
-  const handles: any[] = [];
-  let fnHandle: any;
-
-  try {
-    for (const arg of args || []) {
-      const uid = arg.uid || arg.ref;
-      if (!uid) {
-        return err('Each evaluate_script arg must include uid or ref');
-      }
-
-      const locator = resolveRef(uid);
-      if (!locator) {
-        return err(`Ref/uid ${uid} not found. Run take_snapshot first.`);
-      }
-
-      const handle = await locator.elementHandle();
-      if (!handle) {
-        return err(`Element handle for ${uid} is no longer available. Re-run take_snapshot.`);
-      }
-
-      handles.push(handle);
-    }
-
-    fnHandle = await page.evaluateHandle(`(${functionDeclaration})`);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const evalFn = page.evaluate as any;
-    const result = await evalFn.call(
-      page,
-      async (fn: unknown, ...els: unknown[]) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const callable = fn as any;
-        return await callable(...els);
-      },
-      fnHandle,
-      ...handles,
-    );
-
-    return ok(`Script ran on page and returned:\n\
-\`\`\`json\n${safeJson(result)}\n\`\`\``);
-  } catch (e) {
-    return err(`Evaluate error: ${errorMessage(e)}`);
-  } finally {
-    if (fnHandle) {
-      await fnHandle.dispose().catch(() => undefined);
-    }
-    await Promise.all(handles.map(handle => handle.dispose().catch(() => undefined)));
-  }
-}
-
-// backward-compatible alias
-export async function browserEvaluate(fn: string): Promise<ActionResult> {
-  return browserEvaluateScript(fn);
-}
-
-// list_console_messages
-export async function browserListConsoleMessages(opts: {
-  pageSize?: number;
-  pageIdx?: number;
-  types?: string[];
-  includePreservedMessages?: boolean;
-} = {}): Promise<ActionResult> {
-  const page = await getSelectedPage();
-  if (!page) return err('Browser not running');
-
-  const state = ensureRuntime(page);
-  let messages = flattenedConsole(state, !!opts.includePreservedMessages);
-
-  if (opts.types && opts.types.length > 0) {
-    messages = messages.filter(msg => opts.types!.includes(msg.type));
-  }
-
-  const paged = paginate(messages, opts.pageIdx, opts.pageSize);
-
-  return ok(
-    safeJson({
-      total: messages.length,
-      pageIdx: opts.pageIdx ?? 0,
-      pageSize: opts.pageSize ?? messages.length,
-      messages: paged,
-    }),
-  );
-}
-
-// get_console_message
-export async function browserGetConsoleMessage(msgid: number): Promise<ActionResult> {
-  const page = await getSelectedPage();
-  if (!page) return err('Browser not running');
-
-  const state = ensureRuntime(page);
-  const entry = state.consoleById.get(msgid);
-  if (!entry) {
-    return err(`Console message ${msgid} not found`);
-  }
-
-  return ok(safeJson(entry));
-}
-
-// list_network_requests
-export async function browserListNetworkRequests(opts: {
-  pageSize?: number;
-  pageIdx?: number;
-  resourceTypes?: string[];
-  includePreservedRequests?: boolean;
-} = {}): Promise<ActionResult> {
-  const page = await getSelectedPage();
-  if (!page) return err('Browser not running');
-
-  const state = ensureRuntime(page);
-  let records = flattenedNetwork(state, !!opts.includePreservedRequests);
-
-  if (opts.resourceTypes && opts.resourceTypes.length > 0) {
-    records = records.filter(record => opts.resourceTypes!.includes(record.entry.resourceType));
-  }
-
-  const publicEntries = records.map(publicNetworkEntry);
-  const paged = paginate(publicEntries, opts.pageIdx, opts.pageSize);
-
-  return ok(
-    safeJson({
-      total: publicEntries.length,
-      pageIdx: opts.pageIdx ?? 0,
-      pageSize: opts.pageSize ?? publicEntries.length,
-      selectedReqId: state.latestRequestId ?? null,
-      requests: paged,
-    }),
-  );
-}
-
-function shouldTreatAsText(contentType: string | undefined): boolean {
-  if (!contentType) return false;
-  const value = contentType.toLowerCase();
-  return (
-    value.startsWith('text/') ||
-    value.includes('json') ||
-    value.includes('xml') ||
-    value.includes('javascript') ||
-    value.includes('html') ||
-    value.includes('x-www-form-urlencoded')
-  );
-}
-
-// get_network_request
-export async function browserGetNetworkRequest(
-  reqid?: number,
-  opts: { requestFilePath?: string; responseFilePath?: string } = {},
-): Promise<ActionResult> {
-  const page = await getSelectedPage();
-  if (!page) return err('Browser not running');
-
-  const state = ensureRuntime(page);
-  const targetReqId = reqid ?? state.latestRequestId;
-
-  if (!targetReqId) {
-    return err('No network request selected. Call list_network_requests first or provide reqid.');
-  }
-
-  const record = state.networkById.get(targetReqId);
-  if (!record) {
-    return err(`Network request ${targetReqId} not found`);
-  }
-
-  const requestBodyRaw = record.request.postData() ?? '';
-  const requestBody = truncate(requestBodyRaw, 20_000);
-
-  let responseBodyBuffer: Buffer | null = null;
-  if (record.response) {
-    responseBodyBuffer = await record.response.body().catch(() => null);
-    if (!record.entry.responseHeaders) {
-      record.entry.responseHeaders = await record.response.allHeaders().catch(() => undefined);
-    }
-  }
-
-  const payload: Record<string, unknown> = {
-    request: {
-      ...publicNetworkEntry(record),
-      requestHeaders: record.entry.requestHeaders || {},
-      responseHeaders: record.entry.responseHeaders || {},
-    },
-  };
-
-  if (requestBodyRaw.length > 0) {
-    if (opts.requestFilePath) {
-      const out = resolve(opts.requestFilePath);
-      await writeFile(out, requestBodyRaw, 'utf-8');
-      payload.requestBodyFile = out;
-    } else {
-      payload.requestBody = {
-        encoding: 'utf8',
-        truncated: requestBody.truncated,
-        data: requestBody.value,
-      };
-    }
-  }
-
-  if (responseBodyBuffer) {
-    if (opts.responseFilePath) {
-      const out = resolve(opts.responseFilePath);
-      await writeFile(out, responseBodyBuffer);
-      payload.responseBodyFile = out;
-    } else {
-      const contentType =
-        record.entry.responseHeaders?.['content-type'] ||
-        record.entry.responseHeaders?.['Content-Type'];
-
-      if (shouldTreatAsText(contentType)) {
-        const textBody = truncate(responseBodyBuffer.toString('utf-8'), 20_000);
-        payload.responseBody = {
-          encoding: 'utf8',
-          truncated: textBody.truncated,
-          data: textBody.value,
-        };
-      } else {
-        const base64Body = truncate(responseBodyBuffer.toString('base64'), 20_000);
-        payload.responseBody = {
-          encoding: 'base64',
-          truncated: base64Body.truncated,
-          data: base64Body.value,
-        };
-      }
-    }
-  }
-
-  return ok(safeJson(payload));
-}
-
-// emulate
-export async function browserEmulate(opts: {
-  networkConditions?: string;
-  cpuThrottlingRate?: number;
-  geolocation?: { latitude: number; longitude: number } | null;
-  userAgent?: string | null;
-  colorScheme?: 'dark' | 'light' | 'auto';
-  viewport?: {
-    width: number;
-    height: number;
-    deviceScaleFactor?: number;
-    isMobile?: boolean;
-    hasTouch?: boolean;
-    isLandscape?: boolean;
-  } | null;
-}): Promise<ActionResult> {
-  const page = await getSelectedPage();
-  if (!page) return err('Browser not running');
-
-  const summary: string[] = [];
-  const client = await page.context().newCDPSession(page);
-
-  try {
-    if (opts.networkConditions) {
-      await client.send('Network.enable');
-
-      if (opts.networkConditions === 'No emulation') {
-        await client.send('Network.emulateNetworkConditions', {
-          offline: false,
-          latency: 0,
-          downloadThroughput: -1,
-          uploadThroughput: -1,
-        });
-        summary.push('Network emulation disabled');
-        updateEmulationState({ networkConditions: undefined });
-      } else if (opts.networkConditions === 'Offline') {
-        await client.send('Network.emulateNetworkConditions', {
-          offline: true,
-          latency: 0,
-          downloadThroughput: 0,
-          uploadThroughput: 0,
-        });
-        summary.push('Network emulation: Offline');
-        updateEmulationState({ networkConditions: 'Offline' });
-      } else {
-        const preset = NETWORK_CONDITIONS[opts.networkConditions];
-        if (!preset) {
-          return err(`Unknown networkConditions: ${opts.networkConditions}`);
-        }
-
-        await client.send('Network.emulateNetworkConditions', preset as any);
-        summary.push(`Network emulation: ${opts.networkConditions}`);
-        updateEmulationState({ networkConditions: opts.networkConditions });
-      }
-    }
-
-    if (opts.cpuThrottlingRate !== undefined) {
-      await client.send('Emulation.setCPUThrottlingRate', {
-        rate: opts.cpuThrottlingRate,
-      });
-      summary.push(`CPU throttling rate: ${opts.cpuThrottlingRate}`);
-      updateEmulationState({ cpuThrottlingRate: opts.cpuThrottlingRate });
-    }
-
-    if (opts.geolocation !== undefined) {
-      if (opts.geolocation === null) {
-        await client.send('Emulation.clearGeolocationOverride');
-        summary.push('Geolocation override cleared');
-        updateEmulationState({ geolocation: undefined });
-      } else {
-        await client.send('Emulation.setGeolocationOverride', {
-          latitude: opts.geolocation.latitude,
-          longitude: opts.geolocation.longitude,
-          accuracy: 1,
-        });
-        summary.push(`Geolocation set: ${opts.geolocation.latitude}, ${opts.geolocation.longitude}`);
-        updateEmulationState({ geolocation: opts.geolocation });
-      }
-    }
-
-    if (opts.userAgent !== undefined) {
-      if (opts.userAgent === null) {
-        // Clear the override entirely by setting empty string, which restores browser default
-        await client.send('Emulation.setUserAgentOverride', { userAgent: '' });
-        summary.push('User agent reset to browser default');
-        updateEmulationState({ userAgent: undefined });
-      } else {
-        await client.send('Emulation.setUserAgentOverride', { userAgent: opts.userAgent });
-        summary.push(`User agent set: ${opts.userAgent}`);
-        updateEmulationState({ userAgent: opts.userAgent });
-      }
-    }
-
-    if (opts.colorScheme) {
-      if (opts.colorScheme === 'auto') {
-        await client.send('Emulation.setEmulatedMedia', { features: [] });
-        summary.push('Color scheme emulation reset');
-        updateEmulationState({ colorScheme: undefined });
-      } else {
-        await client.send('Emulation.setEmulatedMedia', {
-          features: [{ name: 'prefers-color-scheme', value: opts.colorScheme }],
-        });
-        summary.push(`Color scheme emulation: ${opts.colorScheme}`);
-        updateEmulationState({ colorScheme: opts.colorScheme });
-      }
-    }
-
-    if (opts.viewport !== undefined) {
-      if (opts.viewport === null) {
-        await client.send('Emulation.clearDeviceMetricsOverride');
-        summary.push('Viewport override cleared');
-      } else {
-        const width = opts.viewport.width;
-        const height = opts.viewport.height;
-        const deviceScaleFactor = opts.viewport.deviceScaleFactor ?? 1;
-        const mobile = opts.viewport.isMobile ?? false;
-
-        await client.send('Emulation.setDeviceMetricsOverride', {
-          width,
-          height,
-          deviceScaleFactor,
-          mobile,
-          screenOrientation: opts.viewport.isLandscape
-            ? { type: 'landscapePrimary', angle: 90 }
-            : { type: 'portraitPrimary', angle: 0 },
-        });
-
-        await page.setViewportSize({ width, height }).catch(() => undefined);
-        summary.push(
-          `Viewport set: ${width}x${height}, dpr=${deviceScaleFactor}, mobile=${mobile}, touch=${opts.viewport.hasTouch ?? false}`,
-        );
-      }
-    }
-
-    if (summary.length === 0) {
-      return ok('No emulation changes requested.');
-    }
-
-    return ok(summary.join('\n'));
-  } catch (e) {
-    return err(`Emulation failed: ${errorMessage(e)}`);
-  } finally {
-    await client.detach().catch(() => undefined);
-  }
-}
-
-// resize_page
-export async function browserResizePage(width: number, height: number): Promise<ActionResult> {
-  const page = await getSelectedPage();
-  if (!page) return err('Browser not running');
-
-  await page.setViewportSize({ width, height });
-  return ok(`Resized page viewport to ${width}x${height}`);
-}
-
-// performance_start_trace
-export async function browserPerformanceStartTrace(opts: {
-  reload: boolean;
-  autoStop: boolean;
-  filePath?: string;
-}): Promise<ActionResult> {
-  const context = getContext();
-  const page = getPage();
-  if (!context || !page) return err('Browser not running');
-
-  if (isTracing) {
-    return err('A performance trace is already running. Stop it with performance_stop_trace.');
-  }
-
-  await context.tracing.start({ screenshots: true, snapshots: true });
-  isTracing = true;
-  traceStartTime = Date.now();
-  traceStartUrl = page.url();
-
-  if (opts.reload) {
-    await page.reload({ waitUntil: 'load' }).catch(() => undefined);
-  }
-
-  if (opts.autoStop) {
-    await new Promise(resolve => setTimeout(resolve, 5_000));
-    return browserPerformanceStopTrace({ filePath: opts.filePath });
-  }
-
-  return ok('Performance trace started. Run performance_stop_trace to stop recording.');
-}
-
-// performance_stop_trace
-export async function browserPerformanceStopTrace(opts: { filePath?: string } = {}): Promise<ActionResult> {
-  const context = getContext();
-  const page = getPage();
-  if (!context || !page) return err('Browser not running');
-
-  if (!isTracing) {
-    return err('No active performance trace is running.');
-  }
-
-  const outPath = resolve(opts.filePath || join(tmpdir(), `browser-trace-${Date.now()}.zip`));
-
-  try {
-    await context.tracing.stop({ path: outPath });
-  } finally {
-    isTracing = false;
-  }
-
-  const stoppedAtMs = Date.now();
-  const metrics = await collectTraceMetrics(page);
-  const insightSetId = `trace-${stoppedAtMs}`;
-
-  const record: TraceRecord = {
-    insightSetId,
-    filePath: outPath,
-    startedAt: new Date(traceStartTime).toISOString(),
-    stoppedAt: new Date(stoppedAtMs).toISOString(),
-    durationMs: Math.max(0, stoppedAtMs - traceStartTime),
-    pageUrl: traceStartUrl || page.url(),
-    metrics,
-  };
-
-  traceRecords.set(insightSetId, record);
-  latestTraceInsightSetId = insightSetId;
-
-  return ok(
-    `Performance trace stopped.\nRaw trace saved: ${outPath}\nAvailable insightSetId: ${insightSetId}\nUse performance_analyze_insight with insightName: TraceSummary, NavigationTiming, or WebVitalsSnapshot.`,
-  );
-}
-
-// performance_analyze_insight
-export async function browserPerformanceAnalyzeInsight(
-  insightSetId: string,
-  insightName: string,
-): Promise<ActionResult> {
-  const resolvedInsightSetId = insightSetId || latestTraceInsightSetId;
-  if (!resolvedInsightSetId) {
-    return err('No recorded traces found. Start and stop a performance trace first.');
-  }
-
-  const record = traceRecords.get(resolvedInsightSetId);
-  if (!record) {
-    return err(`Insight set ${resolvedInsightSetId} not found.`);
-  }
-
-  const key = insightName.toLowerCase();
-  let detail: Record<string, unknown>;
-
-  if (key === 'tracesummary') {
-    detail = {
-      insightSetId: record.insightSetId,
-      filePath: record.filePath,
-      pageUrl: record.pageUrl,
-      startedAt: record.startedAt,
-      stoppedAt: record.stoppedAt,
-      durationMs: record.durationMs,
-    };
-  } else if (key === 'navigationtiming') {
-    detail = {
-      ttfbMs: record.metrics.ttfb,
-      domContentLoadedMs: record.metrics.domContentLoaded,
-      loadEventEndMs: record.metrics.loadEventEnd,
-    };
-  } else if (key === 'webvitalssnapshot' || key.includes('lcp') || key.includes('cls') || key.includes('fcp')) {
-    detail = {
-      fcpMs: record.metrics.fcp,
-      lcpMs: record.metrics.lcp,
-      cls: record.metrics.cls,
-    };
-  } else {
-    detail = {
-      message: `Insight "${insightName}" is not directly supported by this Playwright-based analyzer.`,
-      availableInsights: ['TraceSummary', 'NavigationTiming', 'WebVitalsSnapshot'],
-      traceSummary: {
-        durationMs: record.durationMs,
-        pageUrl: record.pageUrl,
-      },
-      metrics: record.metrics,
-    };
-  }
-
-  return ok(safeJson({ insightSetId: resolvedInsightSetId, insightName, detail }));
-}
-
-// pdf
-export async function browserPdf(path?: string): Promise<ActionResult> {
-  const page = getPage();
-  if (!page) return err('Browser not running');
-
-  const outPath = resolve(path || join(tmpdir(), `browser-pdf-${Date.now()}.pdf`));
-  await page.pdf({ path: outPath });
-  return ok(`PDF saved: ${outPath}`);
-}
+// Re-export types consumers might want
+export type { PageId, TabSummary };

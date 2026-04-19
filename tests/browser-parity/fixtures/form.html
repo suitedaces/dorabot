@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Form Fixture</title></head>
+<body>
+  <h1>Form</h1>
+  <form id="f">
+    <label>Name: <input name="name" id="name"></label><br>
+    <label>Email: <input type="email" name="email" id="email"></label><br>
+    <label>Color:
+      <select name="color" id="color">
+        <option value="red">Red</option>
+        <option value="green">Green</option>
+        <option value="blue">Blue</option>
+      </select>
+    </label><br>
+    <label>Agree: <input type="checkbox" name="agree" id="agree"></label><br>
+    <button type="submit" id="submit">Submit</button>
+  </form>
+  <div id="result"></div>
+  <script>
+    document.getElementById('f').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const data = new FormData(e.target);
+      const parts = [];
+      for (const [k, v] of data.entries()) parts.push(k + '=' + v);
+      document.getElementById('result').textContent = parts.join(',');
+    });
+  </script>
+</body>
+</html>

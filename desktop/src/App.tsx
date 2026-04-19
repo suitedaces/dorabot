@@ -827,6 +827,7 @@ export default function App() {
     toggleFiles: toggleFileExplorer,
     openSettings: () => handleNavClick('settings'),
     openTerminal: () => tabState.openTerminalTab(),
+    openBrowser: () => tabState.openBrowserTab(),
     focusInput: () => {
       const group = layout.groups.find(g => g.id === layout.activeGroupId);
       const groupEl = document.querySelector<HTMLElement>(`[data-group-id="${layout.activeGroupId}"]`);

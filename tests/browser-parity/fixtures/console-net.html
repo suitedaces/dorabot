@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Console + Net Fixture</title></head>
+<body>
+  <h1>Console and Network</h1>
+  <div id="net">pending</div>
+  <script>
+    console.log('parity-log hello');
+    console.error('parity-error oops');
+    fetch('/api/echo?msg=hi')
+      .then((r) => r.json())
+      .then((j) => { document.getElementById('net').textContent = 'ok:' + (j.query && j.query.msg); })
+      .catch((e) => { document.getElementById('net').textContent = 'err:' + e.message; });
+  </script>
+</body>
+</html>
