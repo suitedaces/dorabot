@@ -828,7 +828,8 @@ function ChatProgress({ items }: { items: { content: string; status: string; act
   const done = items.filter(i => i.status === 'completed').length;
   const total = items.length;
   const inProgress = items.find(i => i.status === 'in_progress');
-  const pct = Math.round((done / total) * 100);
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const allDone = total > 0 && done === total;
 
   return (
     <div className="px-4 shrink-0">
@@ -837,7 +838,9 @@ function ChatProgress({ items }: { items: { content: string; status: string; act
           className="flex items-center gap-2 w-full px-3 py-1.5 hover:bg-secondary/60 transition-colors text-left"
           onClick={() => setExpanded(v => !v)}
         >
-          <Loader2 className="w-3 h-3 text-primary shrink-0 animate-spin" />
+          {allDone
+            ? <Check className="w-3 h-3 text-success shrink-0" />
+            : <Loader2 className="w-3 h-3 text-primary shrink-0 animate-spin" />}
           <span className="text-[11px] text-muted-foreground truncate flex-1">
             {inProgress ? inProgress.activeForm : `${done}/${total} tasks`}
           </span>
@@ -1155,9 +1158,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
           const parsed = (item as any).streaming
             ? JSON.parse(jsonrepair(item.input))
             : JSON.parse(item.input);
-          const todos = (parsed.todos || []) as { content: string; status: string; activeForm: string }[];
-          if (todos.length > 0 && todos.every(t => t.status === 'completed')) return [];
-          return todos;
+          return (parsed.todos || []) as { content: string; status: string; activeForm: string }[];
         } catch { return []; }
       }
     }

@@ -1131,24 +1131,33 @@ export function useGateway() {
         setSessionStates(prev => {
           const state = prev[sk];
           if (!state) return prev;
-          const items: ChatItem[] = [];
-          for (const tool of snap.completedTools) {
-            items.push({ type: 'tool_use', id: '', name: tool.name, input: '', output: '', streaming: false, timestamp: snap.updatedAt });
-          }
-          if (snap.currentTool) {
-            items.push({ type: 'tool_use', id: '', name: snap.currentTool.name, input: snap.currentTool.inputJson, streaming: true, timestamp: snap.updatedAt });
-          }
-          if (snap.text) {
-            items.push({ type: 'text', content: snap.text, streaming: snap.status === 'responding', timestamp: snap.updatedAt });
-          }
+          // snapshot summaries are lossy (input stripped from completedTools).
+          // if replay already hydrated the current turn, trust those items and
+          // only sync status/pending. otherwise fall back to rebuilding from the
+          // snapshot so fresh clients still see something.
           const lastResultIdx = state.chatItems.map(i => i.type).lastIndexOf('result');
-          const replaceFrom = state.chatItems.findIndex((it, idx) => idx > lastResultIdx && it.type !== 'user');
-          const base = replaceFrom >= 0 ? state.chatItems.slice(0, replaceFrom) : state.chatItems;
+          const replayHydrated = state.chatItems.some(
+            (it, idx) => idx > lastResultIdx && it.type !== 'user'
+          );
+          let chatItems = state.chatItems;
+          if (!replayHydrated) {
+            const items: ChatItem[] = [];
+            for (const tool of snap.completedTools) {
+              items.push({ type: 'tool_use', id: '', name: tool.name, input: '', output: '', streaming: false, timestamp: snap.updatedAt });
+            }
+            if (snap.currentTool) {
+              items.push({ type: 'tool_use', id: '', name: snap.currentTool.name, input: snap.currentTool.inputJson, streaming: true, timestamp: snap.updatedAt });
+            }
+            if (snap.text) {
+              items.push({ type: 'text', content: snap.text, streaming: snap.status === 'responding', timestamp: snap.updatedAt });
+            }
+            chatItems = [...state.chatItems, ...items];
+          }
           return {
             ...prev,
             [sk]: {
               ...state,
-              chatItems: [...base, ...items],
+              chatItems,
               agentStatus: snap.status,
               pendingQuestion: snap.pendingQuestion && (snap.pendingQuestionStatus ?? 'pending') === 'pending'
                 ? { requestId: snap.pendingQuestion.requestId, questions: snap.pendingQuestion.questions }
