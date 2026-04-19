@@ -182,9 +182,14 @@ async function typeText(pageId: PageId, text: string): Promise<void> {
 }
 
 async function pressKey(pageId: PageId, key: string): Promise<void> {
-  const { code, windowsVirtualKeyCode, modifiers } = mapKey(key);
+  const { code, windowsVirtualKeyCode, modifiers, text } = mapKey(key);
+  // text is critical for Enter/Tab/Space/Backspace — chromium routes text-
+  // producing keydowns through a different path that fires implicit form
+  // submission and typing behaviors. without it, keydown fires but the
+  // default action (e.g. submit on Enter) never runs.
   await sendCdp(pageId, 'Input.dispatchKeyEvent', {
     type: 'keyDown', key, code, modifiers, windowsVirtualKeyCode,
+    ...(text ? { text, unmodifiedText: text } : {}),
   });
   await sendCdp(pageId, 'Input.dispatchKeyEvent', {
     type: 'keyUp', key, code, modifiers, windowsVirtualKeyCode,
@@ -193,14 +198,16 @@ async function pressKey(pageId: PageId, key: string): Promise<void> {
 
 // Minimal key → code / keyCode mapping. Covers the keys an agent typically
 // sends (Enter, Tab, Escape, arrows, etc.). For anything else we fall back
-// to insertText for the character itself.
-function mapKey(key: string): { code: string; windowsVirtualKeyCode?: number; modifiers: number } {
+// to insertText for the character itself. `text` is set for keys that
+// produce a character — chromium needs it to fire implicit form submission
+// on Enter, tab-key focus moves, backspace deletions, etc.
+function mapKey(key: string): { code: string; windowsVirtualKeyCode?: number; modifiers: number; text?: string } {
   const modifiers = 0;
-  const map: Record<string, { code: string; windowsVirtualKeyCode?: number }> = {
-    Enter: { code: 'Enter', windowsVirtualKeyCode: 13 },
-    Tab: { code: 'Tab', windowsVirtualKeyCode: 9 },
+  const map: Record<string, { code: string; windowsVirtualKeyCode?: number; text?: string }> = {
+    Enter: { code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' },
+    Tab: { code: 'Tab', windowsVirtualKeyCode: 9, text: '\t' },
     Escape: { code: 'Escape', windowsVirtualKeyCode: 27 },
-    Backspace: { code: 'Backspace', windowsVirtualKeyCode: 8 },
+    Backspace: { code: 'Backspace', windowsVirtualKeyCode: 8, text: '\b' },
     Delete: { code: 'Delete', windowsVirtualKeyCode: 46 },
     ArrowUp: { code: 'ArrowUp', windowsVirtualKeyCode: 38 },
     ArrowDown: { code: 'ArrowDown', windowsVirtualKeyCode: 40 },
@@ -210,7 +217,7 @@ function mapKey(key: string): { code: string; windowsVirtualKeyCode?: number; mo
     End: { code: 'End', windowsVirtualKeyCode: 35 },
     PageUp: { code: 'PageUp', windowsVirtualKeyCode: 33 },
     PageDown: { code: 'PageDown', windowsVirtualKeyCode: 34 },
-    Space: { code: 'Space', windowsVirtualKeyCode: 32 },
+    Space: { code: 'Space', windowsVirtualKeyCode: 32, text: ' ' },
   };
   const entry = map[key] || { code: `Key${key.toUpperCase()}` };
   return { ...entry, modifiers };
