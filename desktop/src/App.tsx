@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { PALETTES } from './lib/palettes';
 import type { Palette as PaletteId } from './lib/palettes';
+import { isSafeUrl, normalizeUrl } from './lib/url';
 import { ToastContainer } from './components/ToastContainer';
 
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
@@ -924,20 +925,28 @@ export default function App() {
   // chat -> browser tab bridge: BrowserStream dispatches this when the user
   // clicks the url bar in the transcript. focus the matching tab if it still
   // exists, otherwise open a fresh tab at that url.
+  //
+  // the url is validated here because *any* renderer-side code (a compromised
+  // dep, injected script) could fire this event. main process also validates,
+  // but failing fast here keeps bad urls out of tab state.
+  const tabStateRef = useRef(tabState);
+  useEffect(() => { tabStateRef.current = tabState; }, [tabState]);
   useEffect(() => {
     const handler = (e: Event) => {
       const url = (e as CustomEvent<{ url?: string }>).detail?.url;
-      if (!url) return;
-      const match = tabsRef.current.find(t => isBrowserTab(t) && t.url === url);
+      if (!isSafeUrl(url)) return;
+      const target = normalizeUrl(url!);
+      const ts = tabStateRef.current;
+      const match = tabsRef.current.find(t => isBrowserTab(t) && normalizeUrl(t.url) === target);
       if (match) {
-        tabState.focusTab(match.id);
+        ts.focusTab(match.id);
       } else {
-        tabState.openBrowserTab(url);
+        ts.openBrowserTab(url);
       }
     };
     window.addEventListener('dorabot:open-browser-tab', handler);
     return () => window.removeEventListener('dorabot:open-browser-tab', handler);
-  }, [tabState]);
+  }, []);
 
   // --- Drag and drop ---
   const handleDragStart = useCallback((event: DragStartEvent) => {

@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { useGateway } from './useGateway';
 import type { useLayout, GroupId } from './useLayout';
+import { isSafeUrl } from '../lib/url';
 
 export type TabType = 'chat' | 'channels' | 'goals' | 'automation' | 'extensions' | 'agents' | 'memory' | 'research' | 'settings' | 'file' | 'diff' | 'terminal' | 'task' | 'pr' | 'browser';
 
@@ -690,13 +691,17 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
   }, [focusTab, gw, layout]);
 
   const openBrowserTab = useCallback((url?: string, groupId?: GroupId) => {
+    // reject unsafe schemes at the earliest tab-state entry point. the main
+    // process also re-validates before loadURL, but failing here keeps
+    // garbage out of the tab list.
+    const safeUrl = url && isSafeUrl(url) ? url : undefined;
     const id = `browser:${crypto.randomUUID()}`;
     const tab: BrowserTab = {
       id,
       type: 'browser',
       label: 'New Tab',
       closable: true,
-      url,
+      url: safeUrl,
     };
     setTabs(prev => [...prev, tab]);
     setActiveTabId(id);
@@ -743,12 +748,12 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     if (focus) setActiveTabId(id);
 
     // Split a new column on the right when the layout is single-pane and no
-    // target group was forced.  The tab becomes active *within* the new pane so
-    // the WebContentsView paints there, but the user's original pane stays the
-    // layout's active pane.
+    // target group was forced.  The atomic addColumnWithTab creates the pane
+    // pre-populated with our tab in a single setState, which is important —
+    // a two-step add-column-then-add-tab would leave an empty pane visible
+    // for a render, tripping the fill-empty effect into making a ghost chat.
     if (preferSplit && !groupId && !layout.isMultiPane) {
-      const newPaneId = layout.addColumnAt(layout.activeGroupId, 'right', { activate: false });
-      layout.addTabToGroup(id, newPaneId, { activate: true });
+      layout.addColumnWithTab(layout.activeGroupId, 'right', id, { activate: false });
     } else {
       layout.addTabToGroup(id, groupId, { activate: focus });
     }

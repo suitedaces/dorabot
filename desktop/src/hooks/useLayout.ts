@@ -231,6 +231,50 @@ export function useLayout() {
     return newPane.id;
   }, []);
 
+  // Atomically add a new column that already contains `tabId` in its pane.
+  // This is the split-and-adopt path used by agent-initiated browser tabs —
+  // doing it in a single setState prevents the fill-empty effect from racing
+  // an empty pane and creating a ghost chat tab.
+  const addColumnWithTab = useCallback((
+    targetPaneId: string,
+    side: 'left' | 'right',
+    tabId: string,
+    opts?: { activate?: boolean },
+  ): string => {
+    const activate = opts?.activate ?? false;
+    const newPane: Pane = { id: uid(), tabIds: [tabId], activeTabId: tabId };
+    const newCol: Column = { id: uid(), panes: [newPane], sizes: [100] };
+    setState(prev => {
+      const loc = findPaneColumn(prev, targetPaneId);
+      if (!loc) return prev;
+      // strip the tab from any pre-existing pane so we don't duplicate it
+      const cleanedColumns = prev.columns.map(c => ({
+        ...c,
+        panes: c.panes.map(p => {
+          if (!p.tabIds.includes(tabId)) return p;
+          const filtered = p.tabIds.filter(id => id !== tabId);
+          return {
+            ...p,
+            tabIds: filtered,
+            activeTabId: p.activeTabId === tabId
+              ? (filtered[0] || null)
+              : p.activeTabId,
+          };
+        }),
+      }));
+      const insertIdx = side === 'right' ? loc.colIdx + 1 : loc.colIdx;
+      const cols = [...cleanedColumns];
+      cols.splice(insertIdx, 0, newCol);
+      return {
+        ...prev,
+        columns: cols,
+        sizes: equalSizes(cols.length),
+        activePaneId: activate ? newPane.id : prev.activePaneId,
+      };
+    });
+    return newPane.id;
+  }, []);
+
   // Add a row at a specific position (for drag: above/below a target)
   const addRowAt = useCallback((targetPaneId: string, side: 'top' | 'bottom'): string => {
     const newPane = makePane();
@@ -533,6 +577,7 @@ export function useLayout() {
     addColumn,
     addRow,
     addColumnAt,
+    addColumnWithTab,
     addRowAt,
     splitHorizontal,
     splitVertical,

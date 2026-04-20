@@ -13,6 +13,19 @@
 import { ipcMain, type BrowserWindow, type Rectangle } from 'electron';
 import type { BrowserController, PageId, TabSummary } from './browser-controller';
 
+// Same trust check as browser-controller — keep in sync. Only http/https/about
+// reach CDP Page.navigate. Everything else is rejected with a clear error so
+// agent tool calls with bad URLs fail loudly.
+function isSafeUrl(url: string | undefined | null): boolean {
+  if (!url) return false;
+  try {
+    const u = new URL(String(url).trim());
+    return u.protocol === 'https:' || u.protocol === 'http:' || u.protocol === 'about:';
+  } catch {
+    return false;
+  }
+}
+
 type IpcSend = (channel: string, payload: unknown) => void;
 
 export function registerBrowserIpc(
@@ -187,6 +200,9 @@ async function navigate(
   switch (params.type) {
     case 'url': {
       if (!params.url) throw new Error('url required for type=url');
+      if (!isSafeUrl(params.url)) {
+        throw new Error(`unsafe url scheme: ${params.url.slice(0, 80)}`);
+      }
       await controller.sendCdp(pageId, 'Page.navigate', { url: params.url });
       break;
     }

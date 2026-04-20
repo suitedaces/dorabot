@@ -26,6 +26,20 @@ import { BrowserWindow, WebContentsView, session, type Rectangle } from 'electro
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 
+// trust boundary. only http/https/about schemes are allowed to ever reach
+// loadURL. javascript:, file:, data:, vbscript: and friends are rejected.
+// agent-supplied urls and renderer-dispatched urls both pass through this
+// gate before a WebContentsView is navigated.
+function isSafeUrl(url: string | undefined | null): boolean {
+  if (!url) return false;
+  try {
+    const u = new URL(String(url).trim());
+    return u.protocol === 'https:' || u.protocol === 'http:' || u.protocol === 'about:';
+  } catch {
+    return false;
+  }
+}
+
 export type PageId = string; // b_<8hex>
 
 export type TabSummary = {
@@ -167,6 +181,13 @@ export class BrowserController extends EventEmitter {
     // (Electron #42335) and prevents black flashes during partial paints.
     try { view.setBackgroundColor('#FFFFFF'); } catch {}
 
+    // sanitize the initial url — anything that's not http/https/about falls
+    // back to about:blank so we never loadURL a javascript: or file: uri.
+    const startUrl = isSafeUrl(opts.url) ? opts.url! : 'about:blank';
+    if (opts.url && startUrl !== opts.url) {
+      console.warn(`[browser-controller] rejected unsafe url on createPage: ${opts.url}`);
+    }
+
     const entry: Entry = {
       pageId,
       view,
@@ -176,7 +197,7 @@ export class BrowserController extends EventEmitter {
       lastUserInteractionAt: 0,
       lastAgentActionAt: 0,
       title: '',
-      url: opts.url || 'about:blank',
+      url: startUrl,
       favicon: null,
       buffers: makeBuffers(),
       origin: opts.origin || 'user',
@@ -192,7 +213,7 @@ export class BrowserController extends EventEmitter {
     }
 
     try {
-      await view.webContents.loadURL(opts.url || 'about:blank');
+      await view.webContents.loadURL(startUrl);
     } catch (err) {
       console.error(`[browser-controller] loadURL failed for ${pageId}:`, err);
     }
