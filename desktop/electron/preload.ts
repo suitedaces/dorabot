@@ -139,6 +139,7 @@ export type BrowserTabSummary = {
   origin: 'user' | 'agent';
   crashed: boolean;
   unresponsive: boolean;
+  loading: boolean;
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);

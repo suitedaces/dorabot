@@ -15,13 +15,14 @@
  * can't leave a ghost WebContentsView.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Lock, Globe } from 'lucide-react';
 import type { BrowserTab } from '../hooks/useTabs';
 
 type Props = {
   tab: BrowserTab;
   isActive: boolean;
   paneId: string;
-  onPatch: (patch: Partial<Pick<BrowserTab, 'pageId' | 'url' | 'label'>>) => void;
+  onPatch: (patch: Partial<Pick<BrowserTab, 'pageId' | 'url' | 'label' | 'favicon'>>) => void;
 };
 
 export function BrowserView({ tab, isActive, paneId, onPatch }: Props) {
@@ -33,7 +34,12 @@ export function BrowserView({ tab, isActive, paneId, onPatch }: Props) {
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [paused, setPaused] = useState(false);
+  // creating: renderer-side pending flag for the initial createPage() call.
+  // navLoading: authoritative per-navigation loading from TabSummary.loading
+  // (wc.isLoading()). kept separate so "Opening browser tab..." only shows
+  // before a pageId exists, and the thin progress bar shows on real loads.
   const [loading, setLoading] = useState(false);
+  const [navLoading, setNavLoading] = useState(false);
   const [crashed, setCrashed] = useState<{ reason: string; recoverable: boolean } | null>(null);
   const [loadError, setLoadError] = useState<{ code: number; description: string; url: string } | null>(null);
   const [createFailed, setCreateFailed] = useState(false);
@@ -114,6 +120,7 @@ export function BrowserView({ tab, isActive, paneId, onPatch }: Props) {
       setCanGoBack(summary.canGoBack);
       setCanGoForward(summary.canGoForward);
       setPaused(summary.paused);
+      setNavLoading(summary.loading);
     });
     const unsubUpdated = api.onTabUpdated?.((summary) => {
       if (summary.pageId !== pageId) return;
@@ -125,10 +132,11 @@ export function BrowserView({ tab, isActive, paneId, onPatch }: Props) {
       setCanGoBack(summary.canGoBack);
       setCanGoForward(summary.canGoForward);
       setPaused(summary.paused);
+      setNavLoading(summary.loading);
       // a successful tab-updated after a crash means the auto-reload worked
       if (!summary.crashed && crashed) setCrashed(null);
       const label = summary.title?.trim() || (summary.url ? new URL(summary.url).host : 'New Tab');
-      onPatch({ label });
+      onPatch({ label, favicon: summary.favicon });
     });
     const unsubPaused = api.onTabPaused?.((payload) => {
       if (payload.pageId !== pageId) return;
@@ -276,17 +284,43 @@ export function BrowserView({ tab, isActive, paneId, onPatch }: Props) {
           className="flex-1 min-w-0"
           onSubmit={(e) => { e.preventDefault(); go(urlDraft); }}
         >
-          <input
-            ref={urlInputRef}
-            type="text"
-            value={urlDraft}
-            onChange={(e) => setUrlDraft(e.target.value)}
-            onFocus={(e) => e.currentTarget.select()}
-            placeholder="Enter URL or search"
-            className="w-full px-3 py-1 rounded bg-background border border-border text-sm font-mono placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-            spellCheck={false}
-            autoComplete="off"
-          />
+          <div className="relative">
+            {/* security chip — green lock for https, muted globe for anything
+                else (http, about:, blank). intentionally omitted entirely for
+                empty urls to avoid visual noise during tab boot. */}
+            {url && (() => {
+              let scheme = '';
+              try { scheme = new URL(url).protocol; } catch {}
+              if (scheme === 'https:') {
+                return (
+                  <Lock
+                    className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-emerald-500 pointer-events-none"
+                    aria-label="Secure connection"
+                  />
+                );
+              }
+              if (scheme === 'http:') {
+                return (
+                  <Globe
+                    className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground pointer-events-none"
+                    aria-label="Insecure connection"
+                  />
+                );
+              }
+              return null;
+            })()}
+            <input
+              ref={urlInputRef}
+              type="text"
+              value={urlDraft}
+              onChange={(e) => setUrlDraft(e.target.value)}
+              onFocus={(e) => e.currentTarget.select()}
+              placeholder="Enter URL or search"
+              className="w-full pl-7 pr-3 py-1 rounded bg-background border border-border text-sm font-mono placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+              spellCheck={false}
+              autoComplete="off"
+            />
+          </div>
         </form>
         <button
           type="button"
@@ -306,6 +340,13 @@ export function BrowserView({ tab, isActive, paneId, onPatch }: Props) {
         via paneUpdate). Banners inside here stack on top with z-10.
       */}
       <div ref={bodyRef} className="flex-1 min-h-0 min-w-0 relative bg-background">
+        {/* thin indeterminate progress bar while the page is loading. painted
+            in the renderer's chrome area (above the WebContentsView) so it's
+            visible even when the native view is covering the body. z-20 so
+            it stacks above the crash/error banners (z-10). */}
+        {pageId && navLoading && !crashed && (
+          <div className="absolute top-0 left-0 right-0 h-[2px] bg-primary/80 animate-pulse pointer-events-none z-20" />
+        )}
         {!pageId && !createFailed && (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
             {loading ? 'Opening browser tab...' : 'Initializing...'}

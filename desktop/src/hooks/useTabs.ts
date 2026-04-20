@@ -69,6 +69,10 @@ export type BrowserTab = {
   /** Assigned by BrowserController once the WebContentsView is created. */
   pageId?: string;
   url?: string;
+  /** Latest favicon URL emitted on tab-updated. Cached in tab state so the
+   *  TabBar can render it instead of the generic globe icon. Stripped to
+   *  data: scheme only when we want to avoid persisting bulky URLs. */
+  favicon?: string | null;
 };
 
 export type ViewTab = {
@@ -327,6 +331,9 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     const serializable = tabs.map(t => {
       if (t.type === 'diff') return { ...t, oldContent: '', newContent: '' };
       if (t.type === 'terminal') return { ...t }; // shellId preserved; TerminalView reclaims on mount
+      // Drop favicon from persistence — it may be a huge data: URL on some
+      // sites, and it'll be re-emitted on the next page load anyway.
+      if (t.type === 'browser') { const { favicon: _f, ...rest } = t; return rest; }
       return t;
     });
     try {
@@ -763,7 +770,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
   // Called by BrowserView once the WebContentsView is created and whenever
   // the controller emits tab-updated (url/title changes). Updates are in-memory
   // only; pageId is stripped when persisting tabs.
-  const patchBrowserTab = useCallback((tabId: string, patch: Partial<Pick<BrowserTab, 'pageId' | 'url' | 'label'>>) => {
+  const patchBrowserTab = useCallback((tabId: string, patch: Partial<Pick<BrowserTab, 'pageId' | 'url' | 'label' | 'favicon'>>) => {
     setTabs(prev => prev.map(t => (t.id === tabId && isBrowserTab(t)) ? { ...t, ...patch } : t));
   }, []);
 

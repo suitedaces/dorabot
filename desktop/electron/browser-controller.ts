@@ -59,6 +59,9 @@ export type TabSummary = {
   origin: 'user' | 'agent';
   crashed: boolean;
   unresponsive: boolean;
+  // true while the webContents is mid-navigation. drives the thin progress
+  // bar in BrowserView — emitted on did-start-loading / did-stop-loading.
+  loading: boolean;
 };
 
 type ConsoleEntry = {
@@ -156,6 +159,16 @@ export class BrowserController extends EventEmitter {
   private entries: Map<PageId, Entry> = new Map();
   private hostWindow: BrowserWindow | null = null;
   private userFocusedPageId: PageId | null = null;
+  private sessionHandlersInitialized = false;
+
+  constructor() {
+    super();
+    // wire up the partition-level handlers eagerly. must run before any
+    // WebContentsView is created on this session, otherwise the first
+    // passkey request (which races page load on autofill-enabled sites)
+    // hits the default-deny path.
+    this.initSessionHandlers();
+  }
 
   setHostWindow(win: BrowserWindow | null): void {
     this.hostWindow = win;
@@ -163,6 +176,50 @@ export class BrowserController extends EventEmitter {
 
   getSession() {
     return session.fromPartition(SESSION_PARTITION);
+  }
+
+  /**
+   * Permission gatekeeper for the embedded browser session.
+   *
+   * Chromium funnels WebAuthn / passkey through the permission API using the
+   * names `publickey-credentials-get` (sign-in) and `publickey-credentials-create`
+   * (enroll). Without a handler attached to the session, Electron default-denies
+   * and the passkey dialog never appears.
+   *
+   * Policy for now:
+   *   - allow publickey-credentials-get / -create so passkey sign-in works
+   *   - deny everything else (media, clipboard, notifications, geolocation,
+   *     hid, serial, usb, display-capture, ...) and log it
+   *
+   * TODO (UI-gap list): build an in-app prompt modal so the user can grant
+   * per-origin permissions instead of silent deny-all.
+   */
+  private initSessionHandlers(): void {
+    if (this.sessionHandlersInitialized) return;
+    this.sessionHandlersInitialized = true;
+
+    const ALLOW = new Set(['publickey-credentials-get', 'publickey-credentials-create']);
+
+    const sess = this.getSession();
+    sess.setPermissionRequestHandler((_wc, permission, callback, details) => {
+      if (ALLOW.has(permission)) {
+        callback(true);
+        return;
+      }
+      const origin = (details as { requestingUrl?: string } | undefined)?.requestingUrl || 'unknown';
+      console.log(`[browser-controller] denied permission "${permission}" from ${origin}`);
+      callback(false);
+    });
+
+    // The check handler is a synchronous pre-flight Chromium runs before
+    // invoking the request handler for certain features — notably WebAuthn
+    // conditional UI (the autofill-style passkey chip that renders inside
+    // username inputs on sites like GitHub / Google). Returning true here
+    // tells Chromium the permission would be granted, so the chip appears;
+    // returning false silently hides it.
+    sess.setPermissionCheckHandler((_wc, permission) => {
+      return ALLOW.has(permission);
+    });
   }
 
   async createPage(opts: { url?: string; background?: boolean; origin?: 'user' | 'agent' } = {}): Promise<PageId> {
@@ -765,10 +822,12 @@ export class BrowserController extends EventEmitter {
     const wc = entry.view.webContents;
     let canGoBack = false;
     let canGoForward = false;
+    let loading = false;
     try {
       if (!wc.isDestroyed()) {
         canGoBack = wc.navigationHistory.canGoBack();
         canGoForward = wc.navigationHistory.canGoForward();
+        loading = wc.isLoading();
       }
     } catch {}
     return {
@@ -785,6 +844,7 @@ export class BrowserController extends EventEmitter {
       origin: entry.origin,
       crashed: entry.crashed === true,
       unresponsive: entry.unresponsive === true,
+      loading,
     };
   }
 

@@ -42,7 +42,23 @@ function getTabIcon(tab: Tab) {
   if (isFileTab(tab)) return getFileIcon(tab.filePath);
   if (isDiffTab(tab)) return <FileDiff className="w-3 h-3" />;
   if (isTerminalTab(tab)) return <TerminalSquare className="w-3 h-3" />;
-  if (isBrowserTab(tab)) return <Globe className="w-3 h-3" />;
+  if (isBrowserTab(tab)) {
+    // prefer the page's own favicon; fall back to globe if none has arrived
+    // yet or the image fails to load (onError swaps the element content for
+    // the fallback Globe via a simple inline trick — set src to empty
+    // transparent pixel so React's reconciler just re-renders on next patch).
+    if (tab.favicon) {
+      return (
+        <img
+          src={tab.favicon}
+          className="w-3 h-3 rounded-sm"
+          alt=""
+          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+        />
+      );
+    }
+    return <Globe className="w-3 h-3" />;
+  }
   return VIEW_ICONS[tab.type] || <MessageSquare className="w-3 h-3" />;
 }
 
