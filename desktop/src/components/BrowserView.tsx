@@ -37,6 +37,7 @@ function rectToBounds(rect: DOMRect): Bounds {
 
 export function BrowserView({ tab, isActive, onPatch }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const urlInputRef = useRef<HTMLInputElement | null>(null);
   const [pageId, setPageId] = useState<string | undefined>(tab.pageId);
   const [url, setUrl] = useState<string>(tab.url || '');
   const [urlDraft, setUrlDraft] = useState<string>(tab.url || '');
@@ -131,12 +132,20 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
       console.warn(`[BrowserView] load failed ${pageId} code=${payload.errorCode} desc=${payload.errorDescription}`);
       setLoadError({ code: payload.errorCode, description: payload.errorDescription, url: payload.url });
     });
+    // Cmd+L inside a WebContentsView — main forwards it here. Only act if
+    // it was fired on OUR tab.
+    const unsubFocusUrl = api.onFocusUrlBar?.((payload) => {
+      if (payload.pageId !== pageId) return;
+      const el = urlInputRef.current;
+      if (el) { el.focus(); el.select(); }
+    });
     return () => {
       unsubCreated?.();
       unsubUpdated?.();
       unsubPaused?.();
       unsubCrashed?.();
       unsubLoadFailed?.();
+      unsubFocusUrl?.();
     };
   }, [api, pageId, url, onPatch, crashed]);
 
@@ -289,6 +298,7 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
           onSubmit={(e) => { e.preventDefault(); go(urlDraft); }}
         >
           <input
+            ref={urlInputRef}
             type="text"
             value={urlDraft}
             onChange={(e) => setUrlDraft(e.target.value)}

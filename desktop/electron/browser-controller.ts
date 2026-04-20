@@ -587,6 +587,68 @@ export class BrowserController extends EventEmitter {
       }
     });
 
+    // Shortcut routing. When the WebContentsView has focus, keyDown events
+    // go to Chromium and never reach the renderer's window listener. We
+    // classify every Cmd/Ctrl keypress:
+    //   - browser-native (Cmd+L / R / Shift+R / [ / ]): handle here
+    //   - text-editing (Cmd+C/V/X/A/Z/Y): let Chromium handle natively
+    //   - everything else: forward to renderer via IPC so useKeyboardShortcuts
+    //     re-dispatches it as a synthetic window event
+    wc.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown') return;
+      const mod = input.meta || input.control;
+      if (!mod) return;
+      const key = input.key.toLowerCase();
+
+      // text-editing shortcuts — let Chromium handle
+      if (!input.shift && !input.alt && (key === 'c' || key === 'v' || key === 'x' || key === 'a' || key === 'y')) {
+        return;
+      }
+      // Cmd+Z / Cmd+Shift+Z — undo/redo, native
+      if ((key === 'z') && !input.alt) {
+        return;
+      }
+      // Cmd+F — find in page, keep native (app uses Cmd+Shift+F for global search)
+      if (key === 'f' && !input.shift && !input.alt) {
+        return;
+      }
+
+      // browser-native navigation shortcuts
+      if (key === 'r' && !input.alt) {
+        event.preventDefault();
+        try {
+          if (input.shift) wc.reloadIgnoringCache(); else wc.reload();
+        } catch {}
+        return;
+      }
+      if ((input.key === '[' || input.key === 'BracketLeft') && !input.shift && !input.alt) {
+        event.preventDefault();
+        try { if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack(); } catch {}
+        return;
+      }
+      if ((input.key === ']' || input.key === 'BracketRight') && !input.shift && !input.alt) {
+        event.preventDefault();
+        try { if (wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward(); } catch {}
+        return;
+      }
+      if (key === 'l' && !input.shift && !input.alt) {
+        event.preventDefault();
+        this.hostWindow?.webContents.send('browser:focus-url-bar', { pageId: entry.pageId });
+        return;
+      }
+
+      // everything else — forward to renderer
+      event.preventDefault();
+      this.hostWindow?.webContents.send('app:shortcut', {
+        key: input.key,
+        code: input.code,
+        shift: input.shift,
+        alt: input.alt,
+        meta: input.meta,
+        control: input.control,
+      });
+    });
+
     // renderer crash / oom / killed — auto-recover unless the crash is repeated
     // (guard against crash loop). matches the "entire app black screen after 1s"
     // symptom on restore: GPU or render process dies, we reload instead of

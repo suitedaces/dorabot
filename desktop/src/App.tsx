@@ -870,6 +870,32 @@ export default function App() {
     return () => cleanup?.();
   }, [shortcutActions]);
 
+  // Keyboard shortcuts pressed while a browser WebContentsView is focused
+  // don't reach the renderer's window listener. Main intercepts them and
+  // forwards via IPC — we re-dispatch as a synthetic KeyboardEvent so the
+  // existing useKeyboardShortcuts hook picks them up without duplicating
+  // the shortcut table.
+  useEffect(() => {
+    const cleanup = (window as any).electronAPI?.onAppShortcut?.((p: { key: string; code: string; shift: boolean; alt: boolean; meta: boolean; control: boolean }) => {
+      try {
+        const ev = new KeyboardEvent('keydown', {
+          key: p.key,
+          code: p.code,
+          shiftKey: p.shift,
+          altKey: p.alt,
+          metaKey: p.meta,
+          ctrlKey: p.control,
+          bubbles: true,
+          cancelable: true,
+        });
+        window.dispatchEvent(ev);
+      } catch (err) {
+        console.error('[App] onAppShortcut dispatch failed:', err);
+      }
+    });
+    return () => cleanup?.();
+  }, []);
+
   // Agent → UI sync: when the agent creates a browser tab via the browser tool,
   // surface it as a UI tab. If the agent acts on an existing pageId, focus
   // that tab. Refs keep the subscription stable across tab list changes.

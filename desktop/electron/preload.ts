@@ -99,6 +99,20 @@ const electronAPI = {
       ipcRenderer.on('browser:tab-load-failed', handler);
       return () => { ipcRenderer.removeListener('browser:tab-load-failed', handler); };
     },
+    // Cmd+L from inside a browser tab — focus the URL bar of that tab
+    onFocusUrlBar: (cb: (payload: { pageId: string }) => void) => {
+      const handler = (_e: any, payload: any) => cb(payload);
+      ipcRenderer.on('browser:focus-url-bar', handler);
+      return () => { ipcRenderer.removeListener('browser:focus-url-bar', handler); };
+    },
+  },
+  // App shortcuts forwarded from a focused WebContentsView back to the
+  // renderer — dispatched as synthetic KeyboardEvents on window so the
+  // existing useKeyboardShortcuts hook picks them up unchanged.
+  onAppShortcut: (cb: (payload: { key: string; code: string; shift: boolean; alt: boolean; meta: boolean; control: boolean }) => void) => {
+    const handler = (_e: any, payload: any) => cb(payload);
+    ipcRenderer.on('app:shortcut', handler);
+    return () => { ipcRenderer.removeListener('app:shortcut', handler); };
   },
 };
 
