@@ -322,7 +322,18 @@ export class BrowserController extends EventEmitter {
     entry.lastAgentActionAt = Date.now();
     this.emit('tab-agent-activity', { pageId, at: entry.lastAgentActionAt });
 
-    return await entry.view.webContents.debugger.sendCommand(method, params as object);
+    const result = await entry.view.webContents.debugger.sendCommand(method, params as object);
+
+    // focus steal guard: agent input events (click, key, navigation) can pull
+    // OS keyboard focus into the WebContentsView — pages auto-focus inputs,
+    // clicks focus their targets, loadURL focuses the new document. if the
+    // user isn't actively looking at this tab, bounce focus back to the host
+    // renderer so they can keep typing in chat / the url bar / wherever.
+    if (!entry.userFocused && this.hostWindow && !this.hostWindow.isDestroyed()) {
+      try { this.hostWindow.webContents.focus(); } catch {}
+    }
+
+    return result;
   }
 
   // Page.printToPDF is not exposed through Electron's debugger — use the
