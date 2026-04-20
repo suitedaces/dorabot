@@ -707,7 +707,18 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
   // Adopt a page the main process already created (e.g. agent-initiated)
   // into a UI tab. The tab starts with pageId pre-assigned so BrowserView
   // attaches to the existing WebContentsView instead of creating a new one.
-  const adoptBrowserTab = useCallback((pageId: string, url?: string, label?: string, groupId?: GroupId) => {
+  //
+  // focus defaults to true for back-compat. Agent-created tabs pass focus:false
+  // so the new tab appears silently in the tab bar without stealing the user's
+  // current pane focus.
+  const adoptBrowserTab = useCallback((
+    pageId: string,
+    url?: string,
+    label?: string,
+    groupId?: GroupId,
+    opts?: { focus?: boolean },
+  ) => {
+    const focus = opts?.focus ?? true;
     let fallbackLabel = 'New Tab';
     if (!label && url) {
       try { fallbackLabel = new URL(url).host; } catch {}
@@ -722,8 +733,8 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
       url,
     };
     setTabs(prev => [...prev, tab]);
-    setActiveTabId(id);
-    layout.addTabToGroup(id, groupId);
+    if (focus) setActiveTabId(id);
+    layout.addTabToGroup(id, groupId, { activate: focus });
     return id;
   }, [layout]);
 

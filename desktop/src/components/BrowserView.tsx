@@ -50,8 +50,21 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
   const [createFailed, setCreateFailed] = useState(false);
   const lastBoundsRef = useRef<Bounds | null>(null);
   const creatingRef = useRef(false);
+  const mountedRef = useRef(true);
+  const rafRef = useRef<number | null>(null);
 
   const api = typeof window !== 'undefined' ? window.electronAPI?.browser : undefined;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, []);
 
   // Create a WebContentsView on first mount if we don't have one yet.
   useEffect(() => {
@@ -62,14 +75,24 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
     setCreateFailed(false);
     api.create({ url: tab.url, background: false })
       .then(id => {
+        // If the tab was closed while create was in flight, destroy the orphan
+        // view — nobody in the UI is holding its pageId so it'd leak forever.
+        if (!mountedRef.current) {
+          api.destroy(id).catch(() => {});
+          return;
+        }
         setPageId(id);
         onPatch({ pageId: id });
       })
       .catch(err => {
+        if (!mountedRef.current) return;
         console.error('[BrowserView] create failed:', err);
         setCreateFailed(true);
       })
-      .finally(() => { creatingRef.current = false; setLoading(false); });
+      .finally(() => {
+        creatingRef.current = false;
+        if (mountedRef.current) setLoading(false);
+      });
   }, [api, pageId, tab.url, onPatch]);
 
   // Manually recreate the WebContentsView (used by the retry button when create
@@ -81,14 +104,22 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
     setCreateFailed(false);
     api.create({ url: tab.url, background: false })
       .then(id => {
+        if (!mountedRef.current) {
+          api.destroy(id).catch(() => {});
+          return;
+        }
         setPageId(id);
         onPatch({ pageId: id });
       })
       .catch(err => {
+        if (!mountedRef.current) return;
         console.error('[BrowserView] recreate failed:', err);
         setCreateFailed(true);
       })
-      .finally(() => { creatingRef.current = false; setLoading(false); });
+      .finally(() => {
+        creatingRef.current = false;
+        if (mountedRef.current) setLoading(false);
+      });
   }, [api, tab.url, onPatch]);
 
   // Subscribe to tab-updated events for OUR pageId and mirror into state +
@@ -151,8 +182,14 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
 
   // Track container bounds and push them to main. Do it synchronously after
   // layout so the WebContentsView lands in the right place before first paint.
+  //
+  // Hard gate on isActive: if this tab isn't the active one in its group, we
+  // MUST NOT push bounds — otherwise a late pushBounds (post `hide`) would
+  // re-show the view, and the user would see the browser overlay through
+  // their currently-active tab.
   const pushBounds = useCallback(() => {
     if (!api || !pageId || !containerRef.current) return;
+    if (!isActive) return;
     const rect = containerRef.current.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) return; // not laid out yet
     const b = rectToBounds(rect);
@@ -160,16 +197,30 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
     if (prev && prev.x === b.x && prev.y === b.y && prev.width === b.width && prev.height === b.height) return;
     lastBoundsRef.current = b;
     api.setBounds(pageId, b).catch(() => {});
-  }, [api, pageId]);
+  }, [api, pageId, isActive]);
 
-  useLayoutEffect(() => { pushBounds(); });
+  // rAF-coalesce pushBounds so a burst of scroll/resize events collapses into
+  // one setBounds IPC per frame. keeps multi-tab layout smooth.
+  const schedulePush = useCallback(() => {
+    if (!isActive) return;
+    if (rafRef.current != null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      pushBounds();
+    });
+  }, [isActive, pushBounds]);
+
+  useLayoutEffect(() => {
+    if (isActive) pushBounds();
+  }, [isActive, pushBounds]);
 
   useEffect(() => {
     if (!containerRef.current) return;
+    if (!isActive) return; // inactive tabs don't need observers
     const el = containerRef.current;
-    const ro = new ResizeObserver(() => pushBounds());
+    const ro = new ResizeObserver(() => schedulePush());
     ro.observe(el);
-    const onWinResize = () => pushBounds();
+    const onWinResize = () => schedulePush();
     window.addEventListener('resize', onWinResize);
     // Fire on scroll too — Electron positions WebContentsView in window coords,
     // so any scroll of an ancestor container changes our absolute rect.
@@ -179,7 +230,7 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
       window.removeEventListener('resize', onWinResize);
       window.removeEventListener('scroll', onWinResize, true);
     };
-  }, [pushBounds]);
+  }, [isActive, schedulePush]);
 
   // Tell main which tab the user is looking at (for userFocused flag on summaries).
   useEffect(() => {

@@ -897,8 +897,10 @@ export default function App() {
   }, []);
 
   // Agent → UI sync: when the agent creates a browser tab via the browser tool,
-  // surface it as a UI tab. If the agent acts on an existing pageId, focus
-  // that tab. Refs keep the subscription stable across tab list changes.
+  // surface it as a UI tab BUT never steal focus. The agent's work appears
+  // silently in the tab bar; the user opts in by clicking it. Similarly, we
+  // don't re-focus the user when the agent acts on a tab — the agent can work
+  // in the background while the user keeps typing in chat.
   const tabsRef = useRef(tabState.tabs);
   useEffect(() => { tabsRef.current = tabState.tabs; }, [tabState.tabs]);
   useEffect(() => {
@@ -907,22 +909,12 @@ export default function App() {
     const unsubCreated = api.onTabCreated?.((summary) => {
       if (summary.origin !== 'agent') return;
       const existing = tabsRef.current.find(t => isBrowserTab(t) && t.pageId === summary.pageId);
-      if (existing) {
-        tabState.focusTab(existing.id);
-        return;
-      }
+      if (existing) return; // already adopted — don't steal focus
       const label = summary.title?.trim() || undefined;
-      tabState.adoptBrowserTab(summary.pageId, summary.url || undefined, label);
-    });
-    const unsubActivity = api.onTabAgentActivity?.((payload) => {
-      const existing = tabsRef.current.find(t => isBrowserTab(t) && t.pageId === payload.pageId);
-      if (existing && existing.id !== tabState.activeTabId) {
-        tabState.focusTab(existing.id);
-      }
+      tabState.adoptBrowserTab(summary.pageId, summary.url || undefined, label, undefined, { focus: false });
     });
     return () => {
       unsubCreated?.();
-      unsubActivity?.();
     };
   }, [tabState]);
 

@@ -340,7 +340,8 @@ export function useLayout() {
     });
   }, []);
 
-  const addTabToGroup = useCallback((tabId: string, paneId?: string) => {
+  const addTabToGroup = useCallback((tabId: string, paneId?: string, opts?: { activate?: boolean }) => {
+    const activate = opts?.activate ?? true;
     setState(prev => {
       const targetId = paneId || prev.activePaneId;
       // Remove from any other pane first (prevent cross-pane duplication),
@@ -349,8 +350,14 @@ export function useLayout() {
         ...c,
         panes: c.panes.map(p => {
           if (p.id === targetId) {
-            if (p.tabIds.includes(tabId)) return { ...p, activeTabId: tabId };
-            return { ...p, tabIds: [...p.tabIds, tabId], activeTabId: tabId };
+            if (p.tabIds.includes(tabId)) {
+              return activate ? { ...p, activeTabId: tabId } : p;
+            }
+            return {
+              ...p,
+              tabIds: [...p.tabIds, tabId],
+              activeTabId: activate ? tabId : (p.activeTabId ?? tabId),
+            };
           }
           // Strip from non-target panes
           if (p.tabIds.includes(tabId)) {
