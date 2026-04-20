@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import type { EditorGroup } from '../hooks/useLayout';
 import type { Tab } from '../hooks/useTabs';
 import { isChatTab, isFileTab, isDiffTab, isTerminalTab, isTaskTab, isPrTab, isBrowserTab } from '../hooks/useTabs';
@@ -99,6 +100,24 @@ export function EditorGroupPanel({
     .filter(Boolean) as Tab[];
 
   const activeTab = groupTabs.find(t => t.id === group.activeTabId) || groupTabs[0];
+
+  // When the active tab is not a browser tab, clear any browser claim on this
+  // pane so the main-process tab model hides the native WebContentsView. When
+  // it IS a browser tab, the BrowserView itself pushes the claim + bounds via
+  // its own ResizeObserver — we stay quiet here to avoid racing it.
+  // Always paneRemove on unmount so the model forgets this pane entirely.
+  const activeIsBrowser = !!activeTab && isBrowserTab(activeTab);
+  useEffect(() => {
+    const api = typeof window !== 'undefined' ? window.electronAPI?.browser : undefined;
+    if (!api) return;
+    if (!activeIsBrowser) {
+      api.paneUpdate(group.id, { activeBrowserPageId: null, visible: true }).catch(() => {});
+    }
+  }, [group.id, activeIsBrowser]);
+  useEffect(() => {
+    const api = typeof window !== 'undefined' ? window.electronAPI?.browser : undefined;
+    return () => { api?.paneRemove(group.id).catch(() => {}); };
+  }, [group.id]);
 
   const renderContent = () => {
     if (!activeTab) return null;
@@ -292,6 +311,7 @@ export function EditorGroupPanel({
               <BrowserView
                 tab={t}
                 isActive={t.id === activeTab?.id}
+                paneId={group.id}
                 onPatch={(patch) => tabState.patchBrowserTab(t.id, patch)}
               />
             </div>

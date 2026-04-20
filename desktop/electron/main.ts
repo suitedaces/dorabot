@@ -27,6 +27,7 @@ let isQuitting = false;
 let gatewayManager: GatewayManager | null = null;
 let gatewayBridge: GatewayBridge | null = null;
 let browserController: BrowserController | null = null;
+let browserTabModel: import('./browser-tab-model').BrowserTabModel | null = null;
 let updateCheckInterval: ReturnType<typeof setInterval> | null = null;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -175,6 +176,9 @@ function createWindow(): void {
   // Forcing an invalidate on each show/focus/restore side-steps that pause.
   const repaintBrowserViews = () => {
     try { browserController?.invalidateAllViews(); } catch {}
+    // Re-assert layering and bounds — covers stale z-order if the OS brought
+    // some other chrome view on top while the window was backgrounded.
+    try { browserTabModel?.reconcileNow(); } catch {}
   };
   mainWindow.on('show', repaintBrowserViews);
   mainWindow.on('focus', repaintBrowserViews);
@@ -288,9 +292,11 @@ app.on('ready', async () => {
     app.dock.setIcon(getIconPath());
   }
 
-  // Create browser controller (owns WebContentsView tabs)
+  // Create browser controller (owns WebContentsView tabs) and its tab model
+  // (single source of truth for which tab is visible in which pane).
   browserController = new BrowserController();
-  registerBrowserIpc(browserController, () => mainWindow);
+  const browserIpc = registerBrowserIpc(browserController, () => mainWindow);
+  browserTabModel = browserIpc.model;
 
   // one-time cookie migration from legacy playwright profile. fire-and-forget;
   // sentinel at ~/.dorabot/browser-migrated ensures we only run once.

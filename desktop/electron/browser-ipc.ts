@@ -12,6 +12,7 @@
  */
 import { ipcMain, type BrowserWindow, type Rectangle } from 'electron';
 import type { BrowserController, PageId, TabSummary } from './browser-controller';
+import { BrowserTabModel, type PaneId } from './browser-tab-model';
 
 // Same trust check as browser-controller — keep in sync. Only http/https/about
 // reach CDP Page.navigate. Everything else is rejected with a clear error so
@@ -31,13 +32,17 @@ type IpcSend = (channel: string, payload: unknown) => void;
 export function registerBrowserIpc(
   controller: BrowserController,
   getWindow: () => BrowserWindow | null,
-): void {
+): { model: BrowserTabModel } {
   const send: IpcSend = (channel, payload) => {
     const win = getWindow();
     try { win?.webContents.send(channel, payload); } catch {}
   };
 
-  // relay controller events to the renderer
+  // Source of truth for which native view is visible in which pane. Subscribes
+  // to tab-created / tab-closed internally and reconciles on every change.
+  const model = new BrowserTabModel(controller);
+
+  // relay controller events to the renderer (model's subscription is separate)
   controller.on('tab-created', (summary: TabSummary) => send('browser:tab-created', summary));
   controller.on('tab-updated', (summary: TabSummary) => send('browser:tab-updated', summary));
   controller.on('tab-closed', (payload) => send('browser:tab-closed', payload));
@@ -47,7 +52,7 @@ export function registerBrowserIpc(
   controller.on('tab-crashed', (payload) => send('browser:tab-crashed', payload));
   controller.on('tab-load-failed', (payload) => send('browser:tab-load-failed', payload));
 
-  // renderer → main
+  // renderer → main (tab lifecycle)
   ipcMain.handle('browser:create', async (_e, opts: { url?: string; background?: boolean } = {}) => {
     return await controller.createPage(opts);
   });
@@ -57,18 +62,19 @@ export function registerBrowserIpc(
     return true;
   });
 
-  ipcMain.handle('browser:set-bounds', (_e, pageId: PageId, bounds: Rectangle) => {
-    controller.setBounds(pageId, bounds);
-    return true;
-  });
+  // renderer → main (pane-level visibility, the new way). The renderer pushes
+  // per-pane state here. Model handles show/hide/setBounds across all known
+  // tabs, so a React cleanup that fails to fire can't produce a ghost view.
+  ipcMain.handle(
+    'browser:pane-update',
+    (_e, paneId: PaneId, patch: { bounds?: Rectangle; activeBrowserPageId?: PageId | null; visible?: boolean }) => {
+      model.setPaneState(paneId, patch);
+      return true;
+    },
+  );
 
-  ipcMain.handle('browser:hide', (_e, pageId: PageId) => {
-    controller.hide(pageId);
-    return true;
-  });
-
-  ipcMain.handle('browser:bring-to-front', (_e, pageId: PageId) => {
-    controller.bringToFront(pageId);
+  ipcMain.handle('browser:pane-remove', (_e, paneId: PaneId) => {
+    model.removePane(paneId);
     return true;
   });
 
@@ -94,6 +100,8 @@ export function registerBrowserIpc(
   ipcMain.handle('browser:list-pages', () => {
     return controller.listPages();
   });
+
+  return { model };
 }
 
 /**

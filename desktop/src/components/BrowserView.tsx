@@ -1,43 +1,32 @@
 /**
- * BrowserView — the renderer-side tab UI for an embedded browser tab.
+ * BrowserView — the renderer-side chrome for an embedded browser tab.
  *
  * The actual page renders in a native WebContentsView owned by the Electron
  * main process. This component:
  *   - Asks main to create a page on first mount (if the tab has no pageId).
- *   - Positions the WebContentsView to match this component's bounding box
- *     via `browser:set-bounds` IPC, tracked with ResizeObserver.
  *   - Renders the nav bar (back / forward / reload / URL + go) and pause toggle.
  *   - Mirrors `browser:tab-updated` events into local state + the tab label.
- *   - Calls `browser:hide` when it unmounts (tab switch) so the overlay doesn't
- *     bleed into whatever renders next. Destroy happens only from closeTab.
+ *   - When the tab is active, observes the body div and pushes pane bounds
+ *     through `paneUpdate` so the main-process BrowserTabModel can position
+ *     the native view over it.
  *
- * The mount div is a positioning anchor only — it never actually contains a
- * DOM tree for the page. It just carves out screen space, and the main
- * process paints its WebContentsView on top at matching bounds.
+ * show/hide/bringToFront is NOT this component's job — the model reconciles
+ * visibility across all known tabs from pane state, so a missed React cleanup
+ * can't leave a ghost WebContentsView.
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BrowserTab } from '../hooks/useTabs';
 
 type Props = {
   tab: BrowserTab;
   isActive: boolean;
+  paneId: string;
   onPatch: (patch: Partial<Pick<BrowserTab, 'pageId' | 'url' | 'label'>>) => void;
 };
 
-type Bounds = { x: number; y: number; width: number; height: number };
-
-function rectToBounds(rect: DOMRect): Bounds {
-  return {
-    x: Math.round(rect.left),
-    y: Math.round(rect.top),
-    width: Math.max(0, Math.round(rect.width)),
-    height: Math.max(0, Math.round(rect.height)),
-  };
-}
-
-export function BrowserView({ tab, isActive, onPatch }: Props) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
+export function BrowserView({ tab, isActive, paneId, onPatch }: Props) {
   const urlInputRef = useRef<HTMLInputElement | null>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
   const [pageId, setPageId] = useState<string | undefined>(tab.pageId);
   const [url, setUrl] = useState<string>(tab.url || '');
   const [urlDraft, setUrlDraft] = useState<string>(tab.url || '');
@@ -48,22 +37,14 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
   const [crashed, setCrashed] = useState<{ reason: string; recoverable: boolean } | null>(null);
   const [loadError, setLoadError] = useState<{ code: number; description: string; url: string } | null>(null);
   const [createFailed, setCreateFailed] = useState(false);
-  const lastBoundsRef = useRef<Bounds | null>(null);
   const creatingRef = useRef(false);
   const mountedRef = useRef(true);
-  const rafRef = useRef<number | null>(null);
 
   const api = typeof window !== 'undefined' ? window.electronAPI?.browser : undefined;
 
   useEffect(() => {
     mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      if (rafRef.current != null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-    };
+    return () => { mountedRef.current = false; };
   }, []);
 
   // Create a WebContentsView on first mount if we don't have one yet.
@@ -180,94 +161,41 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
     };
   }, [api, pageId, url, onPatch, crashed]);
 
-  // Track container bounds and push them to main. Do it synchronously after
-  // layout so the WebContentsView lands in the right place before first paint.
-  //
-  // Hard gate on isActive: if this tab isn't the active one in its group, we
-  // MUST NOT push bounds — otherwise a late pushBounds (post `hide`) would
-  // re-show the view, and the user would see the browser overlay through
-  // their currently-active tab.
-  const pushBounds = useCallback(() => {
-    if (!api || !pageId || !containerRef.current) return;
-    if (!isActive) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) return; // not laid out yet
-    const b = rectToBounds(rect);
-    const prev = lastBoundsRef.current;
-    if (prev && prev.x === b.x && prev.y === b.y && prev.width === b.width && prev.height === b.height) return;
-    lastBoundsRef.current = b;
-    api.setBounds(pageId, b).catch(() => {});
-  }, [api, pageId, isActive]);
-
-  // rAF-coalesce pushBounds so a burst of scroll/resize events collapses into
-  // one setBounds IPC per frame. keeps multi-tab layout smooth.
-  const schedulePush = useCallback(() => {
-    if (!isActive) return;
-    if (rafRef.current != null) return;
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null;
-      pushBounds();
-    });
-  }, [isActive, pushBounds]);
-
-  useLayoutEffect(() => {
-    if (isActive) pushBounds();
-  }, [isActive, pushBounds]);
-
-  useEffect(() => {
-    if (!containerRef.current) return;
-    if (!isActive) return; // inactive tabs don't need observers
-    const el = containerRef.current;
-    const ro = new ResizeObserver(() => schedulePush());
-    ro.observe(el);
-    const onWinResize = () => schedulePush();
-    window.addEventListener('resize', onWinResize);
-    // Fire on scroll too — Electron positions WebContentsView in window coords,
-    // so any scroll of an ancestor container changes our absolute rect.
-    window.addEventListener('scroll', onWinResize, true);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', onWinResize);
-      window.removeEventListener('scroll', onWinResize, true);
-    };
-  }, [isActive, schedulePush]);
-
-  // Tell main which tab the user is looking at (for userFocused flag on summaries).
+  // Tell main which tab the user is currently looking at (for the focus-steal
+  // guard in browser-controller.sendCdp). Not tied to visibility — that's the
+  // pane's job now.
   useEffect(() => {
     if (!api || !pageId) return;
     if (isActive) {
       api.setUserFocus(pageId).catch(() => {});
-      // also re-assert z-order when pageId first resolves while active
-      api.bringToFront?.(pageId).catch(() => {});
     }
   }, [api, pageId, isActive]);
 
-  // When this component unmounts (tab switch), hide the overlay. Destroy
-  // happens only when the tab is explicitly closed (handled in useTabs).
+  // When this tab is the active tab in its pane, observe the body div and
+  // push bounds + claim the pane for this pageId. The model uses the bounds
+  // to setBounds on the native view and reconciles visibility globally.
+  // When this tab is not active we don't push anything — the pane's other
+  // tab (or EditorGroupPanel, if the active tab is non-browser) pushes the
+  // claim, and the model hides any view not claimed by a visible pane.
   useEffect(() => {
-    return () => {
-      if (!api || !pageId) return;
-      lastBoundsRef.current = null; // invalidate cache so next show re-pushes
-      api.hide(pageId).catch(() => {});
-    };
-  }, [api, pageId]);
+    if (!api || !pageId || !isActive) return;
+    const el = bodyRef.current;
+    if (!el) return;
 
-  // Hide when NOT active so background browser tabs don't show through the
-  // currently active non-browser tab. Show when active.
-  useEffect(() => {
-    if (!api || !pageId) return;
-    if (!isActive) {
-      lastBoundsRef.current = null; // invalidate cache so next show re-pushes
-      api.hide(pageId).catch(() => {});
-    } else {
-      lastBoundsRef.current = null; // force re-push bounds on show
-      // bring to top of z-order before setting bounds. on restore with
-      // multiple tabs mounted, createPage resolutions race — without this,
-      // the last tab to finish creating ends up on top regardless of active.
-      api.bringToFront?.(pageId).catch(() => {});
-      pushBounds();
-    }
-  }, [api, pageId, isActive, pushBounds]);
+    const push = () => {
+      const r = el.getBoundingClientRect();
+      api.paneUpdate(paneId, {
+        bounds: { x: r.x, y: r.y, width: r.width, height: r.height },
+        activeBrowserPageId: pageId,
+        visible: true,
+      }).catch(() => {});
+    };
+
+    push();
+    const ro = new ResizeObserver(push);
+    ro.observe(el);
+    return () => { ro.disconnect(); };
+  }, [api, pageId, isActive, paneId]);
 
   const go = useCallback((target: string) => {
     if (!api || !pageId) return;
@@ -372,10 +300,12 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
           title={paused ? 'Agent paused — click to resume' : 'Pause agent'}
         >{paused ? 'paused' : 'pause agent'}</button>
       </div>
-      <div
-        ref={containerRef}
-        className="flex-1 min-h-0 min-w-0 relative bg-background"
-      >
+      {/*
+        The body is a pure positioning anchor. The native WebContentsView is
+        painted over this rect (bounds observed above and pushed to the model
+        via paneUpdate). Banners inside here stack on top with z-10.
+      */}
+      <div ref={bodyRef} className="flex-1 min-h-0 min-w-0 relative bg-background">
         {!pageId && !createFailed && (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
             {loading ? 'Opening browser tab...' : 'Initializing...'}

@@ -43,12 +43,21 @@ const electronAPI = {
       ipcRenderer.invoke('browser:create', opts),
     destroy: (pageId: string): Promise<true> =>
       ipcRenderer.invoke('browser:destroy', pageId),
-    setBounds: (pageId: string, bounds: { x: number; y: number; width: number; height: number }): Promise<true> =>
-      ipcRenderer.invoke('browser:set-bounds', pageId, bounds),
-    hide: (pageId: string): Promise<true> =>
-      ipcRenderer.invoke('browser:hide', pageId),
-    bringToFront: (pageId: string): Promise<true> =>
-      ipcRenderer.invoke('browser:bring-to-front', pageId),
+    // Pane-level visibility. The renderer pushes per-pane state (bounds +
+    // which browser tab is active in that pane + visible); main's
+    // BrowserTabModel reconciles WebContentsView show/hide/layering across
+    // all known tabs. Replaces the per-view setBounds/hide/bringToFront trio
+    // that used to be called from BrowserView useEffects.
+    paneUpdate: (
+      paneId: string,
+      patch: {
+        bounds?: { x: number; y: number; width: number; height: number };
+        activeBrowserPageId?: string | null;
+        visible?: boolean;
+      },
+    ): Promise<true> => ipcRenderer.invoke('browser:pane-update', paneId, patch),
+    paneRemove: (paneId: string): Promise<true> =>
+      ipcRenderer.invoke('browser:pane-remove', paneId),
     setUserFocus: (pageId: string | null): Promise<true> =>
       ipcRenderer.invoke('browser:set-user-focus', pageId),
     navigate: (pageId: string, params: { type: 'url' | 'back' | 'forward' | 'reload'; url?: string }): Promise<{ ok: true }> =>
