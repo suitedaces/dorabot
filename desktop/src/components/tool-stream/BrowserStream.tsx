@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from "motion/react"
-import { Monitor, Lock, RotateCw, ArrowLeft, ArrowRight, X, Minus, Maximize2 } from "lucide-react"
+import { Lock, RotateCw, ArrowLeft, ArrowRight, X, ExternalLink } from "lucide-react"
 import type { ToolUIProps } from "../tool-ui"
 import { safeParse } from "../../lib/safe-parse"
 import { ElapsedTime } from "./ElapsedTime"
@@ -47,21 +47,36 @@ export function BrowserStream({ input, output, imageData, isError, streaming }: 
         <ElapsedTime running={!!streaming} />
       </div>
 
-      {/* address bar */}
+      {/* address bar — clickable when we know the url, routes to the browser tab */}
       <div className="flex items-center gap-2 px-3 py-1.5 bg-[var(--stream-raised)]">
-        <div className="flex-1 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[var(--stream-base)] border border-border/20">
-          {url && <Lock className="w-2.5 h-2.5 text-success/70 shrink-0" />}
-          <span className="text-[11px] font-mono text-foreground/80 truncate">
-            {url || "about:blank"}
-          </span>
-          {streaming && url && (
-            <motion.span
-              className="inline-block w-[2px] h-3 bg-primary/80 ml-0.5 shrink-0"
-              animate={{ opacity: [1, 0] }}
-              transition={{ duration: 0.6, repeat: Infinity }}
-            />
-          )}
-        </div>
+        {url ? (
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent('dorabot:open-browser-tab', { detail: { url } }))}
+            title="Open in browser tab"
+            className="group flex-1 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[var(--stream-base)] border border-border/20 hover:border-primary/50 hover:bg-[var(--stream-elevated)] transition-colors text-left cursor-pointer"
+          >
+            <Lock className="w-2.5 h-2.5 text-success/70 shrink-0" />
+            <span className="flex-1 text-[11px] font-mono text-foreground/80 truncate">
+              {url}
+            </span>
+            {streaming ? (
+              <motion.span
+                className="inline-block w-[2px] h-3 bg-primary/80 ml-0.5 shrink-0"
+                animate={{ opacity: [1, 0] }}
+                transition={{ duration: 0.6, repeat: Infinity }}
+              />
+            ) : (
+              <ExternalLink className="w-2.5 h-2.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+            )}
+          </button>
+        ) : (
+          <div className="flex-1 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[var(--stream-base)] border border-border/20">
+            <span className="text-[11px] font-mono text-foreground/80 truncate">
+              about:blank
+            </span>
+          </div>
+        )}
       </div>
 
       {/* loading bar */}

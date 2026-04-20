@@ -911,11 +911,32 @@ export default function App() {
       const existing = tabsRef.current.find(t => isBrowserTab(t) && t.pageId === summary.pageId);
       if (existing) return; // already adopted — don't steal focus
       const label = summary.title?.trim() || undefined;
-      tabState.adoptBrowserTab(summary.pageId, summary.url || undefined, label, undefined, { focus: false });
+      // preferSplit: in a single-pane layout, split a column to the right so
+      // the agent's browser work lives alongside the chat. Multi-pane layouts
+      // pile into the active pane.
+      tabState.adoptBrowserTab(summary.pageId, summary.url || undefined, label, undefined, { focus: false, preferSplit: true });
     });
     return () => {
       unsubCreated?.();
     };
+  }, [tabState]);
+
+  // chat -> browser tab bridge: BrowserStream dispatches this when the user
+  // clicks the url bar in the transcript. focus the matching tab if it still
+  // exists, otherwise open a fresh tab at that url.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const url = (e as CustomEvent<{ url?: string }>).detail?.url;
+      if (!url) return;
+      const match = tabsRef.current.find(t => isBrowserTab(t) && t.url === url);
+      if (match) {
+        tabState.focusTab(match.id);
+      } else {
+        tabState.openBrowserTab(url);
+      }
+    };
+    window.addEventListener('dorabot:open-browser-tab', handler);
+    return () => window.removeEventListener('dorabot:open-browser-tab', handler);
   }, [tabState]);
 
   // --- Drag and drop ---

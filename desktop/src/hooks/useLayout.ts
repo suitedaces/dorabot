@@ -209,7 +209,10 @@ export function useLayout() {
   }, []);
 
   // Add a column at a specific position (for drag: left/right of a target)
-  const addColumnAt = useCallback((targetPaneId: string, side: 'left' | 'right'): string => {
+  // opts.activate defaults to true (moves focus to the new pane). Agent-triggered
+  // splits pass activate:false so the user's pane stays focused.
+  const addColumnAt = useCallback((targetPaneId: string, side: 'left' | 'right', opts?: { activate?: boolean }): string => {
+    const activate = opts?.activate ?? true;
     const newPane = makePane();
     const newCol = makeColumn([newPane]);
     setState(prev => {
@@ -218,7 +221,12 @@ export function useLayout() {
       const cols = [...prev.columns];
       const insertIdx = side === 'right' ? loc.colIdx + 1 : loc.colIdx;
       cols.splice(insertIdx, 0, newCol);
-      return { ...prev, columns: cols, sizes: equalSizes(cols.length), activePaneId: newPane.id };
+      return {
+        ...prev,
+        columns: cols,
+        sizes: equalSizes(cols.length),
+        activePaneId: activate ? newPane.id : prev.activePaneId,
+      };
     });
     return newPane.id;
   }, []);

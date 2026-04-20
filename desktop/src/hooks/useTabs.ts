@@ -711,14 +711,21 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
   // focus defaults to true for back-compat. Agent-created tabs pass focus:false
   // so the new tab appears silently in the tab bar without stealing the user's
   // current pane focus.
+  //
+  // preferSplit: when true AND layout is single-pane, split a new column to the
+  // right and land the tab there (the user's pane stays focused). When the
+  // layout is already multi-pane, the tab is placed in the active pane alongside
+  // whatever the user is looking at — rule "pile into existing" avoids pane
+  // proliferation.
   const adoptBrowserTab = useCallback((
     pageId: string,
     url?: string,
     label?: string,
     groupId?: GroupId,
-    opts?: { focus?: boolean },
+    opts?: { focus?: boolean; preferSplit?: boolean },
   ) => {
     const focus = opts?.focus ?? true;
+    const preferSplit = opts?.preferSplit ?? false;
     let fallbackLabel = 'New Tab';
     if (!label && url) {
       try { fallbackLabel = new URL(url).host; } catch {}
@@ -734,7 +741,17 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     };
     setTabs(prev => [...prev, tab]);
     if (focus) setActiveTabId(id);
-    layout.addTabToGroup(id, groupId, { activate: focus });
+
+    // Split a new column on the right when the layout is single-pane and no
+    // target group was forced.  The tab becomes active *within* the new pane so
+    // the WebContentsView paints there, but the user's original pane stays the
+    // layout's active pane.
+    if (preferSplit && !groupId && !layout.isMultiPane) {
+      const newPaneId = layout.addColumnAt(layout.activeGroupId, 'right', { activate: false });
+      layout.addTabToGroup(id, newPaneId, { activate: true });
+    } else {
+      layout.addTabToGroup(id, groupId, { activate: focus });
+    }
     return id;
   }, [layout]);
 
