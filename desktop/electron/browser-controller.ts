@@ -43,6 +43,8 @@ export type TabSummary = {
   // the renderer uses this to decide whether to adopt the pageId into a new
   // UI tab (agent) or just attach to an existing one (user).
   origin: 'user' | 'agent';
+  crashed: boolean;
+  unresponsive: boolean;
 };
 
 type ConsoleEntry = {
@@ -98,6 +100,9 @@ type Entry = {
   favicon: string | null;
   buffers: PageBuffers;
   origin: 'user' | 'agent';
+  crashed?: boolean;
+  crashCount?: number;
+  unresponsive?: boolean;
 };
 
 const SESSION_PARTITION = 'persist:dora-browser';
@@ -157,6 +162,10 @@ export class BrowserController extends EventEmitter {
         backgroundThrottling: false,
       },
     });
+    // explicit opaque white background — WebContentsView defaults to white,
+    // but setting it explicitly keeps it immune to macOS vibrancy bleed-through
+    // (Electron #42335) and prevents black flashes during partial paints.
+    try { view.setBackgroundColor('#FFFFFF'); } catch {}
 
     const entry: Entry = {
       pageId,
@@ -224,6 +233,39 @@ export class BrowserController extends EventEmitter {
     const entry = this.entries.get(pageId);
     if (!entry) return;
     entry.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+  }
+
+  // re-add view to its host window so it moves to the top of the z-order.
+  // matters when multiple browser tabs are mounted in parallel (e.g. on
+  // session restore) and the active one isn't the last one added.
+  bringToFront(pageId: PageId): void {
+    const entry = this.entries.get(pageId);
+    if (!entry || !this.hostWindow) return;
+    try {
+      // addChildView on a view already in the tree moves it to top in Electron.
+      this.hostWindow.contentView.addChildView(entry.view);
+    } catch (err) {
+      console.error(`[browser-controller] bringToFront failed for ${pageId}:`, err);
+    }
+    // nudge a repaint — mitigates #42059 where inactive window suspends rendering
+    try {
+      if (!entry.view.webContents.isDestroyed()) {
+        entry.view.webContents.invalidate();
+      }
+    } catch {}
+  }
+
+  // called when the host window is shown / focused / restored. forces every
+  // live view to repaint so we don't see the 1-second black flash from
+  // Electron #42059 (WebContentsView pauses rendering while window inactive).
+  invalidateAllViews(): void {
+    for (const entry of this.entries.values()) {
+      try {
+        if (!entry.view.webContents.isDestroyed()) {
+          entry.view.webContents.invalidate();
+        }
+      } catch {}
+    }
   }
 
   setUserFocus(pageId: PageId | null): void {
@@ -545,6 +587,61 @@ export class BrowserController extends EventEmitter {
       }
     });
 
+    // renderer crash / oom / killed — auto-recover unless the crash is repeated
+    // (guard against crash loop). matches the "entire app black screen after 1s"
+    // symptom on restore: GPU or render process dies, we reload instead of
+    // leaving the user with a dead view.
+    wc.on('render-process-gone', (_event, details) => {
+      console.error(`[browser-controller] render-process-gone ${entry.pageId} reason=${details.reason} exitCode=${details.exitCode}`);
+      entry.crashed = true;
+      entry.crashCount = (entry.crashCount || 0) + 1;
+      this.emit('tab-crashed', {
+        pageId: entry.pageId,
+        reason: details.reason,
+        exitCode: details.exitCode,
+        recoverable: entry.crashCount < 3,
+      });
+      this.emit('tab-updated', this.toSummary(entry));
+      // auto-reload once — if it crashes again the user sees the crash state
+      if (entry.crashCount < 2 && !wc.isDestroyed()) {
+        setTimeout(() => {
+          try {
+            if (!wc.isDestroyed()) {
+              wc.reload();
+              entry.crashed = false;
+              this.emit('tab-updated', this.toSummary(entry));
+            }
+          } catch (err) {
+            console.error(`[browser-controller] auto-reload after crash failed for ${entry.pageId}:`, err);
+          }
+        }, 500);
+      }
+    });
+
+    wc.on('unresponsive', () => {
+      console.warn(`[browser-controller] unresponsive ${entry.pageId}`);
+      entry.unresponsive = true;
+      this.emit('tab-updated', this.toSummary(entry));
+    });
+
+    wc.on('responsive', () => {
+      entry.unresponsive = false;
+      this.emit('tab-updated', this.toSummary(entry));
+    });
+
+    wc.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (!isMainFrame) return; // ignore subresource failures
+      // -3 is ERR_ABORTED which happens during fast navigation — noise
+      if (errorCode === -3) return;
+      console.warn(`[browser-controller] did-fail-load ${entry.pageId} code=${errorCode} desc=${errorDescription} url=${validatedURL}`);
+      this.emit('tab-load-failed', {
+        pageId: entry.pageId,
+        errorCode,
+        errorDescription,
+        url: validatedURL,
+      });
+    });
+
     wc.setWindowOpenHandler(({ url }) => {
       // popups inherit origin from their opener so agent-driven window.open()
       // still surfaces as an agent tab in the UI.
@@ -555,23 +652,60 @@ export class BrowserController extends EventEmitter {
     });
   }
 
+  // manual reload — used by the UI "retry" button after a crash state
+  async reloadPage(pageId: PageId): Promise<void> {
+    const entry = this.entries.get(pageId);
+    if (!entry) return;
+    entry.crashed = false;
+    entry.crashCount = 0;
+    try {
+      entry.view.webContents.reload();
+    } catch (err) {
+      console.error(`[browser-controller] reloadPage failed for ${pageId}:`, err);
+    }
+    this.emit('tab-updated', this.toSummary(entry));
+  }
+
   private toSummary(entry: Entry): TabSummary {
+    // guard against destroyed webContents (view disposed out from under us)
+    const wc = entry.view.webContents;
+    let canGoBack = false;
+    let canGoForward = false;
+    try {
+      if (!wc.isDestroyed()) {
+        canGoBack = wc.navigationHistory.canGoBack();
+        canGoForward = wc.navigationHistory.canGoForward();
+      }
+    } catch {}
     return {
       pageId: entry.pageId,
       url: entry.url,
       title: entry.title,
       favicon: entry.favicon,
-      canGoBack: entry.view.webContents.navigationHistory.canGoBack(),
-      canGoForward: entry.view.webContents.navigationHistory.canGoForward(),
+      canGoBack,
+      canGoForward,
       paused: entry.paused,
       userFocused: entry.userFocused,
       lastUserInteractionAt: entry.lastUserInteractionAt,
       lastAgentActionAt: entry.lastAgentActionAt,
       origin: entry.origin,
+      crashed: entry.crashed === true,
+      unresponsive: entry.unresponsive === true,
     };
   }
 
+  // called from main.ts before-quit. detaches CDP debuggers synchronously so
+  // we don't leave the persist partition in a dirty state, then fires off
+  // the async destroy for each view. caller doesn't wait.
   shutdown(): void {
+    // detach debuggers first, sync, so partition state is clean even if
+    // destroy races with process exit
+    for (const entry of this.entries.values()) {
+      if (entry.debuggerAttached) {
+        try { entry.view.webContents.debugger.detach(); } catch {}
+        entry.debuggerAttached = false;
+      }
+    }
     for (const pageId of Array.from(this.entries.keys())) {
       this.destroyPage(pageId).catch(() => {});
     }

@@ -47,12 +47,16 @@ const electronAPI = {
       ipcRenderer.invoke('browser:set-bounds', pageId, bounds),
     hide: (pageId: string): Promise<true> =>
       ipcRenderer.invoke('browser:hide', pageId),
+    bringToFront: (pageId: string): Promise<true> =>
+      ipcRenderer.invoke('browser:bring-to-front', pageId),
     setUserFocus: (pageId: string | null): Promise<true> =>
       ipcRenderer.invoke('browser:set-user-focus', pageId),
     navigate: (pageId: string, params: { type: 'url' | 'back' | 'forward' | 'reload'; url?: string }): Promise<{ ok: true }> =>
       ipcRenderer.invoke('browser:navigate', pageId, params),
     pause: (pageId: string, paused: boolean): Promise<true> =>
       ipcRenderer.invoke('browser:pause', pageId, paused),
+    reload: (pageId: string): Promise<true> =>
+      ipcRenderer.invoke('browser:reload', pageId),
     listPages: (): Promise<BrowserTabSummary[]> =>
       ipcRenderer.invoke('browser:list-pages'),
     onTabCreated: (cb: (summary: BrowserTabSummary) => void) => {
@@ -85,6 +89,16 @@ const electronAPI = {
       ipcRenderer.on('browser:tab-agent-activity', handler);
       return () => { ipcRenderer.removeListener('browser:tab-agent-activity', handler); };
     },
+    onTabCrashed: (cb: (payload: { pageId: string; reason: string; exitCode: number; recoverable: boolean }) => void) => {
+      const handler = (_e: any, payload: any) => cb(payload);
+      ipcRenderer.on('browser:tab-crashed', handler);
+      return () => { ipcRenderer.removeListener('browser:tab-crashed', handler); };
+    },
+    onTabLoadFailed: (cb: (payload: { pageId: string; errorCode: number; errorDescription: string; url: string }) => void) => {
+      const handler = (_e: any, payload: any) => cb(payload);
+      ipcRenderer.on('browser:tab-load-failed', handler);
+      return () => { ipcRenderer.removeListener('browser:tab-load-failed', handler); };
+    },
   },
 };
 
@@ -100,6 +114,8 @@ export type BrowserTabSummary = {
   lastUserInteractionAt: number;
   lastAgentActionAt: number;
   origin: 'user' | 'agent';
+  crashed: boolean;
+  unresponsive: boolean;
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);

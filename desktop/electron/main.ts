@@ -169,6 +169,17 @@ function createWindow(): void {
     mainWindow?.focus();
   });
 
+  // Electron #42059: WebContentsView suspends rendering while the owning
+  // window is inactive. On reopen from dock / unminimize / app activate, the
+  // view can be blank for a second until Chromium decides to paint again.
+  // Forcing an invalidate on each show/focus/restore side-steps that pause.
+  const repaintBrowserViews = () => {
+    try { browserController?.invalidateAllViews(); } catch {}
+  };
+  mainWindow.on('show', repaintBrowserViews);
+  mainWindow.on('focus', repaintBrowserViews);
+  mainWindow.on('restore', repaintBrowserViews);
+
   // if renderer fails to load (e.g. after update restart), retry once
   mainWindow.webContents.on('did-fail-load', (_event, _code, _desc, url) => {
     console.error(`[main] Failed to load: ${url}`);

@@ -31,6 +31,8 @@ export function registerBrowserIpc(
   controller.on('tab-paused', (payload) => send('browser:tab-paused', payload));
   controller.on('tab-user-activity', (payload) => send('browser:tab-user-activity', payload));
   controller.on('tab-agent-activity', (payload) => send('browser:tab-agent-activity', payload));
+  controller.on('tab-crashed', (payload) => send('browser:tab-crashed', payload));
+  controller.on('tab-load-failed', (payload) => send('browser:tab-load-failed', payload));
 
   // renderer → main
   ipcMain.handle('browser:create', async (_e, opts: { url?: string; background?: boolean } = {}) => {
@@ -52,6 +54,11 @@ export function registerBrowserIpc(
     return true;
   });
 
+  ipcMain.handle('browser:bring-to-front', (_e, pageId: PageId) => {
+    controller.bringToFront(pageId);
+    return true;
+  });
+
   ipcMain.handle('browser:set-user-focus', (_e, pageId: PageId | null) => {
     controller.setUserFocus(pageId);
     return true;
@@ -63,6 +70,11 @@ export function registerBrowserIpc(
 
   ipcMain.handle('browser:pause', (_e, pageId: PageId, paused: boolean) => {
     controller.pausePage(pageId, paused);
+    return true;
+  });
+
+  ipcMain.handle('browser:reload', async (_e, pageId: PageId) => {
+    await controller.reloadPage(pageId);
     return true;
   });
 

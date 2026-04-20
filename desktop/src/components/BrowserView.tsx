@@ -44,6 +44,9 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
   const [canGoForward, setCanGoForward] = useState(false);
   const [paused, setPaused] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [crashed, setCrashed] = useState<{ reason: string; recoverable: boolean } | null>(null);
+  const [loadError, setLoadError] = useState<{ code: number; description: string; url: string } | null>(null);
+  const [createFailed, setCreateFailed] = useState(false);
   const lastBoundsRef = useRef<Bounds | null>(null);
   const creatingRef = useRef(false);
 
@@ -55,6 +58,7 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
     if (!api) return;
     creatingRef.current = true;
     setLoading(true);
+    setCreateFailed(false);
     api.create({ url: tab.url, background: false })
       .then(id => {
         setPageId(id);
@@ -62,9 +66,29 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
       })
       .catch(err => {
         console.error('[BrowserView] create failed:', err);
+        setCreateFailed(true);
       })
-      .finally(() => { creatingRef.current = false; });
+      .finally(() => { creatingRef.current = false; setLoading(false); });
   }, [api, pageId, tab.url, onPatch]);
+
+  // Manually recreate the WebContentsView (used by the retry button when create
+  // failed outright — different from a renderer crash, which uses reload).
+  const recreate = useCallback(() => {
+    if (!api || creatingRef.current) return;
+    creatingRef.current = true;
+    setLoading(true);
+    setCreateFailed(false);
+    api.create({ url: tab.url, background: false })
+      .then(id => {
+        setPageId(id);
+        onPatch({ pageId: id });
+      })
+      .catch(err => {
+        console.error('[BrowserView] recreate failed:', err);
+        setCreateFailed(true);
+      })
+      .finally(() => { creatingRef.current = false; setLoading(false); });
+  }, [api, tab.url, onPatch]);
 
   // Subscribe to tab-updated events for OUR pageId and mirror into state +
   // the tab label. tab-created fires separately for freshly-created tabs.
@@ -88,6 +112,8 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
       setCanGoBack(summary.canGoBack);
       setCanGoForward(summary.canGoForward);
       setPaused(summary.paused);
+      // a successful tab-updated after a crash means the auto-reload worked
+      if (!summary.crashed && crashed) setCrashed(null);
       const label = summary.title?.trim() || (summary.url ? new URL(summary.url).host : 'New Tab');
       onPatch({ label });
     });
@@ -95,12 +121,24 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
       if (payload.pageId !== pageId) return;
       setPaused(payload.paused);
     });
+    const unsubCrashed = api.onTabCrashed?.((payload) => {
+      if (payload.pageId !== pageId) return;
+      console.warn(`[BrowserView] tab crashed ${pageId} reason=${payload.reason} recoverable=${payload.recoverable}`);
+      setCrashed({ reason: payload.reason, recoverable: payload.recoverable });
+    });
+    const unsubLoadFailed = api.onTabLoadFailed?.((payload) => {
+      if (payload.pageId !== pageId) return;
+      console.warn(`[BrowserView] load failed ${pageId} code=${payload.errorCode} desc=${payload.errorDescription}`);
+      setLoadError({ code: payload.errorCode, description: payload.errorDescription, url: payload.url });
+    });
     return () => {
       unsubCreated?.();
       unsubUpdated?.();
       unsubPaused?.();
+      unsubCrashed?.();
+      unsubLoadFailed?.();
     };
-  }, [api, pageId, url, onPatch]);
+  }, [api, pageId, url, onPatch, crashed]);
 
   // Track container bounds and push them to main. Do it synchronously after
   // layout so the WebContentsView lands in the right place before first paint.
@@ -139,6 +177,8 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
     if (!api || !pageId) return;
     if (isActive) {
       api.setUserFocus(pageId).catch(() => {});
+      // also re-assert z-order when pageId first resolves while active
+      api.bringToFront?.(pageId).catch(() => {});
     }
   }, [api, pageId, isActive]);
 
@@ -147,6 +187,7 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
   useEffect(() => {
     return () => {
       if (!api || !pageId) return;
+      lastBoundsRef.current = null; // invalidate cache so next show re-pushes
       api.hide(pageId).catch(() => {});
     };
   }, [api, pageId]);
@@ -156,9 +197,15 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
   useEffect(() => {
     if (!api || !pageId) return;
     if (!isActive) {
+      lastBoundsRef.current = null; // invalidate cache so next show re-pushes
       api.hide(pageId).catch(() => {});
     } else {
-      pushBounds(); // re-apply bounds, which also makes the view visible again
+      lastBoundsRef.current = null; // force re-push bounds on show
+      // bring to top of z-order before setting bounds. on restore with
+      // multiple tabs mounted, createPage resolutions race — without this,
+      // the last tab to finish creating ends up on top regardless of active.
+      api.bringToFront?.(pageId).catch(() => {});
+      pushBounds();
     }
   }, [api, pageId, isActive, pushBounds]);
 
@@ -202,6 +249,17 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
     setPaused(next);
     api.pause(pageId, next).catch(() => {});
   }, [api, pageId, paused]);
+
+  // used by the crash banner's retry button — clears crash state and forces
+  // main to spawn a new renderer for this view.
+  const retryAfterCrash = useCallback(() => {
+    if (!api || !pageId) return;
+    setCrashed(null);
+    setLoadError(null);
+    api.reload(pageId).catch((err) => {
+      console.error('[BrowserView] retry reload failed:', err);
+    });
+  }, [api, pageId]);
 
   return (
     <div className="flex flex-col h-full min-h-0 min-w-0 bg-background">
@@ -257,9 +315,41 @@ export function BrowserView({ tab, isActive, onPatch }: Props) {
         ref={containerRef}
         className="flex-1 min-h-0 min-w-0 relative bg-background"
       >
-        {!pageId && (
+        {!pageId && !createFailed && (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
             {loading ? 'Opening browser tab...' : 'Initializing...'}
+          </div>
+        )}
+        {!pageId && createFailed && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-sm">
+            <div className="text-muted-foreground">Couldn't open browser tab.</div>
+            <button
+              type="button"
+              onClick={recreate}
+              className="px-3 py-1 rounded border border-border hover:bg-muted"
+            >Retry</button>
+          </div>
+        )}
+        {pageId && crashed && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-background/95 text-sm">
+            <div className="text-foreground font-medium">This page crashed.</div>
+            <div className="text-muted-foreground text-xs">Reason: {crashed.reason}</div>
+            <button
+              type="button"
+              onClick={retryAfterCrash}
+              className="px-3 py-1 rounded border border-border hover:bg-muted"
+            >Reload</button>
+          </div>
+        )}
+        {pageId && !crashed && loadError && (
+          <div className="absolute top-2 right-2 z-10 max-w-sm px-3 py-2 rounded border border-amber-500/40 bg-amber-500/10 text-xs">
+            <div className="font-medium text-amber-600">Load error ({loadError.code})</div>
+            <div className="text-muted-foreground truncate">{loadError.description}</div>
+            <button
+              type="button"
+              onClick={() => { setLoadError(null); reload(); }}
+              className="mt-1 underline hover:opacity-80"
+            >Retry</button>
           </div>
         )}
       </div>
