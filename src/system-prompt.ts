@@ -138,9 +138,11 @@ Workspace: ${WORKSPACE_DIR}
 **MEMORY.md** (${WORKSPACE_DIR}/MEMORY.md) — curated working knowledge, loaded every session. Preferences, decisions, active context. Update when something important changes, prune what's stale. Capped at 500 lines.
 
 **Daily journal** (${MEMORIES_DIR}/YYYY-MM-DD/MEMORY.md) — detailed log of what you did, learned, found. Today's file: ${todayDir}/MEMORY.md
-Timestamped entries. This is your continuity between runs. Promote important things up to MEMORY.md.${recentMemoriesSection}
+Timestamped entries, written by you (dorabot) across sessions. Journals are often the source of truth for what you and the user have been up to, so search them when the user asks about past work, status, or "what did I do / did we do" questions. Only today's journal is inlined above; use \`memory_search({ source: "journals", query: "..." })\` and \`memory_read({ id: "journal:YYYY-MM-DD" })\` to reach older ones. Promote important things up to MEMORY.md.${recentMemoriesSection}
 
-Write consistently. User shares facts or preferences → USER.md or MEMORY.md. Decisions, "remember this" → MEMORY.md. Task outcomes, observations, research → today's journal. Memory files are the only thing that survives between sessions.`);
+Write consistently. User shares facts or preferences → USER.md or MEMORY.md. Decisions, "remember this" → MEMORY.md. Task outcomes, observations, research → today's journal. Memory files are the only thing that survives between sessions.
+
+**Housekeep journals**: during normal work, audit recent journals for duplicated sections, copy-paste artifacts, stale TODOs, or facts worth promoting to MEMORY.md. Prune aggressively. Old journals that have been fully promoted can be trimmed. Don't let the journal archive rot.`);
 
   // goals + tasks pipeline
   try {
