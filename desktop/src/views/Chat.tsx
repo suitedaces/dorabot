@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback, createContext, useContext, Fragment, type KeyboardEvent, type ClipboardEvent, type DragEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { DorabotSprite } from '../components/DorabotSprite';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -507,12 +508,22 @@ function CopyMessageButton({
   );
 }
 
-function UserMessageItem({ item }: { item: Extract<ChatItem, { type: 'user' }> }) {
+function UserMessageItem({
+  item,
+  onReply,
+}: {
+  item: Extract<ChatItem, { type: 'user' }>;
+  onReply: (snippet: QuotedSnippet) => void;
+}) {
   const rootRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const [expanded, setExpanded] = useState(false);
   const [needsCollapse, setNeedsCollapse] = useState(false);
+
+  // Split off any leading <replying_to>...</replying_to> block so we render
+  // it as a styled chip instead of leaking raw XML into the bubble.
+  const { quote, body } = useMemo(() => parseReplyingTo(item.content), [item.content]);
 
   // Measure content height to decide whether collapse is needed.
   useEffect(() => {
@@ -585,14 +596,25 @@ function UserMessageItem({ item }: { item: Extract<ChatItem, { type: 'user' }> }
             ))}
           </div>
         ) : null}
-        {item.content && (
-          <div className="relative">
+        {quote && (
+          <div className="mb-1.5 flex items-start gap-1.5 rounded-md border-l-2 border-primary bg-background/50 px-2 py-1 text-[11px] min-w-0">
+            <Quote className="w-3 h-3 mt-[2px] shrink-0 text-primary" />
+            <div className="flex-1 min-w-0">
+              <div className="text-[9px] text-muted-foreground uppercase tracking-wide leading-tight">replying to</div>
+              <div className="prose-chat prose-chat--quote line-clamp-3 break-words text-left leading-snug">
+                <Markdown remarkPlugins={[remarkGfm]}>{quote}</Markdown>
+              </div>
+            </div>
+          </div>
+        )}
+        {body && (
+          <SelectableForReply onReply={onReply}>
             <div
               ref={contentRef}
               className="text-foreground break-words prose-chat overflow-hidden"
               style={collapsed ? { maxHeight: `${USER_MESSAGE_COLLAPSE_PX}px` } : undefined}
             >
-              <Markdown remarkPlugins={[remarkGfm]}>{item.content}</Markdown>
+              <Markdown remarkPlugins={[remarkGfm]}>{body}</Markdown>
             </div>
             {collapsed && (
               <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-secondary to-transparent" />
@@ -608,11 +630,11 @@ function UserMessageItem({ item }: { item: Extract<ChatItem, { type: 'user' }> }
                 {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
               </button>
             )}
-          </div>
+          </SelectableForReply>
         )}
       </div>
-      {item.content && (
-        <CopyMessageButton variant="overlay" getText={() => item.content} />
+      {body && (
+        <CopyMessageButton variant="overlay" getText={() => body} />
       )}
     </div>
   );
@@ -1013,17 +1035,29 @@ function InputDropdowns({
 // (so the chip preserves the same markdown formatting the user selected from).
 type QuotedSnippet = { text: string; html: string };
 
-// Wraps an assistant text block with a floating "Reply" button that appears
-// when the user selects text inside it. Clicking captures the selection and
-// hands both the plain text and the rendered HTML up to the chat input.
-function AssistantTextWithReply({
-  content,
-  streaming,
+// Strip a leading <replying_to>...</replying_to> block off a user message so
+// it can be rendered as a styled chip instead of raw XML in the bubble.
+const REPLYING_TO_RE = /^<replying_to>\n([\s\S]*?)\n<\/replying_to>\n\n([\s\S]*)$/;
+function parseReplyingTo(content: string): { quote: string | null; body: string } {
+  const m = content.match(REPLYING_TO_RE);
+  if (!m) return { quote: null, body: content };
+  return { quote: m[1], body: m[2] };
+}
+
+// Wraps any block with a floating "Reply" button that appears when the user
+// selects text inside it. Clicking captures the selection and hands both the
+// plain text and the rendered HTML up to the chat input. The popover is
+// rendered into a portal with viewport coordinates so it never gets clipped
+// by virtualized rows or stacking contexts, and flips above the selection
+// when there isn't room below.
+function SelectableForReply({
+  children,
   onReply,
+  className,
 }: {
-  content: string;
-  streaming?: boolean;
+  children: React.ReactNode;
   onReply: (snippet: QuotedSnippet) => void;
+  className?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [popover, setPopover] = useState<{ top: number; left: number; text: string; html: string } | null>(null);
@@ -1036,7 +1070,7 @@ function AssistantTextWithReply({
       return;
     }
     const range = sel.getRangeAt(0);
-    // Selection must be entirely inside this assistant text block.
+    // Selection must be entirely inside this block.
     if (!container.contains(range.commonAncestorContainer)) {
       setPopover(null);
       return;
@@ -1052,18 +1086,22 @@ function AssistantTextWithReply({
     const tmp = document.createElement('div');
     tmp.appendChild(fragment);
     const html = tmp.innerHTML;
+
+    // Viewport-anchored coords so the portal popover is never clipped by
+    // overflow:hidden parents or virtualized row containers.
     const rect = range.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
-    setPopover({
-      // Anchor below selection end, clamped to container width.
-      top: rect.bottom - containerRect.top + 4,
-      left: Math.min(
-        Math.max(rect.right - containerRect.left - 60, 0),
-        Math.max(containerRect.width - 76, 0),
-      ),
-      text,
-      html,
-    });
+    const POP_W = 76;
+    const POP_H = 24;
+    const PAD = 8;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let top = rect.bottom + 4;
+    // Flip above the selection when there isn't room below.
+    if (top + POP_H > vh - PAD) top = Math.max(PAD, rect.top - POP_H - 4);
+    let left = rect.right - 60;
+    if (left + POP_W > vw - PAD) left = vw - POP_W - PAD;
+    if (left < PAD) left = PAD;
+    setPopover({ top, left, text, html });
   }, []);
 
   const handleReplyClick = (e: React.MouseEvent) => {
@@ -1083,7 +1121,6 @@ function AssistantTextWithReply({
         setPopover(null);
         return;
       }
-      // Only refresh popover position if selection is in our container.
       if (containerRef.current?.contains(sel.anchorNode)) {
         updateFromSelection();
       } else {
@@ -1094,25 +1131,55 @@ function AssistantTextWithReply({
     return () => document.removeEventListener('selectionchange', handler);
   }, [updateFromSelection]);
 
+  // Reposition / dismiss on scroll so the popover follows the selection.
+  useEffect(() => {
+    if (!popover) return;
+    const onScroll = () => updateFromSelection();
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onScroll);
+    return () => {
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onScroll);
+    };
+  }, [popover, updateFromSelection]);
+
   return (
-    <div ref={containerRef} className="prose-chat py-1.5 relative" onMouseUp={updateFromSelection}>
-      <InlineErrorBoundary>
-        <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
-      </InlineErrorBoundary>
-      {streaming && <span className="streaming-cursor" />}
-      {popover && (
+    <div ref={containerRef} className={cn('relative', className)} onMouseUp={updateFromSelection}>
+      {children}
+      {popover && createPortal(
         <button
           type="button"
-          className="absolute z-30 flex items-center gap-1 rounded-md bg-primary text-primary-foreground px-2 py-1 text-[10px] shadow-md hover:bg-primary/90 transition-colors"
+          className="fixed z-50 flex items-center gap-1 rounded-md bg-primary text-primary-foreground px-2 py-1 text-[10px] shadow-md hover:bg-primary/90 transition-colors"
           style={{ top: popover.top, left: popover.left }}
           // mousedown to fire before selection collapses on click.
           onMouseDown={handleReplyClick}
         >
           <Reply className="w-3 h-3" />
           Reply
-        </button>
+        </button>,
+        document.body,
       )}
     </div>
+  );
+}
+
+// Wraps an assistant text block with the selection-to-Reply affordance.
+function AssistantTextWithReply({
+  content,
+  streaming,
+  onReply,
+}: {
+  content: string;
+  streaming?: boolean;
+  onReply: (snippet: QuotedSnippet) => void;
+}) {
+  return (
+    <SelectableForReply className="prose-chat py-1.5" onReply={onReply}>
+      <InlineErrorBoundary>
+        <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
+      </InlineErrorBoundary>
+      {streaming && <span className="streaming-cursor" />}
+    </SelectableForReply>
   );
 }
 
@@ -1649,24 +1716,26 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     return new Date(ts).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
   };
 
+  const handleReply = useCallback((snippet: QuotedSnippet) => {
+    setQuotedSnippet(snippet);
+    // Focus whichever input is mounted (landing vs main).
+    setTimeout(() => {
+      inputRef.current?.focus();
+      landingInputRef.current?.focus();
+    }, 0);
+  }, []);
+
   const renderItemBase = (item: ChatItem, i: number) => {
     switch (item.type) {
       case 'user':
-        return <UserMessageItem key={i} item={item} />;
+        return <UserMessageItem key={i} item={item} onReply={handleReply} />;
       case 'text':
         return (
           <AssistantTextWithReply
             key={i}
             content={item.content}
             streaming={item.streaming}
-            onReply={snippet => {
-              setQuotedSnippet(snippet);
-              // Focus whichever input is mounted (landing vs main).
-              setTimeout(() => {
-                inputRef.current?.focus();
-                landingInputRef.current?.focus();
-              }, 0);
-            }}
+            onReply={handleReply}
           />
         );
       case 'tool_use':
