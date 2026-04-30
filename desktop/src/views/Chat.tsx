@@ -25,6 +25,7 @@ import {
   MessageSquare, Camera, Monitor, Clock, Wrench, ArrowUp, LayoutGrid,
   Smile, Image, Brain, MapPin, PenLine, GitPullRequest, Radio,
   Paperclip, X, ExternalLink, Check, Circle, Loader2, Keyboard, Copy,
+  Quote, Reply,
   type LucideIcon,
 } from 'lucide-react';
 import { SHORTCUTS as ALL_SHORTCUTS } from '@/components/ShortcutHelp';
@@ -892,6 +893,7 @@ function InputDropdowns({
   slashOpen, filteredSlashCommands, slashIndex, slashListRef, handleSlashSelect,
   atOpen, atEntries, atLoading, atIndex, atListRef, handleAtSelect,
   activeSkill, clearSkill,
+  quotedSnippet, clearQuote,
 }: {
   slashOpen: boolean;
   filteredSlashCommands: SlashItem[];
@@ -906,6 +908,8 @@ function InputDropdowns({
   handleAtSelect: (entry: { name: string; type: 'directory' | 'file' }) => void;
   activeSkill: { name: string; content: string } | null;
   clearSkill: () => void;
+  quotedSnippet: QuotedSnippet | null;
+  clearQuote: () => void;
 }) {
   return (
     <>
@@ -967,6 +971,28 @@ function InputDropdowns({
           )}
         </div>
       )}
+      {quotedSnippet && (
+        <div className="px-3 pt-2 min-w-0">
+          <div className="flex items-start gap-1.5 rounded-md border-l-2 border-primary bg-secondary/60 text-secondary-foreground px-2 py-1 text-[11px] min-w-0">
+            <Quote className="w-3 h-3 mt-[2px] shrink-0 text-primary" />
+            <div className="flex-1 min-w-0">
+              <div className="text-[9px] text-muted-foreground uppercase tracking-wide leading-tight">replying to</div>
+              <div
+                className="prose-chat prose-chat--quote line-clamp-2 break-words text-left leading-snug"
+                dangerouslySetInnerHTML={{ __html: quotedSnippet.html }}
+              />
+            </div>
+            <button
+              type="button"
+              className="shrink-0 mt-[2px] text-muted-foreground hover:text-foreground transition-colors"
+              onClick={clearQuote}
+              aria-label="Clear quote"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+        </div>
+      )}
       {activeSkill && (
         <div className="flex items-center gap-1.5 px-3 pt-2">
           <Badge variant="secondary" className="gap-1 text-[10px] h-5">
@@ -983,6 +1009,113 @@ function InputDropdowns({
   );
 }
 
+// A staged quote: plain text for the model (XML payload) + HTML for the chip
+// (so the chip preserves the same markdown formatting the user selected from).
+type QuotedSnippet = { text: string; html: string };
+
+// Wraps an assistant text block with a floating "Reply" button that appears
+// when the user selects text inside it. Clicking captures the selection and
+// hands both the plain text and the rendered HTML up to the chat input.
+function AssistantTextWithReply({
+  content,
+  streaming,
+  onReply,
+}: {
+  content: string;
+  streaming?: boolean;
+  onReply: (snippet: QuotedSnippet) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [popover, setPopover] = useState<{ top: number; left: number; text: string; html: string } | null>(null);
+
+  const updateFromSelection = useCallback(() => {
+    const sel = window.getSelection();
+    const container = containerRef.current;
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed || !container) {
+      setPopover(null);
+      return;
+    }
+    const range = sel.getRangeAt(0);
+    // Selection must be entirely inside this assistant text block.
+    if (!container.contains(range.commonAncestorContainer)) {
+      setPopover(null);
+      return;
+    }
+    const text = sel.toString().trim();
+    if (!text) {
+      setPopover(null);
+      return;
+    }
+    // Serialize the selected DOM fragment so the chip can render the same
+    // formatting (bold/code/lists/etc.) the user actually selected.
+    const fragment = range.cloneContents();
+    const tmp = document.createElement('div');
+    tmp.appendChild(fragment);
+    const html = tmp.innerHTML;
+    const rect = range.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    setPopover({
+      // Anchor below selection end, clamped to container width.
+      top: rect.bottom - containerRect.top + 4,
+      left: Math.min(
+        Math.max(rect.right - containerRect.left - 60, 0),
+        Math.max(containerRect.width - 76, 0),
+      ),
+      text,
+      html,
+    });
+  }, []);
+
+  const handleReplyClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!popover) return;
+    onReply({ text: popover.text, html: popover.html });
+    window.getSelection()?.removeAllRanges();
+    setPopover(null);
+  };
+
+  // Hide popover when selection changes outside this block or clears.
+  useEffect(() => {
+    const handler = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) {
+        setPopover(null);
+        return;
+      }
+      // Only refresh popover position if selection is in our container.
+      if (containerRef.current?.contains(sel.anchorNode)) {
+        updateFromSelection();
+      } else {
+        setPopover(null);
+      }
+    };
+    document.addEventListener('selectionchange', handler);
+    return () => document.removeEventListener('selectionchange', handler);
+  }, [updateFromSelection]);
+
+  return (
+    <div ref={containerRef} className="prose-chat py-1.5 relative" onMouseUp={updateFromSelection}>
+      <InlineErrorBoundary>
+        <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
+      </InlineErrorBoundary>
+      {streaming && <span className="streaming-cursor" />}
+      {popover && (
+        <button
+          type="button"
+          className="absolute z-30 flex items-center gap-1 rounded-md bg-primary text-primary-foreground px-2 py-1 text-[10px] shadow-md hover:bg-primary/90 transition-colors"
+          style={{ top: popover.top, left: popover.left }}
+          // mousedown to fire before selection collapses on click.
+          onMouseDown={handleReplyClick}
+        >
+          <Reply className="w-3 h-3" />
+          Reply
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, sessionKey, onNavigateSettings, onOpenFile, onOpenDiff, onClearChat, onNewTab }: Props) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -993,6 +1126,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   const [slashFilter, setSlashFilter] = useState('');
   const [slashIndex, setSlashIndex] = useState(0);
   const [activeSkill, setActiveSkill] = useState<{ name: string; content: string } | null>(null);
+  const [quotedSnippet, setQuotedSnippet] = useState<QuotedSnippet | null>(null);
   const [skillsList, setSkillsList] = useState<SkillInfo[]>([]);
   const [atOpen, setAtOpen] = useState(false);
   const [atFilter, setAtFilter] = useState('');
@@ -1244,6 +1378,12 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   const handleSend = async (overridePrompt?: string) => {
     let prompt = overridePrompt || input.trim();
     if ((!prompt && attachedImages.length === 0) || sending || pendingQuestion) return;
+
+    // Inject quoted assistant snippet (the user is replying to a specific section)
+    if (quotedSnippet && !overridePrompt) {
+      prompt = `<replying_to>\n${quotedSnippet.text}\n</replying_to>\n\n${prompt}`;
+      setQuotedSnippet(null);
+    }
 
     // Inject active skill context into prompt
     if (activeSkill) {
@@ -1515,12 +1655,19 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         return <UserMessageItem key={i} item={item} />;
       case 'text':
         return (
-          <div key={i} className="prose-chat py-1.5">
-            <InlineErrorBoundary>
-              <Markdown remarkPlugins={[remarkGfm]}>{item.content}</Markdown>
-            </InlineErrorBoundary>
-            {item.streaming && <span className="streaming-cursor" />}
-          </div>
+          <AssistantTextWithReply
+            key={i}
+            content={item.content}
+            streaming={item.streaming}
+            onReply={snippet => {
+              setQuotedSnippet(snippet);
+              // Focus whichever input is mounted (landing vs main).
+              setTimeout(() => {
+                inputRef.current?.focus();
+                landingInputRef.current?.focus();
+              }, 0);
+            }}
+          />
         );
       case 'tool_use':
         if (item.name === 'TodoWrite') {
@@ -1660,6 +1807,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                   slashOpen={slashOpen} filteredSlashCommands={filteredSlashCommands} slashIndex={slashIndex} slashListRef={slashListRef} handleSlashSelect={handleSlashSelect}
                   atOpen={atOpen} atEntries={atEntries} atLoading={atLoading} atIndex={atIndex} atListRef={atListRef} handleAtSelect={handleAtSelect}
                   activeSkill={activeSkill} clearSkill={() => setActiveSkill(null)}
+                  quotedSnippet={quotedSnippet} clearQuote={() => setQuotedSnippet(null)}
                 />
                 <ImagePreviewStrip images={attachedImages} onRemove={j => setAttachedImages(prev => prev.filter((_, k) => k !== j))} />
                 <Textarea
@@ -1841,6 +1989,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             slashOpen={slashOpen} filteredSlashCommands={filteredSlashCommands} slashIndex={slashIndex} slashListRef={slashListRef} handleSlashSelect={handleSlashSelect}
             atOpen={atOpen} atEntries={atEntries} atLoading={atLoading} atIndex={atIndex} atListRef={atListRef} handleAtSelect={handleAtSelect}
             activeSkill={activeSkill} clearSkill={() => setActiveSkill(null)}
+                  quotedSnippet={quotedSnippet} clearQuote={() => setQuotedSnippet(null)}
           />
           <ImagePreviewStrip images={attachedImages} onRemove={j => setAttachedImages(prev => prev.filter((_, k) => k !== j))} />
           <Textarea

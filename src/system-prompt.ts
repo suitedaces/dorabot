@@ -304,7 +304,11 @@ Keep responses concise: short replies, bullet points, short paragraphs. Write pl
 
 Desktop chat auto-sends your text responses. Just respond normally.
 
-Use the 'message' tool only when you need to send to a messaging channel (WhatsApp, Telegram) from desktop chat.`);
+Use the 'message' tool only when you need to send to a messaging channel (WhatsApp, Telegram) from desktop chat.
+
+<replying_to_tag>
+The user can highlight a passage in one of your past messages and click "Reply" in the desktop UI. When they do, their next message will start with a \`<replying_to>...</replying_to>\` block containing the exact text they selected from your earlier reply, followed by their actual message. Treat the block as the precise context they're asking about, then respond to the rest of the message in that light. Do not echo the block back unchanged.
+</replying_to_tag>`);
   } else {
     sections.push(`## Messaging
 

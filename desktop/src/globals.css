@@ -1149,6 +1149,39 @@
   border-right: none;
 }
 
+/* Compact variant for the "replying to" chip in the input bar.
+   Strips block margins so multi-line markdown (lists, code, paragraphs)
+   stays inside the line-clamp height. */
+.prose-chat--quote,
+.prose-chat--quote * {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.prose-chat--quote ul,
+.prose-chat--quote ol {
+  list-style-position: inside;
+}
+.prose-chat--quote pre,
+.prose-chat--quote code {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: transparent !important;
+  font-size: inherit;
+}
+.prose-chat--quote h1,
+.prose-chat--quote h2,
+.prose-chat--quote h3,
+.prose-chat--quote h4,
+.prose-chat--quote h5,
+.prose-chat--quote h6 {
+  font-size: inherit;
+  font-weight: 600;
+}
+.prose-chat--quote blockquote {
+  border-left: 2px solid var(--border);
+  padding-left: 6px !important;
+}
+
 /* tiptap WYSIWYG editor styles */
 .tiptap-wrapper .tiptap {
   outline: none;
