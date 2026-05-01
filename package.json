@@ -15,6 +15,8 @@
     "dev:gateway": "mkdir -p ~/.dorabot/logs && tsx watch src/index.ts -g 2>&1 | tee ~/.dorabot/logs/gateway.log",
     "dev:cli": "tsx src/index.ts -i",
     "dev:desktop": "npm -C desktop run dev",
+    "browser-host:build": "npm -C packages/browser-host run build",
+    "browser-host:start": "npm -C packages/browser-host run start",
     "dev:stable": "npm run dev",
     "start": "node dist/index.js -g",
     "typecheck": "tsc --noEmit",
@@ -27,7 +29,8 @@
     "test:gateway-auth-state": "node scripts/test-gateway-auth-state.mjs",
     "test:codex-provider": "node scripts/test-codex-provider.mjs status",
     "test:claude-provider": "node scripts/test-claude-provider.mjs status",
-    "test:model-catalog": "node scripts/test-model-catalog.mjs"
+    "test:model-catalog": "node scripts/test-model-catalog.mjs",
+    "test:browser-parity": "tsx scripts/test-browser-parity.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.111",

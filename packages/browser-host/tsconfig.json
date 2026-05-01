@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "rootDir": "../..",
+    "outDir": "out",
+    "sourceMap": true,
+    "declaration": false,
+    "noImplicitAny": false
+  },
+  "include": [
+    "src/**/*.ts",
+    "../../desktop/electron/browser-controller.ts",
+    "../../desktop/electron/browser-ipc.ts",
+    "../../desktop/electron/dorabot-paths.ts"
+  ]
+}

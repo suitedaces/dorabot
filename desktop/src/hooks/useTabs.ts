@@ -1,8 +1,9 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { useGateway } from './useGateway';
 import type { useLayout, GroupId } from './useLayout';
+import { isSafeUrl } from '../lib/url';
 
-export type TabType = 'chat' | 'channels' | 'goals' | 'automation' | 'extensions' | 'agents' | 'memory' | 'research' | 'settings' | 'file' | 'diff' | 'terminal' | 'task' | 'pr';
+export type TabType = 'chat' | 'channels' | 'goals' | 'automation' | 'extensions' | 'agents' | 'memory' | 'research' | 'settings' | 'file' | 'diff' | 'terminal' | 'task' | 'pr' | 'browser';
 
 export type ChatTab = {
   id: string;
@@ -60,14 +61,28 @@ export type PrTab = {
   prNumber: number;
 };
 
+export type BrowserTab = {
+  id: string;
+  type: 'browser';
+  label: string;
+  closable: true;
+  /** Assigned by BrowserController once the WebContentsView is created. */
+  pageId?: string;
+  url?: string;
+  /** Latest favicon URL emitted on tab-updated. Cached in tab state so the
+   *  TabBar can render it instead of the generic globe icon. Stripped to
+   *  data: scheme only when we want to avoid persisting bulky URLs. */
+  favicon?: string | null;
+};
+
 export type ViewTab = {
   id: string;
-  type: Exclude<TabType, 'chat' | 'file' | 'diff' | 'terminal' | 'task' | 'pr'>;
+  type: Exclude<TabType, 'chat' | 'file' | 'diff' | 'terminal' | 'task' | 'pr' | 'browser'>;
   label: string;
   closable: true;
 };
 
-export type Tab = ChatTab | ViewTab | FileTab | DiffTab | TerminalTab | TaskTab | PrTab;
+export type Tab = ChatTab | ViewTab | FileTab | DiffTab | TerminalTab | TaskTab | PrTab | BrowserTab;
 
 export function isChatTab(tab: Tab): tab is ChatTab {
   return tab.type === 'chat';
@@ -93,6 +108,10 @@ export function isPrTab(tab: Tab): tab is PrTab {
   return tab.type === 'pr';
 }
 
+export function isBrowserTab(tab: Tab): tab is BrowserTab {
+  return tab.type === 'browser';
+}
+
 const TABS_STORAGE_KEY = 'dorabot:tabs';
 const ACTIVE_TAB_STORAGE_KEY = 'dorabot:activeTabId';
 
@@ -115,7 +134,8 @@ function loadTabsFromStorage(): Tab[] {
     const parsed = JSON.parse(raw) as Tab[];
     if (!Array.isArray(parsed) || parsed.length === 0) return [];
     return parsed
-      // Terminal tabs are kept; TerminalView re-spawns/reclaims the shell on mount
+      // Terminal tabs are kept; TerminalView re-spawns/reclaims the shell on mount.
+      // Browser tabs drop their stale pageId — BrowserView recreates the WebContentsView on mount.
       .map((tab) => {
         if ((tab as any).type === 'plans' || (tab as any).type === 'ideas' || (tab as any).type === 'roadmap') {
           return {
@@ -128,6 +148,10 @@ function loadTabsFromStorage(): Tab[] {
         // Migrate old "Goals" label
         if ((tab as any).type === 'goals' && (tab as any).label === 'Goals') {
           return { ...tab, label: 'Projects' } as Tab;
+        }
+        if ((tab as any).type === 'browser') {
+          const { pageId, ...rest } = tab as BrowserTab;
+          return rest as Tab;
         }
         return tab;
       });
@@ -307,6 +331,9 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     const serializable = tabs.map(t => {
       if (t.type === 'diff') return { ...t, oldContent: '', newContent: '' };
       if (t.type === 'terminal') return { ...t }; // shellId preserved; TerminalView reclaims on mount
+      // Drop favicon from persistence — it may be a huge data: URL on some
+      // sites, and it'll be re-emitted on the next page load anyway.
+      if (t.type === 'browser') { const { favicon: _f, ...rest } = t; return rest; }
       return t;
     });
     try {
@@ -454,6 +481,10 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     if (closing && isTerminalTab(closing)) {
       gw.rpc('shell.kill', { shellId: closing.shellId }).catch(() => {});
     }
+    // Tear down WebContentsView for browser tabs
+    if (closing && isBrowserTab(closing) && closing.pageId) {
+      try { window.electronAPI?.browser?.destroy(closing.pageId); } catch {}
+    }
 
     const remainingTabs = tabs.filter(t => t.id !== tabId);
 
@@ -556,7 +587,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     return tab.id;
   }, [tabs, focusTab, openTab]);
 
-  const openViewTab = useCallback((type: Exclude<TabType, 'chat' | 'file' | 'diff' | 'terminal' | 'task' | 'pr'>, label: string, groupId?: GroupId) => {
+  const openViewTab = useCallback((type: Exclude<TabType, 'chat' | 'file' | 'diff' | 'terminal' | 'task' | 'pr' | 'browser'>, label: string, groupId?: GroupId) => {
     const id = `view:${type}`;
     const existing = tabs.find(t => t.id === id);
     if (existing) {
@@ -666,6 +697,83 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     }
   }, [focusTab, gw, layout]);
 
+  const openBrowserTab = useCallback((url?: string, groupId?: GroupId) => {
+    // reject unsafe schemes at the earliest tab-state entry point. the main
+    // process also re-validates before loadURL, but failing here keeps
+    // garbage out of the tab list.
+    const safeUrl = url && isSafeUrl(url) ? url : undefined;
+    const id = `browser:${crypto.randomUUID()}`;
+    const tab: BrowserTab = {
+      id,
+      type: 'browser',
+      label: 'New Tab',
+      closable: true,
+      url: safeUrl,
+    };
+    setTabs(prev => [...prev, tab]);
+    setActiveTabId(id);
+    layout.addTabToGroup(id, groupId);
+    return id;
+  }, [layout]);
+
+  // Adopt a page the main process already created (e.g. agent-initiated)
+  // into a UI tab. The tab starts with pageId pre-assigned so BrowserView
+  // attaches to the existing WebContentsView instead of creating a new one.
+  //
+  // focus defaults to true for back-compat. Agent-created tabs pass focus:false
+  // so the new tab appears silently in the tab bar without stealing the user's
+  // current pane focus.
+  //
+  // preferSplit: when true AND layout is single-pane, split a new column to the
+  // right and land the tab there (the user's pane stays focused). When the
+  // layout is already multi-pane, the tab is placed in the active pane alongside
+  // whatever the user is looking at — rule "pile into existing" avoids pane
+  // proliferation.
+  const adoptBrowserTab = useCallback((
+    pageId: string,
+    url?: string,
+    label?: string,
+    groupId?: GroupId,
+    opts?: { focus?: boolean; preferSplit?: boolean },
+  ) => {
+    const focus = opts?.focus ?? true;
+    const preferSplit = opts?.preferSplit ?? false;
+    let fallbackLabel = 'New Tab';
+    if (!label && url) {
+      try { fallbackLabel = new URL(url).host; } catch {}
+    }
+    const id = `browser:${crypto.randomUUID()}`;
+    const tab: BrowserTab = {
+      id,
+      type: 'browser',
+      label: label || fallbackLabel,
+      closable: true,
+      pageId,
+      url,
+    };
+    setTabs(prev => [...prev, tab]);
+    if (focus) setActiveTabId(id);
+
+    // Split a new column on the right when the layout is single-pane and no
+    // target group was forced.  The atomic addColumnWithTab creates the pane
+    // pre-populated with our tab in a single setState, which is important —
+    // a two-step add-column-then-add-tab would leave an empty pane visible
+    // for a render, tripping the fill-empty effect into making a ghost chat.
+    if (preferSplit && !groupId && !layout.isMultiPane) {
+      layout.addColumnWithTab(layout.activeGroupId, 'right', id, { activate: false });
+    } else {
+      layout.addTabToGroup(id, groupId, { activate: focus });
+    }
+    return id;
+  }, [layout]);
+
+  // Called by BrowserView once the WebContentsView is created and whenever
+  // the controller emits tab-updated (url/title changes). Updates are in-memory
+  // only; pageId is stripped when persisting tabs.
+  const patchBrowserTab = useCallback((tabId: string, patch: Partial<Pick<BrowserTab, 'pageId' | 'url' | 'label' | 'favicon'>>) => {
+    setTabs(prev => prev.map(t => (t.id === tabId && isBrowserTab(t)) ? { ...t, ...patch } : t));
+  }, []);
+
   const openTaskTab = useCallback((taskId: string, taskTitle: string, groupId?: GroupId) => {
     const id = `task:${taskId}`;
     const existing = tabs.find(t => t.id === id);
@@ -738,6 +846,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     for (const tab of closingTabs) {
       if (isChatTab(tab)) gw.untrackSession(tab.sessionKey);
       if (isTerminalTab(tab)) gw.rpc('shell.kill', { shellId: tab.shellId }).catch(() => {});
+      if (isBrowserTab(tab) && tab.pageId) { try { window.electronAPI?.browser?.destroy(tab.pageId); } catch {} }
       layout.removeTabFromGroup(tab.id, gid);
     }
     focusTab(tabId, gid);
@@ -762,6 +871,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     for (const tab of closingTabs) {
       if (isChatTab(tab)) gw.untrackSession(tab.sessionKey);
       if (isTerminalTab(tab)) gw.rpc('shell.kill', { shellId: tab.shellId }).catch(() => {});
+      if (isBrowserTab(tab) && tab.pageId) { try { window.electronAPI?.browser?.destroy(tab.pageId); } catch {} }
       layout.removeTabFromGroup(tab.id, gid);
     }
     if (fallback.tab) {
@@ -786,6 +896,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     for (const tab of closingTabs) {
       if (isChatTab(tab)) gw.untrackSession(tab.sessionKey);
       if (isTerminalTab(tab)) gw.rpc('shell.kill', { shellId: tab.shellId }).catch(() => {});
+      if (isBrowserTab(tab) && tab.pageId) { try { window.electronAPI?.browser?.destroy(tab.pageId); } catch {} }
       layout.removeTabFromGroup(tab.id, gid);
     }
     focusTab(tabId, gid);
@@ -877,6 +988,9 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     openFileTab,
     openDiffTab,
     openTerminalTab,
+    openBrowserTab,
+    adoptBrowserTab,
+    patchBrowserTab,
     openSessionTab,
     openTaskTab,
     openPrTab,

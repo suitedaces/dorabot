@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"><title>Drag Fixture</title>
+  <style>
+    #source, #target { width: 100px; height: 100px; display: inline-block; margin: 20px; border: 2px solid #888; }
+    #source { background: lightblue; }
+    #target { background: lightyellow; }
+    #target.over { background: lightgreen; }
+  </style>
+</head>
+<body>
+  <h1>Drag</h1>
+  <div id="source" draggable="true">source</div>
+  <div id="target">target</div>
+  <div id="out">idle</div>
+  <script>
+    const src = document.getElementById('source');
+    const tgt = document.getElementById('target');
+    const out = document.getElementById('out');
+    src.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', 'moved'); });
+    tgt.addEventListener('dragover', (e) => { e.preventDefault(); tgt.classList.add('over'); });
+    tgt.addEventListener('dragleave', () => { tgt.classList.remove('over'); });
+    tgt.addEventListener('drop', (e) => {
+      e.preventDefault();
+      tgt.classList.remove('over');
+      out.textContent = 'dropped: ' + e.dataTransfer.getData('text/plain');
+    });
+  </script>
+</body>
+</html>

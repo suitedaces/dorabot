@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Dialog Fixture</title></head>
+<body>
+  <h1>Dialogs</h1>
+  <button id="alert-btn" type="button">alert</button>
+  <button id="confirm-btn" type="button">confirm</button>
+  <button id="prompt-btn" type="button">prompt</button>
+  <div id="out">idle</div>
+  <script>
+    document.getElementById('alert-btn').addEventListener('click', () => {
+      alert('hello');
+      document.getElementById('out').textContent = 'alert-ok';
+    });
+    document.getElementById('confirm-btn').addEventListener('click', () => {
+      const r = confirm('yes?');
+      document.getElementById('out').textContent = 'confirm=' + r;
+    });
+    document.getElementById('prompt-btn').addEventListener('click', () => {
+      const r = prompt('what?');
+      document.getElementById('out').textContent = 'prompt=' + r;
+    });
+  </script>
+</body>
+</html>

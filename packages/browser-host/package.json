@@ -1,0 +1,16 @@
+{
+  "name": "@dorabot/browser-host",
+  "version": "0.1.0",
+  "private": true,
+  "description": "headless electron process that hosts the embedded browser when no desktop app is connected",
+  "main": "out/packages/browser-host/src/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "electron out/packages/browser-host/src/main.js",
+    "dev": "tsc -p tsconfig.json && electron out/packages/browser-host/src/main.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

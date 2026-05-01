@@ -1,0 +1,13 @@
+{
+  "name": "@dorabot/browser-parity-tests",
+  "version": "0.1.0",
+  "private": true,
+  "description": "parity test suite for the CDP-based embedded browser (runs inside electron)",
+  "main": "out/tests/browser-parity/src/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "electron out/tests/browser-parity/src/main.js",
+    "run": "npm run build && npm run start"
+  }
+}

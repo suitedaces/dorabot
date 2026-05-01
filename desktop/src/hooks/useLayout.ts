@@ -209,7 +209,10 @@ export function useLayout() {
   }, []);
 
   // Add a column at a specific position (for drag: left/right of a target)
-  const addColumnAt = useCallback((targetPaneId: string, side: 'left' | 'right'): string => {
+  // opts.activate defaults to true (moves focus to the new pane). Agent-triggered
+  // splits pass activate:false so the user's pane stays focused.
+  const addColumnAt = useCallback((targetPaneId: string, side: 'left' | 'right', opts?: { activate?: boolean }): string => {
+    const activate = opts?.activate ?? true;
     const newPane = makePane();
     const newCol = makeColumn([newPane]);
     setState(prev => {
@@ -218,7 +221,56 @@ export function useLayout() {
       const cols = [...prev.columns];
       const insertIdx = side === 'right' ? loc.colIdx + 1 : loc.colIdx;
       cols.splice(insertIdx, 0, newCol);
-      return { ...prev, columns: cols, sizes: equalSizes(cols.length), activePaneId: newPane.id };
+      return {
+        ...prev,
+        columns: cols,
+        sizes: equalSizes(cols.length),
+        activePaneId: activate ? newPane.id : prev.activePaneId,
+      };
+    });
+    return newPane.id;
+  }, []);
+
+  // Atomically add a new column that already contains `tabId` in its pane.
+  // This is the split-and-adopt path used by agent-initiated browser tabs —
+  // doing it in a single setState prevents the fill-empty effect from racing
+  // an empty pane and creating a ghost chat tab.
+  const addColumnWithTab = useCallback((
+    targetPaneId: string,
+    side: 'left' | 'right',
+    tabId: string,
+    opts?: { activate?: boolean },
+  ): string => {
+    const activate = opts?.activate ?? false;
+    const newPane: Pane = { id: uid(), tabIds: [tabId], activeTabId: tabId };
+    const newCol: Column = { id: uid(), panes: [newPane], sizes: [100] };
+    setState(prev => {
+      const loc = findPaneColumn(prev, targetPaneId);
+      if (!loc) return prev;
+      // strip the tab from any pre-existing pane so we don't duplicate it
+      const cleanedColumns = prev.columns.map(c => ({
+        ...c,
+        panes: c.panes.map(p => {
+          if (!p.tabIds.includes(tabId)) return p;
+          const filtered = p.tabIds.filter(id => id !== tabId);
+          return {
+            ...p,
+            tabIds: filtered,
+            activeTabId: p.activeTabId === tabId
+              ? (filtered[0] || null)
+              : p.activeTabId,
+          };
+        }),
+      }));
+      const insertIdx = side === 'right' ? loc.colIdx + 1 : loc.colIdx;
+      const cols = [...cleanedColumns];
+      cols.splice(insertIdx, 0, newCol);
+      return {
+        ...prev,
+        columns: cols,
+        sizes: equalSizes(cols.length),
+        activePaneId: activate ? newPane.id : prev.activePaneId,
+      };
     });
     return newPane.id;
   }, []);
@@ -340,7 +392,8 @@ export function useLayout() {
     });
   }, []);
 
-  const addTabToGroup = useCallback((tabId: string, paneId?: string) => {
+  const addTabToGroup = useCallback((tabId: string, paneId?: string, opts?: { activate?: boolean }) => {
+    const activate = opts?.activate ?? true;
     setState(prev => {
       const targetId = paneId || prev.activePaneId;
       // Remove from any other pane first (prevent cross-pane duplication),
@@ -349,8 +402,14 @@ export function useLayout() {
         ...c,
         panes: c.panes.map(p => {
           if (p.id === targetId) {
-            if (p.tabIds.includes(tabId)) return { ...p, activeTabId: tabId };
-            return { ...p, tabIds: [...p.tabIds, tabId], activeTabId: tabId };
+            if (p.tabIds.includes(tabId)) {
+              return activate ? { ...p, activeTabId: tabId } : p;
+            }
+            return {
+              ...p,
+              tabIds: [...p.tabIds, tabId],
+              activeTabId: activate ? tabId : (p.activeTabId ?? tabId),
+            };
           }
           // Strip from non-target panes
           if (p.tabIds.includes(tabId)) {
@@ -518,6 +577,7 @@ export function useLayout() {
     addColumn,
     addRow,
     addColumnAt,
+    addColumnWithTab,
     addRowAt,
     splitHorizontal,
     splitVertical,

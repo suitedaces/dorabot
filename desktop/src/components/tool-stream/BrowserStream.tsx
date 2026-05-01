@@ -1,7 +1,8 @@
 import { motion, AnimatePresence } from "motion/react"
-import { Monitor, Lock, RotateCw, ArrowLeft, ArrowRight, X, Minus, Maximize2 } from "lucide-react"
+import { Lock, RotateCw, ArrowLeft, ArrowRight, X, ExternalLink } from "lucide-react"
 import type { ToolUIProps } from "../tool-ui"
 import { safeParse } from "../../lib/safe-parse"
+import { isSafeUrl } from "../../lib/url"
 import { ElapsedTime } from "./ElapsedTime"
 
 const ACTION_LABELS: Record<string, string> = {
@@ -21,9 +22,15 @@ export function BrowserStream({ input, output, imageData, isError, streaming }: 
   const label = ACTION_LABELS[action] || action
   const done = !streaming && output != null
 
-  // extract page url from output [page: ...] tag, fall back to input url
-  const pageUrlMatch = output?.match(/\[page: (.+)\]/)
-  const url = pageUrlMatch?.[1] || parsed.url || ""
+  // extract page url from output [page: ...] tag, fall back to input url.
+  // non-greedy char class avoids capturing junk on lines that contain more ']'.
+  const pageUrlMatch = output?.match(/\[page: ([^\]]+)\]/)
+  const rawUrl = pageUrlMatch?.[1] || parsed.url || ""
+  // only trust urls with http(s)/about scheme. anything else (javascript:,
+  // file:, data:) is dropped so the address bar can't be used as a handoff
+  // to unsafe navigation.
+  const url = isSafeUrl(rawUrl) ? rawUrl : ""
+  const isHttps = url.startsWith("https:")
 
   return (
     <div className="rounded-lg overflow-hidden border border-border/60 bg-[var(--stream-mid)]">
@@ -47,21 +54,36 @@ export function BrowserStream({ input, output, imageData, isError, streaming }: 
         <ElapsedTime running={!!streaming} />
       </div>
 
-      {/* address bar */}
+      {/* address bar — clickable when we know the url, routes to the browser tab */}
       <div className="flex items-center gap-2 px-3 py-1.5 bg-[var(--stream-raised)]">
-        <div className="flex-1 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[var(--stream-base)] border border-border/20">
-          {url && <Lock className="w-2.5 h-2.5 text-success/70 shrink-0" />}
-          <span className="text-[11px] font-mono text-foreground/80 truncate">
-            {url || "about:blank"}
-          </span>
-          {streaming && url && (
-            <motion.span
-              className="inline-block w-[2px] h-3 bg-primary/80 ml-0.5 shrink-0"
-              animate={{ opacity: [1, 0] }}
-              transition={{ duration: 0.6, repeat: Infinity }}
-            />
-          )}
-        </div>
+        {url ? (
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent('dorabot:open-browser-tab', { detail: { url } }))}
+            title="Open in browser tab"
+            className="group flex-1 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[var(--stream-base)] border border-border/20 hover:border-primary/50 hover:bg-[var(--stream-elevated)] transition-colors text-left cursor-pointer"
+          >
+            {isHttps && <Lock className="w-2.5 h-2.5 text-success/70 shrink-0" />}
+            <span className="flex-1 text-[11px] font-mono text-foreground/80 truncate">
+              {url}
+            </span>
+            {streaming ? (
+              <motion.span
+                className="inline-block w-[2px] h-3 bg-primary/80 ml-0.5 shrink-0"
+                animate={{ opacity: [1, 0] }}
+                transition={{ duration: 0.6, repeat: Infinity }}
+              />
+            ) : (
+              <ExternalLink className="w-2.5 h-2.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+            )}
+          </button>
+        ) : (
+          <div className="flex-1 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[var(--stream-base)] border border-border/20">
+            <span className="text-[11px] font-mono text-foreground/80 truncate">
+              about:blank
+            </span>
+          </div>
+        )}
       </div>
 
       {/* loading bar */}

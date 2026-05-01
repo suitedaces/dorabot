@@ -5,6 +5,14 @@ import { type WorkspaceFiles, buildWorkspaceSection, WORKSPACE_DIR, MEMORIES_DIR
 import { loadProjects, type Project } from './tools/projects.js';
 import { loadTasks, type Task } from './tools/tasks.js';
 
+export type BrowserTabInfo = {
+  pageId: string;
+  url: string;
+  title: string;
+  userFocused?: boolean;
+  paused?: boolean;
+};
+
 export type SystemPromptOptions = {
   config: Config;
   skills?: Skill[];
@@ -15,6 +23,7 @@ export type SystemPromptOptions = {
   extraContext?: string;
   workspaceFiles?: WorkspaceFiles;
   lastPulseAt?: number;
+  browserTabs?: BrowserTabInfo[];
 };
 
 export function buildSystemPrompt(opts: SystemPromptOptions): string {
@@ -330,11 +339,31 @@ If you ask the user a question (AskUserQuestion) and it times out with no answer
 
   // browser
   if (config.browser?.enabled !== false) {
+    const tabs = opts.browserTabs || [];
+    const tabLines = tabs.length > 0
+      ? tabs.map(t => {
+          const flags: string[] = [];
+          if (t.userFocused) flags.push('focused');
+          if (t.paused) flags.push('paused');
+          const flagStr = flags.length > 0 ? ` (${flags.join(', ')})` : '';
+          const title = t.title?.trim() || '(untitled)';
+          return `- \`${t.pageId}\`${flagStr}: ${title} — ${t.url || '(no url)'}`;
+        }).join('\n')
+      : '(no tabs currently open — call new_page to open one)';
+
     sections.push(`## Browser
 
-- Prefer the browser tool for taking actions on the web and accessing gated pages. It handles JS-rendered content, auth sessions, and interactive flows.
-- Persistent profile: authenticated sessions carry over.
-- **Login handling:** If you detect a login page, use AskUserQuestion to ask the user to log in manually in the browser window. After they confirm, snapshot to verify and continue.
+Embedded browser runs inside dorabot, shared with the user. Tabs are native WebContentsView overlays. Authenticated sessions carry over.
+
+**Open tabs:**
+${tabLines}
+
+**Rules:**
+- Pass \`pageId\` explicitly on per-tab actions. Omit pageId to target the user's focused tab.
+- Refs (\`e1\`, \`e2\`, ...) from snapshot survive DOM reflows but reset on navigation. Always re-snapshot after navigating.
+- If a tab is paused (user clicked the pause toggle), CDP actions on it will fail. Ask the user before resuming.
+- Snapshots return \`userInterrupted: true\` if the user clicked or typed during your action. If so, stop and re-plan.
+- **Login handling:** If you detect a login page, use AskUserQuestion to ask the user to log in manually. After they confirm, snapshot to verify and continue.
 - Never ask for credentials or try to fill login forms yourself.`);
   }
 

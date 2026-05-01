@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { dorabotImg, whatsappImg, telegramImg } from './assets';
 import { useGateway, type NotifiableEvent } from './hooks/useGateway';
-import { useTabs, isChatTab } from './hooks/useTabs';
+import { useTabs, isChatTab, isBrowserTab } from './hooks/useTabs';
 import type { Tab, TabType } from './hooks/useTabs';
 import { useLayout } from './hooks/useLayout';
 import { useTheme } from './hooks/useTheme';
@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { PALETTES } from './lib/palettes';
 import type { Palette as PaletteId } from './lib/palettes';
+import { isSafeUrl, normalizeUrl } from './lib/url';
 import { ToastContainer } from './components/ToastContainer';
 
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
@@ -672,7 +673,7 @@ export default function App() {
       } else {
         tabState.newChatTab();
       }
-    } else if (navId !== 'file' && navId !== 'diff' && navId !== 'terminal' && navId !== 'task' && navId !== 'pr') {
+    } else if (navId !== 'file' && navId !== 'diff' && navId !== 'terminal' && navId !== 'task' && navId !== 'pr' && navId !== 'browser') {
       tabState.openViewTab(navId, ALL_NAV_ITEMS.find(n => n.id === navId)?.label || navId);
     }
   }, [tabState, gw.sessionStates]);
@@ -827,6 +828,7 @@ export default function App() {
     toggleFiles: toggleFileExplorer,
     openSettings: () => handleNavClick('settings'),
     openTerminal: () => tabState.openTerminalTab(),
+    openBrowser: () => tabState.openBrowserTab(),
     focusInput: () => {
       const group = layout.groups.find(g => g.id === layout.activeGroupId);
       const groupEl = document.querySelector<HTMLElement>(`[data-group-id="${layout.activeGroupId}"]`);
@@ -868,6 +870,83 @@ export default function App() {
     });
     return () => cleanup?.();
   }, [shortcutActions]);
+
+  // Keyboard shortcuts pressed while a browser WebContentsView is focused
+  // don't reach the renderer's window listener. Main intercepts them and
+  // forwards via IPC — we re-dispatch as a synthetic KeyboardEvent so the
+  // existing useKeyboardShortcuts hook picks them up without duplicating
+  // the shortcut table.
+  useEffect(() => {
+    const cleanup = (window as any).electronAPI?.onAppShortcut?.((p: { key: string; code: string; shift: boolean; alt: boolean; meta: boolean; control: boolean }) => {
+      try {
+        const ev = new KeyboardEvent('keydown', {
+          key: p.key,
+          code: p.code,
+          shiftKey: p.shift,
+          altKey: p.alt,
+          metaKey: p.meta,
+          ctrlKey: p.control,
+          bubbles: true,
+          cancelable: true,
+        });
+        window.dispatchEvent(ev);
+      } catch (err) {
+        console.error('[App] onAppShortcut dispatch failed:', err);
+      }
+    });
+    return () => cleanup?.();
+  }, []);
+
+  // Agent → UI sync: when the agent creates a browser tab via the browser tool,
+  // surface it as a UI tab BUT never steal focus. The agent's work appears
+  // silently in the tab bar; the user opts in by clicking it. Similarly, we
+  // don't re-focus the user when the agent acts on a tab — the agent can work
+  // in the background while the user keeps typing in chat.
+  const tabsRef = useRef(tabState.tabs);
+  useEffect(() => { tabsRef.current = tabState.tabs; }, [tabState.tabs]);
+  useEffect(() => {
+    const api = window.electronAPI?.browser;
+    if (!api) return;
+    const unsubCreated = api.onTabCreated?.((summary) => {
+      if (summary.origin !== 'agent') return;
+      const existing = tabsRef.current.find(t => isBrowserTab(t) && t.pageId === summary.pageId);
+      if (existing) return; // already adopted — don't steal focus
+      const label = summary.title?.trim() || undefined;
+      // preferSplit: in a single-pane layout, split a column to the right so
+      // the agent's browser work lives alongside the chat. Multi-pane layouts
+      // pile into the active pane.
+      tabState.adoptBrowserTab(summary.pageId, summary.url || undefined, label, undefined, { focus: false, preferSplit: true });
+    });
+    return () => {
+      unsubCreated?.();
+    };
+  }, [tabState]);
+
+  // chat -> browser tab bridge: BrowserStream dispatches this when the user
+  // clicks the url bar in the transcript. focus the matching tab if it still
+  // exists, otherwise open a fresh tab at that url.
+  //
+  // the url is validated here because *any* renderer-side code (a compromised
+  // dep, injected script) could fire this event. main process also validates,
+  // but failing fast here keeps bad urls out of tab state.
+  const tabStateRef = useRef(tabState);
+  useEffect(() => { tabStateRef.current = tabState; }, [tabState]);
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const url = (e as CustomEvent<{ url?: string }>).detail?.url;
+      if (!isSafeUrl(url)) return;
+      const target = normalizeUrl(url!);
+      const ts = tabStateRef.current;
+      const match = tabsRef.current.find(t => isBrowserTab(t) && normalizeUrl(t.url) === target);
+      if (match) {
+        ts.focusTab(match.id);
+      } else {
+        ts.openBrowserTab(url);
+      }
+    };
+    window.addEventListener('dorabot:open-browser-tab', handler);
+    return () => window.removeEventListener('dorabot:open-browser-tab', handler);
+  }, []);
 
   // --- Drag and drop ---
   const handleDragStart = useCallback((event: DragStartEvent) => {
@@ -985,6 +1064,10 @@ export default function App() {
     onNewTerminal: () => {
       layout.focusGroup(groupId);
       tabState.openTerminalTab(undefined, groupId);
+    },
+    onNewBrowser: () => {
+      layout.focusGroup(groupId);
+      tabState.openBrowserTab(undefined, groupId);
     },
     onNavClick: (navId: string) => handleNavClick(navId as TabType),
     onSplitRight: () => layout.addColumnAt(groupId, 'right'),

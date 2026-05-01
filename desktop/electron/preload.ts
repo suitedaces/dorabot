@@ -37,6 +37,109 @@ const electronAPI = {
     ipcRenderer.on('gateway:state', handler);
     return () => { ipcRenderer.removeListener('gateway:state', handler); };
   },
+  // Embedded browser IPC (main process owns WebContentsView + CDP debugger)
+  browser: {
+    create: (opts: { url?: string; background?: boolean } = {}): Promise<string> =>
+      ipcRenderer.invoke('browser:create', opts),
+    destroy: (pageId: string): Promise<true> =>
+      ipcRenderer.invoke('browser:destroy', pageId),
+    // Pane-level visibility. The renderer pushes per-pane state (bounds +
+    // which browser tab is active in that pane + visible); main's
+    // BrowserTabModel reconciles WebContentsView show/hide/layering across
+    // all known tabs. Replaces the per-view setBounds/hide/bringToFront trio
+    // that used to be called from BrowserView useEffects.
+    paneUpdate: (
+      paneId: string,
+      patch: {
+        bounds?: { x: number; y: number; width: number; height: number };
+        activeBrowserPageId?: string | null;
+        visible?: boolean;
+      },
+    ): Promise<true> => ipcRenderer.invoke('browser:pane-update', paneId, patch),
+    paneRemove: (paneId: string): Promise<true> =>
+      ipcRenderer.invoke('browser:pane-remove', paneId),
+    setUserFocus: (pageId: string | null): Promise<true> =>
+      ipcRenderer.invoke('browser:set-user-focus', pageId),
+    navigate: (pageId: string, params: { type: 'url' | 'back' | 'forward' | 'reload'; url?: string }): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('browser:navigate', pageId, params),
+    pause: (pageId: string, paused: boolean): Promise<true> =>
+      ipcRenderer.invoke('browser:pause', pageId, paused),
+    reload: (pageId: string): Promise<true> =>
+      ipcRenderer.invoke('browser:reload', pageId),
+    listPages: (): Promise<BrowserTabSummary[]> =>
+      ipcRenderer.invoke('browser:list-pages'),
+    onTabCreated: (cb: (summary: BrowserTabSummary) => void) => {
+      const handler = (_e: any, payload: BrowserTabSummary) => cb(payload);
+      ipcRenderer.on('browser:tab-created', handler);
+      return () => { ipcRenderer.removeListener('browser:tab-created', handler); };
+    },
+    onTabUpdated: (cb: (summary: BrowserTabSummary) => void) => {
+      const handler = (_e: any, payload: BrowserTabSummary) => cb(payload);
+      ipcRenderer.on('browser:tab-updated', handler);
+      return () => { ipcRenderer.removeListener('browser:tab-updated', handler); };
+    },
+    onTabClosed: (cb: (payload: { pageId: string }) => void) => {
+      const handler = (_e: any, payload: { pageId: string }) => cb(payload);
+      ipcRenderer.on('browser:tab-closed', handler);
+      return () => { ipcRenderer.removeListener('browser:tab-closed', handler); };
+    },
+    onTabPaused: (cb: (payload: { pageId: string; paused: boolean }) => void) => {
+      const handler = (_e: any, payload: any) => cb(payload);
+      ipcRenderer.on('browser:tab-paused', handler);
+      return () => { ipcRenderer.removeListener('browser:tab-paused', handler); };
+    },
+    onTabUserActivity: (cb: (payload: { pageId: string; at: number }) => void) => {
+      const handler = (_e: any, payload: any) => cb(payload);
+      ipcRenderer.on('browser:tab-user-activity', handler);
+      return () => { ipcRenderer.removeListener('browser:tab-user-activity', handler); };
+    },
+    onTabAgentActivity: (cb: (payload: { pageId: string; at: number }) => void) => {
+      const handler = (_e: any, payload: any) => cb(payload);
+      ipcRenderer.on('browser:tab-agent-activity', handler);
+      return () => { ipcRenderer.removeListener('browser:tab-agent-activity', handler); };
+    },
+    onTabCrashed: (cb: (payload: { pageId: string; reason: string; exitCode: number; recoverable: boolean }) => void) => {
+      const handler = (_e: any, payload: any) => cb(payload);
+      ipcRenderer.on('browser:tab-crashed', handler);
+      return () => { ipcRenderer.removeListener('browser:tab-crashed', handler); };
+    },
+    onTabLoadFailed: (cb: (payload: { pageId: string; errorCode: number; errorDescription: string; url: string }) => void) => {
+      const handler = (_e: any, payload: any) => cb(payload);
+      ipcRenderer.on('browser:tab-load-failed', handler);
+      return () => { ipcRenderer.removeListener('browser:tab-load-failed', handler); };
+    },
+    // Cmd+L from inside a browser tab — focus the URL bar of that tab
+    onFocusUrlBar: (cb: (payload: { pageId: string }) => void) => {
+      const handler = (_e: any, payload: any) => cb(payload);
+      ipcRenderer.on('browser:focus-url-bar', handler);
+      return () => { ipcRenderer.removeListener('browser:focus-url-bar', handler); };
+    },
+  },
+  // App shortcuts forwarded from a focused WebContentsView back to the
+  // renderer — dispatched as synthetic KeyboardEvents on window so the
+  // existing useKeyboardShortcuts hook picks them up unchanged.
+  onAppShortcut: (cb: (payload: { key: string; code: string; shift: boolean; alt: boolean; meta: boolean; control: boolean }) => void) => {
+    const handler = (_e: any, payload: any) => cb(payload);
+    ipcRenderer.on('app:shortcut', handler);
+    return () => { ipcRenderer.removeListener('app:shortcut', handler); };
+  },
+};
+
+export type BrowserTabSummary = {
+  pageId: string;
+  url: string;
+  title: string;
+  favicon: string | null;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  paused: boolean;
+  userFocused: boolean;
+  lastUserInteractionAt: number;
+  lastAgentActionAt: number;
+  origin: 'user' | 'agent';
+  crashed: boolean;
+  unresponsive: boolean;
+  loading: boolean;
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);

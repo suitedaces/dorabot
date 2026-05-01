@@ -21,5 +21,16 @@
     <!-- Allow unsigned executable memory (Node.js native addons) -->
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
+
+    <!-- WebAuthn / passkey support in the embedded browser. USB is needed for
+         hardware security keys (YubiKey, etc); Bluetooth is needed for the
+         hybrid transport (passkey on phone, signed on Mac via caBLE/Bluetooth).
+         Without these the hardened-runtime build blocks the WebAuthn stack
+         from reaching the hardware even when the permission handler in
+         browser-controller.ts says yes. -->
+    <key>com.apple.security.device.usb</key>
+    <true/>
+    <key>com.apple.security.device.bluetooth</key>
+    <true/>
 </dict>
 </plist>

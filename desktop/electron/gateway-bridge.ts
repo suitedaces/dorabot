@@ -27,6 +27,8 @@ const HEARTBEAT_TIMEOUT_MS = 5_000;
  */
 export type BridgeState = 'connecting' | 'connected' | 'authenticated' | 'degraded' | 'disconnected';
 
+export type BrowserRpcHandler = (method: string, params: Record<string, unknown>) => Promise<unknown>;
+
 export class GatewayBridge {
   private ws: WebSocket | null = null;
   private state: BridgeState = 'disconnected';
@@ -45,6 +47,8 @@ export class GatewayBridge {
   private lastReason: string | undefined;
   /** Last known auth status from HTTP fallback (survives WS drops) */
   private lastAuthStatus: AuthStatusResult | null = null;
+  /** Handles incoming browser.* RPC requests from the gateway. */
+  private browserRpcHandler: BrowserRpcHandler | null = null;
 
   constructor(url = 'ws://localhost', socketPath = GATEWAY_SOCKET_PATH) {
     this.url = url;
@@ -59,6 +63,22 @@ export class GatewayBridge {
 
   setWindow(win: BrowserWindow | null): void {
     this.window = win;
+  }
+
+  /** Register a handler for browser.* RPC calls coming from the gateway. */
+  setBrowserRpcHandler(handler: BrowserRpcHandler | null): void {
+    this.browserRpcHandler = handler;
+    // If already authenticated, advertise capability now
+    if (this.state === 'authenticated') this.advertiseCapabilities();
+  }
+
+  private advertiseCapabilities(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const capabilities: string[] = [];
+    if (this.browserRpcHandler) capabilities.push('browser');
+    if (capabilities.length === 0) return;
+    // Fire-and-forget — gateway uses this to route browser.* to us.
+    this.ws.send(JSON.stringify({ method: 'client.register', params: { capabilities }, id: ++this.rpcId }));
   }
 
   connect(): void {
@@ -132,10 +152,10 @@ export class GatewayBridge {
       if (this.ws !== ws) return;
       const data = raw.toString();
 
-      // Check if this is an auth response (handle internally)
+      // Check if this is a response to one of our own RPC calls (handle internally)
       try {
         const msg = JSON.parse(data);
-        if (msg && msg.id != null && this.pendingRpc.has(msg.id)) {
+        if (msg && msg.id != null && this.pendingRpc.has(msg.id) && !msg.method) {
           const pending = this.pendingRpc.get(msg.id)!;
           this.pendingRpc.delete(msg.id);
           clearTimeout(pending.timer);
@@ -145,6 +165,12 @@ export class GatewayBridge {
           } else {
             pending.resolve(msg.result);
           }
+          return;
+        }
+
+        // Gateway → us RPC request (browser.*, etc.)
+        if (msg && typeof msg.method === 'string' && msg.method.startsWith('browser.')) {
+          this.handleIncomingRpc(ws, msg);
           return;
         }
       } catch {}
@@ -236,6 +262,7 @@ export class GatewayBridge {
         this.log(`authenticated, connectId=${auth.connectId}`);
         this.setState('authenticated');
         this.startHeartbeat();
+        this.advertiseCapabilities();
       },
       reject: (err) => {
         this.setState('disconnected', err.message || 'auth_failed');
@@ -245,6 +272,24 @@ export class GatewayBridge {
     });
 
     ws.send(JSON.stringify({ method: 'auth', params: { token }, id }));
+  }
+
+  private async handleIncomingRpc(ws: WebSocket, msg: { id?: unknown; method: string; params?: unknown }): Promise<void> {
+    const respond = (payload: object) => {
+      try { ws.send(JSON.stringify({ id: msg.id, ...payload })); } catch {}
+    };
+    if (!this.browserRpcHandler) {
+      respond({ error: 'no browser handler registered' });
+      return;
+    }
+    try {
+      const params = (msg.params || {}) as Record<string, unknown>;
+      const result = await this.browserRpcHandler(msg.method, params);
+      respond({ result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      respond({ error: message });
+    }
   }
 
   private readToken(): string {

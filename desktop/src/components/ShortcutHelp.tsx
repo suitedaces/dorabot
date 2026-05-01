@@ -23,6 +23,7 @@ export const SHORTCUTS = [
     { keys: '⌘S', desc: 'Save file' },
     { keys: '⌘⇧V', desc: 'Toggle markdown preview' },
     { keys: '⌃`', desc: 'Open terminal' },
+    { keys: '⌘⇧B', desc: 'Open browser' },
     { keys: 'Esc', desc: 'Stop agent' },
   ]},
   { section: 'Layout', items: [
