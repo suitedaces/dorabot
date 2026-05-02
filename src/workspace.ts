@@ -17,6 +17,7 @@ export const OWNER_CHAT_IDS_PATH = join(DORABOT_DIR, 'owner-chat-ids.json');
 export const LOGS_DIR = join(DORABOT_DIR, 'logs');
 export const SESSIONS_DIR = join(DORABOT_DIR, 'sessions');
 export const SKILLS_DIR = join(DORABOT_DIR, 'skills');
+export const CODEX_DIR = process.env.CODEX_HOME || join(homedir(), '.codex');
 export const CLAUDE_DIR = join(homedir(), '.claude');
 export const CLAUDE_SKILLS_DIR = join(CLAUDE_DIR, 'skills');
 export const CLAUDE_COMMANDS_DIR = join(CLAUDE_DIR, 'commands');
@@ -33,6 +34,7 @@ export const CLAUDE_KEY_PATH = join(DORABOT_DIR, '.anthropic-key');
 export const CLAUDE_OAUTH_PATH = join(DORABOT_DIR, '.claude-oauth.json');
 export const CODEX_OAUTH_PATH = join(DORABOT_DIR, '.codex-oauth.json');
 export const OPENAI_KEY_PATH = join(DORABOT_DIR, '.openai-key');
+export const SKILL_ENV_PATH = join(DORABOT_DIR, '.skill-env.json');
 export const LEGACY_CODEX_AUTH_PATH = join(DORABOT_DIR, 'codex-auth.json');
 
 export function toHomeAlias(path: string): string {

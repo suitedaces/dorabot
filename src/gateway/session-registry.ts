@@ -110,9 +110,29 @@ export class SessionRegistry {
     if (s) {
       s.messageCount++;
       s.lastMessageAt = Date.now();
-      const db = getDb();
-      db.prepare('UPDATE sessions SET message_count = message_count + 1, last_message_at = ? WHERE id = ?').run(s.lastMessageAt, s.sessionId);
     }
+  }
+
+  refreshFromDb(key: string): void {
+    const s = this.sessions.get(key);
+    if (!s) return;
+
+    const db = getDb();
+    const row = db.prepare(`
+      SELECT sdk_session_id, message_count, last_message_at
+      FROM sessions
+      WHERE id = ?
+    `).get(s.sessionId) as {
+      sdk_session_id: string | null;
+      message_count: number;
+      last_message_at: number | null;
+    } | undefined;
+
+    if (!row) return;
+
+    s.sdkSessionId = row.sdk_session_id || undefined;
+    s.messageCount = row.message_count;
+    s.lastMessageAt = row.last_message_at || 0;
   }
 
   setActiveRun(key: string, active: boolean): void {

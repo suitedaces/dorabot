@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { DorabotSprite } from '../components/DorabotSprite';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { useGateway, ChatItem, AskUserQuestion, ImageAttachment, PendingElicitation } from '../hooks/useGateway';
+import type { useGateway, ChatItem, AskUserQuestion, ImageAttachment, PendingElicitation, CodexModelCatalog, ProviderInputItem } from '../hooks/useGateway';
 import { ElicitationForm } from '../components/ElicitationForm';
 import { ApprovalList } from '@/components/approval-ui';
 import { ToolUI } from '@/components/tool-ui';
@@ -31,7 +31,18 @@ import {
 } from 'lucide-react';
 import { SHORTCUTS as ALL_SHORTCUTS } from '@/components/ShortcutHelp';
 import { jsonrepair } from 'jsonrepair';
-import { CLAUDE_MODELS, CODEX_MODELS, DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL, codexModelsForAuth, labelForModel } from '@/lib/modelCatalog';
+import {
+  CLAUDE_AGENT_SDK_REASONING_EFFORTS,
+  CLAUDE_MODELS,
+  CODEX_MODELS,
+  DEFAULT_CLAUDE_MODEL,
+  DEFAULT_CODEX_MODEL,
+  codexModelsForAuth,
+  codexReasoningEffortOptions,
+  labelForModel,
+  reasoningEffortIsSupported,
+  reasoningEffortLabel,
+} from '@/lib/modelCatalog';
 
 type SlashItem = {
   command: string;
@@ -42,6 +53,7 @@ type SlashItem = {
 type SkillInfo = {
   name: string;
   description: string;
+  path?: string;
   eligibility: { eligible: boolean };
 };
 
@@ -128,37 +140,34 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   memory_search: Search, memory_read: FileText,
 };
 
-const CLAUDE_EFFORT_LEVELS = [
-  { value: 'minimal', label: 'minimal' },
-  { value: 'low', label: 'low' },
-  { value: 'medium', label: 'medium' },
-  { value: 'high', label: 'high' },
-  { value: 'max', label: 'max' },
-  { value: 'xhigh', label: 'xhigh' },
-];
-
-const CODEX_EFFORT_LEVELS = [
-  { value: 'minimal', label: 'minimal' },
-  { value: 'low', label: 'low' },
-  { value: 'medium', label: 'medium' },
-  { value: 'high', label: 'high' },
-  { value: 'xhigh', label: 'xhigh' },
-];
-
 function ModelSelector({ gateway, disabled, sessionId }: { gateway: ReturnType<typeof useGateway>; disabled: boolean; sessionId?: string }) {
   const providerName = (gateway.configData as any)?.provider?.name || 'claude';
   // Per-session model if set, otherwise fall back to the default (config-level) model
   const claudeModel = gateway.getSessionModel(sessionId) || DEFAULT_CLAUDE_MODEL;
   const codexModel = (gateway.configData as any)?.provider?.codex?.model || DEFAULT_CODEX_MODEL;
   const [codexAuthMethod, setCodexAuthMethod] = useState<string | undefined>(undefined);
-  const codexOptions = codexModelsForAuth(codexAuthMethod, codexModel);
+  const [codexCatalog, setCodexCatalog] = useState<CodexModelCatalog | null>(null);
+  const codexOptions = codexModelsForAuth(codexAuthMethod, codexModel, codexCatalog?.models);
+  const selectedCodexOption = codexOptions.find(option => option.value === codexModel) || null;
   const currentValue = providerName === 'codex' ? `codex:${codexModel}` : `claude:${claudeModel}`;
+  const reasoningEffort = (gateway.configData as any)?.reasoningEffort || null;
 
   useEffect(() => {
     gateway.getProviderAuth('codex')
       .then((auth) => setCodexAuthMethod(auth.method))
       .catch(() => {});
   }, [gateway.getProviderAuth]);
+
+  useEffect(() => {
+    if (gateway.connectionState !== 'connected') return;
+    let cancelled = false;
+    gateway.getCodexModels()
+      .then((catalog) => {
+        if (!cancelled) setCodexCatalog(catalog);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [gateway.connectionState, gateway.getCodexModels]);
 
   useEffect(() => {
     if (providerName === 'codex' && gateway.providerInfo?.auth?.method) {
@@ -170,6 +179,9 @@ function ModelSelector({ gateway, disabled, sessionId }: { gateway: ReturnType<t
     const [provider, model] = encoded.split(':') as [string, string];
     if (provider === 'claude') {
       if (providerName !== 'claude') await gateway.setProvider('claude');
+      if (reasoningEffort && !reasoningEffortIsSupported(CLAUDE_AGENT_SDK_REASONING_EFFORTS, reasoningEffort)) {
+        await gateway.setConfig('reasoningEffort', null);
+      }
       // If we have a session, set the model per-session; otherwise change the default.
       if (sessionId) {
         gateway.changeSessionModel(sessionId, model);
@@ -179,14 +191,17 @@ function ModelSelector({ gateway, disabled, sessionId }: { gateway: ReturnType<t
     } else {
       if (providerName !== 'codex') await gateway.setProvider('codex');
       await gateway.setConfig('provider.codex.model', model);
+      const option = codexOptions.find(candidate => candidate.value === model) || null;
+      const efforts = codexReasoningEffortOptions(option);
+      if (reasoningEffort && !reasoningEffortIsSupported(efforts, reasoningEffort)) {
+        await gateway.setConfig('reasoningEffort', null);
+      }
     }
   };
 
   const currentLabel = providerName === 'codex'
-    ? labelForModel(CODEX_MODELS, codexModel)
+    ? labelForModel(codexOptions, codexModel) || labelForModel(CODEX_MODELS, codexModel)
     : labelForModel(CLAUDE_MODELS, claudeModel);
-
-  const reasoningEffort = (gateway.configData as any)?.reasoningEffort || null;
 
   const handleEffortChange = async (value: string) => {
     const v = value === 'off' ? null : value;
@@ -217,10 +232,16 @@ function ModelSelector({ gateway, disabled, sessionId }: { gateway: ReturnType<t
           <div className="px-2 py-1 mt-1 text-[9px] font-semibold text-muted-foreground uppercase tracking-wider border-t border-border">OpenAI</div>
           {codexOptions.map(m => (
             <SelectItem key={m.value} value={`codex:${m.value}`} className="text-xs">
-              <span className="flex items-center gap-1.5">
-                <img src="./openai-icon.svg" alt="" className="w-3 h-3" />
-                {m.label}
-              </span>
+              <div className="flex flex-col gap-0.5 min-w-0">
+                <span className="flex items-center gap-1.5">
+                  <img src="./openai-icon.svg" alt="" className="w-3 h-3" />
+                  {m.label}
+                  {m.isDefault && <span className="text-[9px] text-primary">default</span>}
+                  {m.researchPreview && <span className="text-[9px] text-amber-500">preview</span>}
+                  {m.deprecated && <span className="text-[9px] text-muted-foreground">legacy</span>}
+                </span>
+                {m.description && <span className="text-[10px] text-muted-foreground truncate max-w-72">{m.description}</span>}
+              </div>
             </SelectItem>
           ))}
         </SelectContent>
@@ -228,18 +249,21 @@ function ModelSelector({ gateway, disabled, sessionId }: { gateway: ReturnType<t
       {/* Effort selector — provider-aware icon and levels */}
       {(() => {
         const isClaude = providerName === 'claude';
-        const effortLevels = isClaude ? CLAUDE_EFFORT_LEVELS : CODEX_EFFORT_LEVELS;
+        const effortLevels = isClaude ? CLAUDE_AGENT_SDK_REASONING_EFFORTS : codexReasoningEffortOptions(selectedCodexOption);
+        const effortValue = reasoningEffortIsSupported(effortLevels, reasoningEffort) ? reasoningEffort : 'off';
         const EffortIcon = isClaude ? Brain : Sparkles;
         return (
-          <Select value={reasoningEffort || 'off'} onValueChange={handleEffortChange} disabled={disabled}>
+          <Select value={effortValue} onValueChange={handleEffortChange} disabled={disabled}>
             <SelectTrigger size="sm" className="h-7 gap-1 text-[11px] rounded-lg shadow-none w-auto text-muted-foreground">
               <EffortIcon className="w-3 h-3" />
-              <span>{reasoningEffort || 'auto'}</span>
+              <span>{effortValue === 'off' ? 'auto' : reasoningEffortLabel(effortLevels, effortValue)}</span>
             </SelectTrigger>
             <SelectContent position="popper" align="start" className="min-w-[120px]">
               <SelectItem value="off" className="text-xs">auto</SelectItem>
               {effortLevels.map(e => (
-                <SelectItem key={e.value} value={e.value} className="text-xs">{e.label}</SelectItem>
+                <SelectItem key={e.value} value={e.value} className="text-xs">
+                  {e.label}{e.description ? ` (${e.description})` : ''}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -1192,7 +1216,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashFilter, setSlashFilter] = useState('');
   const [slashIndex, setSlashIndex] = useState(0);
-  const [activeSkill, setActiveSkill] = useState<{ name: string; content: string } | null>(null);
+  const [activeSkill, setActiveSkill] = useState<{ name: string; content: string; path?: string } | null>(null);
   const [quotedSnippet, setQuotedSnippet] = useState<QuotedSnippet | null>(null);
   const [skillsList, setSkillsList] = useState<SkillInfo[]>([]);
   const [atOpen, setAtOpen] = useState(false);
@@ -1258,7 +1282,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     }
   }, [chatItems]);
 
-  // Fetch skills list from gateway
+  // fetch skills list from gateway
   useEffect(() => {
     if (gateway.connectionState !== 'connected') return;
     let cancelled = false;
@@ -1267,6 +1291,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
       setSkillsList(result.filter((s: any) => s.eligibility?.eligible !== false).map((s: any) => ({
         name: s.name as string,
         description: (s.description || '') as string,
+        path: typeof s.path === 'string' ? s.path : undefined,
         eligibility: (s.eligibility || { eligible: true }) as { eligible: boolean },
       })));
     }).catch(() => {});
@@ -1452,8 +1477,16 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
       setQuotedSnippet(null);
     }
 
-    // Inject active skill context into prompt
-    if (activeSkill) {
+    let inputItems: ProviderInputItem[] | undefined;
+    const providerName = (gateway.configData as any)?.provider?.name || 'claude';
+    // codex uses structured skill input; claude needs inline context
+    if (activeSkill && providerName === 'codex' && activeSkill.path) {
+      if (!new RegExp(`(^|\\s)\\$${activeSkill.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|$)`).test(prompt)) {
+        prompt = `$${activeSkill.name} ${prompt}`.trim();
+      }
+      inputItems = [{ type: 'skill', name: activeSkill.name, path: activeSkill.path }];
+      setActiveSkill(null);
+    } else if (activeSkill) {
       const safeName = activeSkill.name.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] || c));
       prompt = `<skill-context name="${safeName}">\n${activeSkill.content}\n</skill-context>\n\n${prompt}`;
       setActiveSkill(null);
@@ -1481,7 +1514,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     setSending(true);
     try {
       const chatId = sessionKey ? sessionKey.split(':').slice(2).join(':') : undefined;
-      await gateway.sendMessage(prompt || 'What do you see in this image?', sessionKey, chatId, images);
+      await gateway.sendMessage(prompt || 'What do you see in this image?', sessionKey, chatId, images, inputItems);
     } finally {
       setSending(false);
     }
@@ -1505,12 +1538,12 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
           break;
       }
     } else {
-      // Skill: fetch SKILL.md content and set as active context
+      // fetch skill content and set active context
       const skillName = item.command.slice(1);
       try {
         const result = await gateway.rpc('skills.read', { name: skillName }) as { raw?: string } | undefined;
         if (result?.raw) {
-          setActiveSkill({ name: skillName, content: stripFrontmatter(result.raw) });
+          setActiveSkill({ name: skillName, content: stripFrontmatter(result.raw), path: typeof (result as any).path === 'string' ? (result as any).path : undefined });
         } else {
           console.warn(`Skill "${skillName}" returned no content`);
         }

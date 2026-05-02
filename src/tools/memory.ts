@@ -112,7 +112,7 @@ function extractConversationText(content: string): string | null {
   }
 }
 
-/** Get the first user message text from a session (for title fallback) */
+/** first user message for unnamed sessions */
 function getSessionFirstMessage(db: any, sessionId: string): string | null {
   const row = db.prepare(
     `SELECT content FROM messages WHERE session_id = ? AND type = 'user' ORDER BY id LIMIT 1`
@@ -120,7 +120,7 @@ function getSessionFirstMessage(db: any, sessionId: string): string | null {
   if (!row) return null;
   const text = extractConversationText(row.content);
   if (!text) return null;
-  // First line, capped for title use
+  // capped first line for display
   const firstLine = text.split('\n')[0].trim();
   return firstLine.length > 120 ? firstLine.slice(0, 120) + '...' : firstLine;
 }
@@ -227,7 +227,7 @@ Common patterns:
 - memory_search({ source: "journals" }) → browse daily journal entries
 - memory_search({ channel: "telegram", after: "3d" }) → recent telegram chats
 
-Results show: title (or first message), date range, channel, message count, duration.
+Results show: name (or first message), date range, channel, message count, duration.
 Use memory_read with the session ID to drill into a specific conversation.
 For research docs, use research_view / research_add / research_update instead.`,
   {
@@ -267,8 +267,7 @@ For research docs, use research_view / research_add / research_update instead.`,
               s.channel,
               s.chat_id,
               s.sender_name,
-              s.title,
-              s.summary,
+              s.name,
               f.rank,
               ROW_NUMBER() OVER (PARTITION BY m.session_id ORDER BY f.rank) as rn
             FROM messages_fts f
@@ -298,10 +297,10 @@ For research docs, use research_view / research_add / research_update instead.`,
           const rows = db.prepare(wrappedSql).all(...params) as any[];
 
           // Group by session
-          const sessionMap = new Map<string, { rows: any[]; channel: string | null; chatId: string | null; title: string | null; summary: string | null }>();
+          const sessionMap = new Map<string, { rows: any[]; channel: string | null; chatId: string | null; name: string | null }>();
           for (const row of rows) {
             if (!sessionMap.has(row.session_id)) {
-              sessionMap.set(row.session_id, { rows: [], channel: row.channel, chatId: row.chat_id, title: row.title, summary: row.summary });
+              sessionMap.set(row.session_id, { rows: [], channel: row.channel, chatId: row.chat_id, name: row.name });
             }
             sessionMap.get(row.session_id)!.rows.push(row);
           }
@@ -312,14 +311,14 @@ For research docs, use research_view / research_add / research_update instead.`,
             if (count >= limit) break;
 
             const range = getSessionTimeRange(db, sessionId);
-            const title = data.title || getSessionFirstMessage(db, sessionId) || 'Untitled';
+            const sessionName = data.name || getSessionFirstMessage(db, sessionId) || 'Unnamed session';
             const origin = classifySessionOrigin(data.channel, data.chatId);
             const dateStr = range.first ? range.first.slice(0, 10) : 'unknown';
             const duration = (range.first && range.last) ? formatDuration(range.first, range.last) : '';
             const durationStr = duration ? ` | ${duration}` : '';
             const channelStr = data.channel ? ` | ${data.channel}` : '';
 
-            let result = `**${title}**\n  id: ${sessionId} | ${dateStr}${channelStr} | ${origin} | ${range.count} msgs${durationStr}`;
+            let result = `**${sessionName}**\n  id: ${sessionId} | ${dateStr}${channelStr} | ${origin} | ${range.count} msgs${durationStr}`;
 
             // Show best matching snippets
             for (const row of data.rows) {
@@ -342,7 +341,7 @@ For research docs, use research_view / research_add / research_update instead.`,
         } else {
           // Browse mode: list recent sessions
           let sql = `
-            SELECT s.id, s.channel, s.chat_id, s.sender_name, s.created_at, s.updated_at, s.title, s.summary,
+            SELECT s.id, s.channel, s.chat_id, s.sender_name, s.created_at, s.updated_at, s.name,
                    s.message_count
             FROM sessions s
             WHERE 1=1
@@ -366,14 +365,14 @@ For research docs, use research_view / research_add / research_update instead.`,
           if (sessions.length > 0) {
             const lines = sessions.map((s: any) => {
               const range = getSessionTimeRange(db, s.id);
-              const title = s.title || getSessionFirstMessage(db, s.id) || 'Untitled';
+              const sessionName = s.name || getSessionFirstMessage(db, s.id) || 'Unnamed session';
               const origin = classifySessionOrigin(s.channel, s.chat_id);
               const dateStr = s.created_at ? s.created_at.slice(0, 16).replace('T', ' ') : 'unknown';
               const duration = (range.first && range.last) ? formatDuration(range.first, range.last) : '';
               const durationStr = duration ? ` | ${duration}` : '';
               const channelStr = s.channel ? ` | ${s.channel}` : '';
 
-              return `**${title}**\n  id: ${s.id} | ${dateStr}${channelStr} | ${origin} | ${range.count} msgs${durationStr}`;
+              return `**${sessionName}**\n  id: ${s.id} | ${dateStr}${channelStr} | ${origin} | ${range.count} msgs${durationStr}`;
             });
             sections.push(`## Sessions (${sessions.length})\n\n${lines.join('\n\n')}`);
           } else {
@@ -417,7 +416,7 @@ export const memoryReadTool = tool(
   `Read a past conversation or journal entry at different detail levels.
 
 Modes:
-- summary: quick overview (title, time range, message count, first message preview)
+- summary: quick overview (name, time range, message count, first message preview)
 - highlights: just the human conversation, no tool calls or file reads (default)
 - full: complete transcript including all tool calls, paginated
 
@@ -478,7 +477,7 @@ typically has ~80 actual conversation turns. Much more readable.`,
 
     // ── Session read ──
     const session = db.prepare(
-      'SELECT id, channel, chat_id, chat_type, sender_name, created_at, updated_at, title, summary FROM sessions WHERE id = ?'
+      'SELECT id, channel, chat_id, chat_type, sender_name, created_at, updated_at, name FROM sessions WHERE id = ?'
     ).get(idValue) as any | undefined;
 
     if (!session) {
@@ -492,18 +491,17 @@ typically has ~80 actual conversation turns. Much more readable.`,
     }
 
     const range = getSessionTimeRange(db, session.id);
-    const title = session.title || getSessionFirstMessage(db, session.id) || 'Untitled';
+    const sessionName = session.name || getSessionFirstMessage(db, session.id) || 'Unnamed session';
     const origin = classifySessionOrigin(session.channel, session.chat_id);
     const dateStr = range.first ? range.first.slice(0, 16).replace('T', ' ') : 'unknown';
     const endStr = range.last ? range.last.slice(11, 16) : '';
     const duration = (range.first && range.last) ? formatDuration(range.first, range.last) : '';
 
     const headerParts = [
-      `**${title}**`,
+      `**${sessionName}**`,
       `Session: ${session.id}`,
       `${dateStr}${endStr ? ' - ' + endStr : ''} | ${duration} | ${range.count} msgs | ${session.channel || 'unknown'} | ${origin}`,
     ];
-    if (session.summary) headerParts.push(`\nSummary: ${session.summary}`);
     const header = headerParts.join('\n');
 
     // ── Summary mode ──

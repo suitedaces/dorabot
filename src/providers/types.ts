@@ -7,9 +7,13 @@ export type ImageAttachment = {
   mediaType: string;
 };
 
+export type ProviderInputItem =
+  | { type: 'skill'; name: string; path: string }
+  | { type: 'mention'; name: string; path: string };
+
 export type RunHandle = {
   /** Push a user message into the active run's async generator */
-  inject(text: string, images?: ImageAttachment[]): boolean;
+  inject(text: string, images?: ImageAttachment[], inputItems?: ProviderInputItem[]): boolean;
   /** End the generator → SDK CLI process exits */
   close(): void;
   /** Whether the generator is still alive */
@@ -33,6 +37,7 @@ export type RunHandle = {
 export type ProviderRunOptions = {
   prompt: string;
   images?: ImageAttachment[];
+  inputItems?: ProviderInputItem[];
   systemPrompt: string;
   model: string;
   config: Config;
@@ -48,6 +53,7 @@ export type ProviderRunOptions = {
   hooks?: unknown;
   mcpServer?: unknown; // in-process MCP server (Claude) or command spec (Codex)
   sandbox?: unknown;
+  outputSchema?: unknown;
   /** Called once the async message generator is ready, before SDK query starts */
   onRunReady?: (handle: RunHandle) => void;
 };
@@ -63,12 +69,14 @@ export type ProviderAuthStatus = {
   authenticated: boolean;
   method?: 'api_key' | 'oauth';
   identity?: string;
+  accountEmail?: string;
+  planType?: string;
   error?: string;
   storageBackend?: 'keychain' | 'file';
   tokenHealth?: 'valid' | 'expiring' | 'expired';
   nextRefreshAt?: number;
   reconnectRequired?: boolean;
-  /** Model currently configured (e.g. "claude-opus-4-7" or "gpt-5-codex") */
+  /** Model currently configured (e.g. "claude-opus-4-7" or "gpt-5.5") */
   model?: string;
   /** Claude Code CLI version (e.g. "2.0.76") */
   cliVersion?: string;

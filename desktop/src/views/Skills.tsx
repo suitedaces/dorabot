@@ -13,12 +13,13 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
+import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { cn } from '@/lib/utils';
 import {
   Plus, Trash2, Pencil, Sparkles, Save, ArrowLeft,
   Search, Terminal, KeyRound, CheckCircle2, XCircle,
-  Package, User, Slash, Eye, CircleDot, Download,
-  Star, FolderTree, FileText, ChevronRight, ExternalLink,
+  Package, User, Slash, Eye, Download, Star,
+  FolderTree, ChevronRight, ExternalLink,
   Loader2, Globe, Compass, FolderOpen, File
 } from 'lucide-react';
 
@@ -38,18 +39,34 @@ type SkillInfo = {
   metadata: { requires?: { bins?: string[]; env?: string[] } };
   eligibility: { eligible: boolean; reasons: string[] };
   builtIn: boolean;
+  source: 'dorabot' | 'bundled' | 'claude' | 'project' | 'other';
+  enabled: boolean;
+  marketplaceSource: RegistrySource | null;
   files: SkillFile[];
 };
+
+type RegistrySource = 'community' | 'official';
 
 type RegistrySkill = {
   name: string;
   description: string;
   repo: string;
   skillPath: string;
-  stars: number;
-  installs: number;
-  category: string;
-  avatar: string;
+  source: RegistrySource;
+  htmlUrl: string;
+  installed: boolean;
+  metadata?: { requires?: { bins?: string[]; env?: string[] } };
+  stars?: number;
+  installs?: number;
+  category?: string;
+  avatar?: string;
+};
+
+type SkillEnvStatus = {
+  name: string;
+  env: string[];
+  values: Record<string, boolean>;
+  storageBackend: 'keychain' | 'file';
 };
 
 type SkillForm = {
@@ -97,7 +114,17 @@ export function SkillsView({ gateway }: Props) {
   const [activeTab, setActiveTab] = useState<'installed' | 'discover'>('installed');
   const [installing, setInstalling] = useState<string | null>(null);
   const [discoverSearch, setDiscoverSearch] = useState('');
+  const [discoverSource, setDiscoverSource] = useState<'all' | RegistrySource>('all');
   const [discoverCategory, setDiscoverCategory] = useState<string>('all');
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [setupLoading, setSetupLoading] = useState(false);
+  const [setupSaving, setSetupSaving] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const [setupSkillName, setSetupSkillName] = useState('');
+  const [setupEnvNames, setSetupEnvNames] = useState<string[]>([]);
+  const [setupEnvValues, setSetupEnvValues] = useState<Record<string, string>>({});
+  const [setupConfigured, setSetupConfigured] = useState<Record<string, boolean>>({});
+  const [setupStorageBackend, setSetupStorageBackend] = useState<'keychain' | 'file'>('file');
 
   const loadSkills = useCallback(async () => {
     if (gateway.connectionState !== 'connected') return;
@@ -112,18 +139,42 @@ export function SkillsView({ gateway }: Props) {
   }, [gateway.connectionState, gateway.rpc]);
 
   const loadRegistry = useCallback(async () => {
+    if (gateway.connectionState !== 'connected') return;
     try {
-      const res = await fetch(REGISTRY_URL);
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) setRegistry(data);
+      const [communityResult, officialResult] = await Promise.allSettled([
+        fetch(REGISTRY_URL),
+        gateway.rpc('skills.marketplace.list'),
+      ]);
+
+      const nextRegistry: RegistrySkill[] = [];
+
+      if (communityResult.status === 'fulfilled' && communityResult.value.ok) {
+        const data = await communityResult.value.json();
+        if (Array.isArray(data)) {
+          nextRegistry.push(...data.map((item) => ({
+            ...item,
+            source: 'community' as const,
+            htmlUrl: `https://github.com/${item.repo}`,
+            installed: false,
+          } satisfies RegistrySkill)));
+        }
       }
+
+      if (officialResult.status === 'fulfilled' && Array.isArray(officialResult.value)) {
+        nextRegistry.push(...officialResult.value as RegistrySkill[]);
+      }
+
+      nextRegistry.sort((a, b) => {
+        if (a.source !== b.source) return a.source === 'community' ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      setRegistry(nextRegistry);
     } catch (err) {
       console.error('failed to load registry:', err);
     } finally {
       setRegistryLoading(false);
     }
-  }, []);
+  }, [gateway.connectionState, gateway.rpc]);
 
   useEffect(() => { loadSkills(); }, [loadSkills]);
   useEffect(() => { loadRegistry(); }, [loadRegistry]);
@@ -149,14 +200,27 @@ export function SkillsView({ gateway }: Props) {
     custom: skills.filter(s => !s.builtIn).length,
   }), [skills]);
 
+  const discoverCounts = useMemo(() => ({
+    all: registry.length,
+    community: registry.filter(skill => skill.source === 'community').length,
+    official: registry.filter(skill => skill.source === 'official').length,
+  }), [registry]);
+
   const categories = useMemo(() => {
-    const cats = new Set(registry.map(s => s.category));
+    const cats = new Set(
+      registry
+        .filter(skill => skill.source === 'community' && skill.category)
+        .map(skill => skill.category as string),
+    );
     return ['all', ...Array.from(cats).sort()];
   }, [registry]);
 
   const filteredRegistry = useMemo(() => {
     let list = registry;
-    if (discoverCategory !== 'all') list = list.filter(s => s.category === discoverCategory);
+    if (discoverSource !== 'all') list = list.filter(skill => skill.source === discoverSource);
+    if (discoverSource !== 'official' && discoverCategory !== 'all') {
+      list = list.filter(skill => skill.source !== 'community' || skill.category === discoverCategory);
+    }
     if (discoverSearch) {
       const q = discoverSearch.toLowerCase();
       list = list.filter(s =>
@@ -164,7 +228,85 @@ export function SkillsView({ gateway }: Props) {
       );
     }
     return list;
-  }, [registry, discoverCategory, discoverSearch]);
+  }, [discoverCategory, discoverSearch, discoverSource, registry]);
+
+  const communityRegistry = useMemo(
+    () => filteredRegistry.filter(skill => skill.source === 'community'),
+    [filteredRegistry],
+  );
+
+  const officialRegistry = useMemo(
+    () => filteredRegistry.filter(skill => skill.source === 'official'),
+    [filteredRegistry],
+  );
+
+  const closeSetup = useCallback(() => {
+    setSetupOpen(false);
+    setSetupLoading(false);
+    setSetupSaving(false);
+    setSetupError(null);
+    setSetupSkillName('');
+    setSetupEnvNames([]);
+    setSetupEnvValues({});
+    setSetupConfigured({});
+    setSetupStorageBackend('file');
+  }, []);
+
+  const openSkillSetup = useCallback(async (skillName: string) => {
+    setSetupSkillName(skillName);
+    setSetupOpen(true);
+    setSetupLoading(true);
+    setSetupError(null);
+    try {
+      const result = await gateway.rpc('skills.env.status', { name: skillName }) as SkillEnvStatus;
+      if (!result.env.length) {
+        closeSetup();
+        return;
+      }
+      setSetupEnvNames(result.env);
+      setSetupConfigured(result.values || {});
+      setSetupEnvValues(Object.fromEntries(result.env.map(name => [name, ''])));
+      setSetupStorageBackend(result.storageBackend || 'file');
+    } catch (err) {
+      setSetupError(err instanceof Error ? err.message : 'failed to load skill requirements');
+    } finally {
+      setSetupLoading(false);
+    }
+  }, [closeSetup, gateway.rpc]);
+
+  const saveSkillSetup = useCallback(async () => {
+    if (!setupSkillName) return;
+    const missing = setupEnvNames.filter(name => !setupConfigured[name] && !setupEnvValues[name]?.trim());
+    if (missing.length) return;
+
+    const values = Object.fromEntries(
+      Object.entries(setupEnvValues)
+        .filter(([, value]) => value.trim())
+        .map(([key, value]) => [key, value.trim()]),
+    );
+
+    if (!Object.keys(values).length) {
+      closeSetup();
+      return;
+    }
+
+    setSetupSaving(true);
+    setSetupError(null);
+    try {
+      const result = await gateway.rpc('skills.env.set', {
+        name: setupSkillName,
+        values,
+      }) as SkillEnvStatus;
+      setSetupConfigured(result.values || {});
+      setSetupStorageBackend(result.storageBackend || 'file');
+      await loadSkills();
+      closeSetup();
+    } catch (err) {
+      setSetupError(err instanceof Error ? err.message : 'failed to save skill requirements');
+    } finally {
+      setSetupSaving(false);
+    }
+  }, [closeSetup, gateway.rpc, loadSkills, setupConfigured, setupEnvNames, setupEnvValues, setupSkillName]);
 
   const openCreate = () => {
     setForm(emptyForm);
@@ -248,7 +390,7 @@ export function SkillsView({ gateway }: Props) {
       setForm(emptyForm);
       setEditingName(null);
       setSelectedSkill(null);
-      setTimeout(loadSkills, 100);
+      await loadSkills();
     } catch (err) {
       console.error('failed to save skill:', err);
     } finally {
@@ -263,27 +405,40 @@ export function SkillsView({ gateway }: Props) {
         setSelectedSkill(null);
         setMode('list');
       }
-      setTimeout(loadSkills, 100);
+      await loadSkills();
     } catch (err) {
       console.error('failed to delete skill:', err);
     }
   };
 
-  const installSkill = async (regSkill: RegistrySkill) => {
+  const setSkillEnabled = useCallback(async (name: string, enabled: boolean) => {
+    try {
+      await gateway.rpc('skills.setEnabled', { name, enabled });
+      await loadSkills();
+    } catch (err) {
+      console.error('failed to update skill state:', err);
+    }
+  }, [gateway.rpc, loadSkills]);
+
+  const installSkill = useCallback(async (regSkill: RegistrySkill) => {
     setInstalling(regSkill.name);
     try {
-      await gateway.rpc('skills.install', {
+      const result = await gateway.rpc('skills.install', {
         repo: regSkill.repo,
         skillPath: regSkill.skillPath,
         name: regSkill.name,
-      });
-      setTimeout(loadSkills, 200);
+        source: regSkill.source,
+      }) as { name: string; skill?: { metadata?: { requires?: { env?: string[] } } } };
+      await loadSkills();
+      if (result.skill?.metadata?.requires?.env?.length) {
+        await openSkillSetup(result.name);
+      }
     } catch (err) {
       console.error('failed to install skill:', err);
     } finally {
       setInstalling(null);
     }
-  };
+  }, [gateway.rpc, loadSkills, openSkillSetup]);
 
   const canSave = form.name && form.description && form.content;
 
@@ -300,14 +455,32 @@ export function SkillsView({ gateway }: Props) {
 
   if (mode === 'detail' && selectedSkill) {
     return (
-      <InstalledDetailView
-        skill={selectedSkill}
-        detailContent={detailContent}
-        gateway={gateway}
-        onBack={() => { setMode('list'); setSelectedSkill(null); }}
-        onEdit={() => openEdit(selectedSkill)}
-        onDelete={deleteSkill}
-      />
+      <>
+        <InstalledDetailView
+          skill={selectedSkill}
+          detailContent={detailContent}
+          gateway={gateway}
+          onBack={() => { setMode('list'); setSelectedSkill(null); }}
+          onEdit={() => openEdit(selectedSkill)}
+          onDelete={deleteSkill}
+          onSetup={() => openSkillSetup(selectedSkill.name)}
+          onToggleEnabled={enabled => setSkillEnabled(selectedSkill.name, enabled)}
+        />
+        <SkillSetupSheet
+          open={setupOpen}
+          loading={setupLoading}
+          saving={setupSaving}
+          error={setupError}
+          skillName={setupSkillName}
+          envNames={setupEnvNames}
+          values={setupEnvValues}
+          configured={setupConfigured}
+          storageBackend={setupStorageBackend}
+          onOpenChange={open => { if (!open) closeSetup(); }}
+          onChangeValue={(name, value) => setSetupEnvValues(prev => ({ ...prev, [name]: value }))}
+          onSave={saveSkillSetup}
+        />
+      </>
     );
   }
 
@@ -316,13 +489,29 @@ export function SkillsView({ gateway }: Props) {
   if (mode === 'registry-detail' && selectedRegistrySkill) {
     const isInstalled = installedNames.has(selectedRegistrySkill.name);
     return (
-      <RegistryDetailView
-        skill={selectedRegistrySkill}
-        installed={isInstalled}
-        installing={installing === selectedRegistrySkill.name}
-        onBack={() => { setMode('list'); setSelectedRegistrySkill(null); }}
-        onInstall={() => installSkill(selectedRegistrySkill)}
-      />
+      <>
+        <RegistryDetailView
+          skill={selectedRegistrySkill}
+          installed={isInstalled}
+          installing={installing === selectedRegistrySkill.name}
+          onBack={() => { setMode('list'); setSelectedRegistrySkill(null); }}
+          onInstall={() => installSkill(selectedRegistrySkill)}
+        />
+        <SkillSetupSheet
+          open={setupOpen}
+          loading={setupLoading}
+          saving={setupSaving}
+          error={setupError}
+          skillName={setupSkillName}
+          envNames={setupEnvNames}
+          values={setupEnvValues}
+          configured={setupConfigured}
+          storageBackend={setupStorageBackend}
+          onOpenChange={open => { if (!open) closeSetup(); }}
+          onChangeValue={(name, value) => setSetupEnvValues(prev => ({ ...prev, [name]: value }))}
+          onSave={saveSkillSetup}
+        />
+      </>
     );
   }
 
@@ -451,8 +640,9 @@ export function SkillsView({ gateway }: Props) {
   // ── main tabbed view ───────────────────────────────────────────
 
   return (
-    <div className="flex flex-col h-full min-h-0">
-      <Tabs value={activeTab} onValueChange={v => setActiveTab(v as 'installed' | 'discover')} className="flex flex-col h-full min-h-0">
+    <>
+      <div className="flex flex-col h-full min-h-0">
+        <Tabs value={activeTab} onValueChange={v => setActiveTab(v as 'installed' | 'discover')} className="flex flex-col h-full min-h-0">
         <div className="px-4 pt-3 pb-0 shrink-0">
           <TabsList className="w-full h-9">
             <TabsTrigger value="installed" className="gap-1.5 text-xs">
@@ -542,6 +732,7 @@ export function SkillsView({ gateway }: Props) {
                     onClickSkill={openDetail}
                     onEditSkill={openEditFromList}
                     onDeleteSkill={deleteSkill}
+                    onToggleEnabled={setSkillEnabled}
                   />
                 )}
                 {filter !== 'custom' && filtered.filter(s => s.builtIn).length > 0 && (
@@ -552,6 +743,7 @@ export function SkillsView({ gateway }: Props) {
                     onClickSkill={openDetail}
                     onEditSkill={openEditFromList}
                     onDeleteSkill={deleteSkill}
+                    onToggleEnabled={setSkillEnabled}
                   />
                 )}
               </div>
@@ -567,25 +759,53 @@ export function SkillsView({ gateway }: Props) {
               <Input
                 value={discoverSearch}
                 onChange={e => setDiscoverSearch(e.target.value)}
-                placeholder="search community skills..."
+                placeholder="search dorabot and official skills..."
                 className="h-8 text-xs pl-8 pr-2"
               />
             </div>
-            <div className="flex items-center gap-1 flex-wrap">
-              {categories.map(cat => (
+            <div className="flex items-center gap-1 rounded-lg border border-border bg-secondary/30 p-1 w-fit">
+              {([
+                ['all', discoverCounts.all],
+                ['community', discoverCounts.community],
+                ['official', discoverCounts.official],
+              ] as const).map(([source, count]) => (
                 <button
-                  key={cat}
-                  onClick={() => setDiscoverCategory(cat)}
+                  key={source}
+                  onClick={() => {
+                    setDiscoverSource(source);
+                    if (source === 'official') setDiscoverCategory('all');
+                  }}
                   className={cn(
-                    'px-2 py-1 rounded-md text-[11px] transition-colors border',
-                    discoverCategory === cat
-                      ? 'bg-primary text-primary-foreground border-primary font-medium'
-                      : 'bg-secondary/50 text-muted-foreground border-transparent hover:text-foreground hover:bg-secondary'
+                    'px-2.5 py-1 rounded-md text-[11px] transition-colors',
+                    discoverSource === source
+                      ? 'bg-background text-foreground shadow-sm font-medium'
+                      : 'text-muted-foreground hover:text-foreground'
                   )}
                 >
-                  {cat}
+                  {source} <span className="text-[10px] opacity-60">{count}</span>
                 </button>
               ))}
+            </div>
+            {discoverSource !== 'official' && categories.length > 1 && (
+              <div className="flex items-center gap-1 flex-wrap">
+                {categories.map(cat => (
+                  <button
+                    key={cat}
+                    onClick={() => setDiscoverCategory(cat)}
+                    className={cn(
+                      'px-2 py-1 rounded-md text-[11px] transition-colors border',
+                      discoverCategory === cat
+                        ? 'bg-primary text-primary-foreground border-primary font-medium'
+                        : 'bg-secondary/50 text-muted-foreground border-transparent hover:text-foreground hover:bg-secondary'
+                    )}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="rounded-lg border border-border bg-secondary/20 px-3 py-2 text-[11px] text-muted-foreground">
+              dorabot owns install state, enable/disable, and secrets. community registry stays here; official curated skills from <span className="font-mono text-foreground">openai/skills</span> are an extra catalog and still install into <span className="font-mono text-foreground">~/.dorabot/skills</span>.
             </div>
           </div>
 
@@ -603,35 +823,68 @@ export function SkillsView({ gateway }: Props) {
                 )}
               </div>
             ) : (
-              <div className="p-4 grid grid-cols-1 @md:grid-cols-2 gap-3">
-                {filteredRegistry.map(skill => (
-                  <RegistryCard
-                    key={skill.name}
-                    skill={skill}
-                    installed={installedNames.has(skill.name)}
-                    installing={installing === skill.name}
-                    onClick={() => openRegistryDetail(skill)}
-                    onInstall={() => installSkill(skill)}
-                  />
+              <div className="p-4 space-y-4">
+                {(discoverSource === 'all' ? [
+                  { key: 'community', label: 'community', skills: communityRegistry },
+                  { key: 'official', label: 'official curated', skills: officialRegistry },
+                ] : [
+                  { key: discoverSource, label: discoverSource === 'official' ? 'official curated' : 'community', skills: filteredRegistry },
+                ]).map(section => section.skills.length > 0 && (
+                  <div key={section.key} className="space-y-2">
+                    {discoverSource === 'all' && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">{section.label}</span>
+                        <span className="text-[10px] text-muted-foreground">{section.skills.length}</span>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 @md:grid-cols-2 gap-3">
+                      {section.skills.map(skill => (
+                        <RegistryCard
+                          key={`${skill.source}:${skill.name}`}
+                          skill={skill}
+                          installed={installedNames.has(skill.name)}
+                          installing={installing === skill.name}
+                          onClick={() => openRegistryDetail(skill)}
+                          onInstall={() => installSkill(skill)}
+                        />
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
             )}
           </ScrollArea>
         </TabsContent>
-      </Tabs>
-    </div>
+        </Tabs>
+      </div>
+      <SkillSetupSheet
+        open={setupOpen}
+        loading={setupLoading}
+        saving={setupSaving}
+        error={setupError}
+        skillName={setupSkillName}
+        envNames={setupEnvNames}
+        values={setupEnvValues}
+        configured={setupConfigured}
+        storageBackend={setupStorageBackend}
+        onOpenChange={open => { if (!open) closeSetup(); }}
+        onChangeValue={(name, value) => setSetupEnvValues(prev => ({ ...prev, [name]: value }))}
+        onSave={saveSkillSetup}
+      />
+    </>
   );
 }
 
 // ── installed skill card ─────────────────────────────────────────
 
-function InstalledSection({ label, count, skills, onClickSkill, onEditSkill, onDeleteSkill }: {
+function InstalledSection({ label, count, skills, onClickSkill, onEditSkill, onDeleteSkill, onToggleEnabled }: {
   label: string;
   count: number;
   skills: SkillInfo[];
   onClickSkill: (s: SkillInfo) => void;
   onEditSkill: (s: SkillInfo) => void;
   onDeleteSkill: (name: string) => void;
+  onToggleEnabled: (name: string, enabled: boolean) => void;
 }) {
   return (
     <div className="space-y-2">
@@ -647,6 +900,7 @@ function InstalledSection({ label, count, skills, onClickSkill, onEditSkill, onD
             onClick={() => onClickSkill(skill)}
             onEdit={() => onEditSkill(skill)}
             onDelete={() => onDeleteSkill(skill.name)}
+            onToggleEnabled={enabled => onToggleEnabled(skill.name, enabled)}
           />
         ))}
       </div>
@@ -654,11 +908,12 @@ function InstalledSection({ label, count, skills, onClickSkill, onEditSkill, onD
   );
 }
 
-function InstalledCard({ skill, onClick, onEdit, onDelete }: {
+function InstalledCard({ skill, onClick, onEdit, onDelete, onToggleEnabled }: {
   skill: SkillInfo;
   onClick: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onToggleEnabled: (enabled: boolean) => void;
 }) {
   const fileCount = skill.files?.length || 0;
 
@@ -680,6 +935,16 @@ function InstalledCard({ skill, onClick, onEdit, onDelete }: {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
               <span className="text-xs font-semibold truncate">{skill.name}</span>
+              {skill.marketplaceSource && (
+                <Badge variant="outline" className="text-[8px] h-3.5 px-1.5">
+                  {skill.marketplaceSource}
+                </Badge>
+              )}
+              {!skill.enabled && (
+                <Badge variant="secondary" className="text-[8px] h-3.5 px-1.5">
+                  disabled
+                </Badge>
+              )}
               <div className={cn(
                 'w-1.5 h-1.5 rounded-full shrink-0',
                 skill.eligibility.eligible ? 'bg-success' : 'bg-destructive/60'
@@ -687,6 +952,9 @@ function InstalledCard({ skill, onClick, onEdit, onDelete }: {
             </div>
             {skill.userInvocable && (
               <span className="text-[10px] text-muted-foreground font-mono">/{skill.name}</span>
+            )}
+            {!skill.userInvocable && (
+              <span className="text-[10px] text-muted-foreground">{formatInstalledSource(skill)}</span>
             )}
           </div>
         </div>
@@ -706,33 +974,46 @@ function InstalledCard({ skill, onClick, onEdit, onDelete }: {
             <span key={e} className="text-[9px] font-mono bg-secondary rounded px-1.5 py-0.5 text-muted-foreground">{e}</span>
           ))}
           <span className="flex-1" />
-          <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-0.5" onClick={e => e.stopPropagation()}>
-            <button
-              onClick={onEdit}
-              className="p-1 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-              title={skill.builtIn ? 'view' : 'edit'}
-            >
-              <Pencil className="w-3 h-3" />
-            </button>
-            {!skill.builtIn && (
-              <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <button className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors" title="delete">
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle className="text-sm">delete "{skill.name}"?</AlertDialogTitle>
-                    <AlertDialogDescription className="text-xs">removes from ~/.dorabot/skills/. cannot be undone.</AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel className="h-7 text-xs">cancel</AlertDialogCancel>
-                    <AlertDialogAction className="h-7 text-xs" onClick={onDelete}>delete</AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-            )}
+          <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-1.5 rounded-md border border-border bg-secondary/40 px-1.5 py-1">
+              <span className="text-[9px] uppercase tracking-wider text-muted-foreground">
+                {skill.enabled ? 'on' : 'off'}
+              </span>
+              <Switch
+                checked={skill.enabled}
+                onCheckedChange={onToggleEnabled}
+                size="sm"
+                aria-label={`toggle ${skill.name}`}
+              />
+            </div>
+            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-0.5">
+              <button
+                onClick={onEdit}
+                className="p-1 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+                title={skill.builtIn ? 'view' : 'edit'}
+              >
+                <Pencil className="w-3 h-3" />
+              </button>
+              {!skill.builtIn && (
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <button className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors" title="delete">
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle className="text-sm">delete "{skill.name}"?</AlertDialogTitle>
+                      <AlertDialogDescription className="text-xs">removes from ~/.dorabot/skills/. cannot be undone.</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel className="h-7 text-xs">cancel</AlertDialogCancel>
+                      <AlertDialogAction className="h-7 text-xs" onClick={onDelete}>delete</AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              )}
+            </div>
           </div>
         </div>
       </CardContent>
@@ -749,6 +1030,8 @@ function RegistryCard({ skill, installed, installing, onClick, onInstall }: {
   onClick: () => void;
   onInstall: () => void;
 }) {
+  const isOfficial = skill.source === 'official';
+
   return (
     <Card
       className="group cursor-pointer transition-all hover:border-primary/30 hover:shadow-sm py-3"
@@ -756,34 +1039,60 @@ function RegistryCard({ skill, installed, installing, onClick, onInstall }: {
     >
       <CardContent className="space-y-2.5">
         <div className="flex items-start gap-2.5">
-          <img
-            src={skill.avatar?.startsWith('https://') ? skill.avatar : ''}
-            alt=""
-            className="w-8 h-8 rounded-md shrink-0 bg-muted"
-            loading="lazy"
-          />
+          {isOfficial ? (
+            <div className="w-8 h-8 rounded-md shrink-0 bg-primary/10 text-primary flex items-center justify-center">
+              <Sparkles className="w-4 h-4" />
+            </div>
+          ) : (
+            <img
+              src={skill.avatar?.startsWith('https://') ? skill.avatar : ''}
+              alt=""
+              className="w-8 h-8 rounded-md shrink-0 bg-muted"
+              loading="lazy"
+            />
+          )}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
               <span className="text-xs font-semibold truncate">{skill.name}</span>
+              <Badge variant="outline" className="text-[8px] h-3.5 px-1.5">
+                {isOfficial ? 'official' : 'community'}
+              </Badge>
               {installed && (
                 <Badge variant="secondary" className="text-[8px] h-3.5 px-1">installed</Badge>
               )}
             </div>
-            <span className="text-[10px] text-muted-foreground font-mono">{skill.repo}</span>
+            <span className="text-[10px] text-muted-foreground font-mono">
+              {isOfficial ? skill.skillPath : skill.repo}
+            </span>
           </div>
         </div>
 
         <p className="text-[11px] text-muted-foreground leading-relaxed line-clamp-2">{skill.description}</p>
 
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
-              <Star className="w-3 h-3" />{formatCount(skill.stars)}
-            </span>
-            <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
-              <Download className="w-3 h-3" />{formatCount(skill.installs)}
-            </span>
-            <Badge variant="outline" className="text-[8px] h-3.5 px-1.5 font-normal">{skill.category}</Badge>
+          <div className="flex items-center gap-1 flex-wrap">
+            {isOfficial ? (
+              <>
+                {skill.metadata?.requires?.bins?.map(bin => (
+                  <Badge key={bin} variant="outline" className="text-[8px] h-3.5 px-1.5 font-normal">{bin}</Badge>
+                ))}
+                {skill.metadata?.requires?.env?.map(env => (
+                  <Badge key={env} variant="outline" className="text-[8px] h-3.5 px-1.5 font-normal">{env}</Badge>
+                ))}
+              </>
+            ) : (
+              <>
+                <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                  <Star className="w-3 h-3" />{formatCount(skill.stars || 0)}
+                </span>
+                <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                  <Download className="w-3 h-3" />{formatCount(skill.installs || 0)}
+                </span>
+                {skill.category && (
+                  <Badge variant="outline" className="text-[8px] h-3.5 px-1.5 font-normal">{skill.category}</Badge>
+                )}
+              </>
+            )}
           </div>
           <div onClick={e => e.stopPropagation()}>
             {installed ? (
@@ -814,16 +1123,19 @@ function RegistryCard({ skill, installed, installing, onClick, onInstall }: {
 
 // ── installed detail view ────────────────────────────────────────
 
-function InstalledDetailView({ skill, detailContent, gateway, onBack, onEdit, onDelete }: {
+function InstalledDetailView({ skill, detailContent, gateway, onBack, onEdit, onDelete, onSetup, onToggleEnabled }: {
   skill: SkillInfo;
   detailContent: string;
   gateway: ReturnType<typeof useGateway>;
   onBack: () => void;
   onEdit: () => void;
   onDelete: (name: string) => void;
+  onSetup: () => void;
+  onToggleEnabled: (enabled: boolean) => void;
 }) {
   const hasReqs = skill.metadata.requires?.bins?.length || skill.metadata.requires?.env?.length;
   const hasFiles = skill.files && skill.files.length > 0;
+  const hasEnvReqs = Boolean(skill.metadata.requires?.env?.length);
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -832,6 +1144,22 @@ function InstalledDetailView({ skill, detailContent, gateway, onBack, onEdit, on
           <ArrowLeft className="w-3.5 h-3.5 mr-1" />skills
         </Button>
         <div className="ml-auto flex items-center gap-1.5">
+          <div className="flex items-center gap-2 rounded-md border border-border bg-secondary/30 px-2 py-1">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              {skill.enabled ? 'enabled' : 'disabled'}
+            </span>
+            <Switch
+              checked={skill.enabled}
+              onCheckedChange={onToggleEnabled}
+              size="sm"
+              aria-label={`toggle ${skill.name}`}
+            />
+          </div>
+          {hasEnvReqs && (
+            <Button variant="outline" size="sm" className="h-7 text-xs px-3" onClick={onSetup}>
+              <KeyRound className="w-3 h-3 mr-1.5" />set up
+            </Button>
+          )}
           {!skill.builtIn && (
             <>
               <Button variant="outline" size="sm" className="h-7 text-xs px-3" onClick={onEdit}>
@@ -880,6 +1208,9 @@ function InstalledDetailView({ skill, detailContent, gateway, onBack, onEdit, on
                 {skill.userInvocable && (
                   <span className="text-[11px] text-muted-foreground font-mono">/{skill.name}</span>
                 )}
+                {!skill.userInvocable && (
+                  <span className="text-[11px] text-muted-foreground">{formatInstalledSource(skill)}</span>
+                )}
               </div>
             </div>
             <p className="text-xs text-muted-foreground leading-relaxed mt-2">{skill.description}</p>
@@ -896,7 +1227,7 @@ function InstalledDetailView({ skill, detailContent, gateway, onBack, onEdit, on
             <MetaItem
               icon={skill.builtIn ? Package : User}
               label="source"
-              value={skill.builtIn ? 'built-in' : 'custom'}
+              value={formatInstalledSource(skill)}
             />
             <MetaItem
               icon={Slash}
@@ -908,6 +1239,11 @@ function InstalledDetailView({ skill, detailContent, gateway, onBack, onEdit, on
               label="files"
               value={`${(skill.files?.length || 0) + 1}`}
               mono
+            />
+            <MetaItem
+              icon={Package}
+              label="state"
+              value={skill.enabled ? 'enabled' : 'disabled'}
             />
           </div>
 
@@ -924,7 +1260,14 @@ function InstalledDetailView({ skill, detailContent, gateway, onBack, onEdit, on
           {/* requirements */}
           {hasReqs && (
             <div className="space-y-2">
-              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">requirements</span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">requirements</span>
+                {hasEnvReqs && (
+                  <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={onSetup}>
+                    manage keys
+                  </Button>
+                )}
+              </div>
               <div className="flex flex-wrap gap-1.5">
                 {skill.metadata.requires?.bins?.map(b => (
                   <span key={b} className="inline-flex items-center gap-1 text-[11px] font-mono bg-secondary rounded-md px-2 py-1 border border-border">
@@ -969,6 +1312,8 @@ function RegistryDetailView({ skill, installed, installing, onBack, onInstall }:
   onBack: () => void;
   onInstall: () => void;
 }) {
+  const isOfficial = skill.source === 'official';
+
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0">
@@ -981,47 +1326,83 @@ function RegistryDetailView({ skill, installed, installing, onBack, onInstall }:
         <div className="p-5 max-w-2xl space-y-5">
           {/* header */}
           <div className="flex items-start gap-3">
-            <img
-              src={skill.avatar?.startsWith('https://') ? skill.avatar : ''}
-              alt=""
-              className="w-12 h-12 rounded-lg shrink-0 bg-muted"
-              loading="lazy"
-            />
+            {isOfficial ? (
+              <div className="w-12 h-12 rounded-lg shrink-0 bg-primary/10 text-primary flex items-center justify-center">
+                <Sparkles className="w-5 h-5" />
+              </div>
+            ) : (
+              <img
+                src={skill.avatar?.startsWith('https://') ? skill.avatar : ''}
+                alt=""
+                className="w-12 h-12 rounded-lg shrink-0 bg-muted"
+                loading="lazy"
+              />
+            )}
             <div className="flex-1 min-w-0">
-              <h2 className="text-base font-semibold leading-tight">{skill.name}</h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-semibold leading-tight">{skill.name}</h2>
+                <Badge variant="outline" className="text-[9px] h-4 px-1.5">
+                  {isOfficial ? 'official curated' : 'community'}
+                </Badge>
+              </div>
               <a
-                href={`https://github.com/${skill.repo}`}
+                href={skill.htmlUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-[11px] text-muted-foreground font-mono hover:text-foreground inline-flex items-center gap-0.5 mt-0.5"
                 onClick={e => e.stopPropagation()}
               >
-                {skill.repo}
+                {isOfficial ? skill.skillPath : skill.repo}
                 <ExternalLink className="w-2.5 h-2.5" />
               </a>
               <p className="text-xs text-muted-foreground leading-relaxed mt-2">{skill.description}</p>
             </div>
           </div>
 
-          {/* stats */}
-          <div className="grid grid-cols-3 gap-3">
-            <div className="bg-secondary/30 rounded-lg px-3 py-2 border border-border text-center">
-              <div className="text-[10px] text-muted-foreground">stars</div>
-              <div className="text-sm font-semibold flex items-center justify-center gap-1">
-                <Star className="w-3.5 h-3.5 text-yellow-500" />{formatCount(skill.stars)}
+          {!isOfficial && (
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-secondary/30 rounded-lg px-3 py-2 border border-border text-center">
+                <div className="text-[10px] text-muted-foreground">stars</div>
+                <div className="text-sm font-semibold flex items-center justify-center gap-1">
+                  <Star className="w-3.5 h-3.5 text-yellow-500" />{formatCount(skill.stars || 0)}
+                </div>
+              </div>
+              <div className="bg-secondary/30 rounded-lg px-3 py-2 border border-border text-center">
+                <div className="text-[10px] text-muted-foreground">installs</div>
+                <div className="text-sm font-semibold flex items-center justify-center gap-1">
+                  <Download className="w-3.5 h-3.5 text-primary" />{formatCount(skill.installs || 0)}
+                </div>
+              </div>
+              <div className="bg-secondary/30 rounded-lg px-3 py-2 border border-border text-center">
+                <div className="text-[10px] text-muted-foreground">category</div>
+                <div className="text-sm font-semibold">{skill.category || 'general'}</div>
               </div>
             </div>
-            <div className="bg-secondary/30 rounded-lg px-3 py-2 border border-border text-center">
-              <div className="text-[10px] text-muted-foreground">installs</div>
-              <div className="text-sm font-semibold flex items-center justify-center gap-1">
-                <Download className="w-3.5 h-3.5 text-primary" />{formatCount(skill.installs)}
-              </div>
-            </div>
-            <div className="bg-secondary/30 rounded-lg px-3 py-2 border border-border text-center">
-              <div className="text-[10px] text-muted-foreground">category</div>
-              <div className="text-sm font-semibold">{skill.category}</div>
-            </div>
+          )}
+
+          <div className="rounded-lg border border-border bg-secondary/30 px-3 py-3 space-y-1.5">
+            <div className="text-[10px] text-muted-foreground uppercase tracking-wider">source</div>
+            <div className="text-[11px] font-mono">{skill.repo}</div>
+            <div className="text-[11px] font-mono text-muted-foreground">{skill.skillPath}</div>
           </div>
+
+          {!!(skill.metadata?.requires?.bins?.length || skill.metadata?.requires?.env?.length) && (
+            <div className="space-y-2">
+              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">requirements</span>
+              <div className="flex flex-wrap gap-1.5">
+                {skill.metadata?.requires?.bins?.map(bin => (
+                  <span key={bin} className="inline-flex items-center gap-1 text-[11px] font-mono bg-secondary rounded-md px-2 py-1 border border-border">
+                    <Terminal className="w-3 h-3 text-muted-foreground" />{bin}
+                  </span>
+                ))}
+                {skill.metadata?.requires?.env?.map(env => (
+                  <span key={env} className="inline-flex items-center gap-1 text-[11px] font-mono bg-secondary rounded-md px-2 py-1 border border-border">
+                    <KeyRound className="w-3 h-3 text-muted-foreground" />{env}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* install action */}
           <div className="flex gap-2">
@@ -1033,7 +1414,7 @@ function RegistryDetailView({ skill, installed, installing, onBack, onInstall }:
             ) : (
               <Button className="h-9 text-xs px-4" onClick={onInstall} disabled={installing}>
                 {installing ? (
-                  <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />installing from GitHub...</>
+                  <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />installing skill...</>
                 ) : (
                   <><Download className="w-3.5 h-3.5 mr-1.5" />install to ~/.dorabot/skills/</>
                 )}
@@ -1043,23 +1424,118 @@ function RegistryDetailView({ skill, installed, installing, onBack, onInstall }:
 
           <Separator />
 
-          {/* source info */}
-          <div className="space-y-2">
-            <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">source</span>
-            <div className="bg-secondary/50 rounded-lg p-3 border border-border space-y-1.5">
-              <div className="flex items-center gap-2 text-xs">
-                <span className="text-muted-foreground w-16 shrink-0">repo</span>
-                <span className="font-mono text-[11px]">{skill.repo}</span>
-              </div>
-              <div className="flex items-center gap-2 text-xs">
-                <span className="text-muted-foreground w-16 shrink-0">path</span>
-                <span className="font-mono text-[11px]">{skill.skillPath}</span>
-              </div>
-            </div>
+          <div className="rounded-lg border border-border bg-secondary/20 px-3 py-3 text-[11px] text-muted-foreground">
+            {isOfficial
+              ? <>official curated skills use the Codex marketplace helper flow, but dorabot still installs and manages them in <span className="font-mono text-foreground">~/.dorabot/skills</span>.</>
+              : <>community skills install directly into <span className="font-mono text-foreground">~/.dorabot/skills</span> and stay fully managed by dorabot.</>}
           </div>
         </div>
       </ScrollArea>
     </div>
+  );
+}
+
+function SkillSetupSheet({
+  open,
+  loading,
+  saving,
+  error,
+  skillName,
+  envNames,
+  values,
+  configured,
+  storageBackend,
+  onOpenChange,
+  onChangeValue,
+  onSave,
+}: {
+  open: boolean;
+  loading: boolean;
+  saving: boolean;
+  error: string | null;
+  skillName: string;
+  envNames: string[];
+  values: Record<string, string>;
+  configured: Record<string, boolean>;
+  storageBackend: 'keychain' | 'file';
+  onOpenChange: (open: boolean) => void;
+  onChangeValue: (name: string, value: string) => void;
+  onSave: () => void;
+}) {
+  const missing = envNames.filter(name => !configured[name]);
+  const canSave = missing.every(name => values[name]?.trim());
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="w-full sm:max-w-md">
+        <SheetHeader className="space-y-2">
+          <SheetTitle className="text-sm">skill setup</SheetTitle>
+          <SheetDescription className="text-xs leading-relaxed">
+            {skillName
+              ? `${skillName} needs these env vars before dorabot can use it.`
+              : 'configure required env vars for this skill.'}
+          </SheetDescription>
+        </SheetHeader>
+
+        <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-4">
+          {loading ? (
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-secondary/30 px-3 py-3 text-xs text-muted-foreground">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              loading requirements...
+            </div>
+          ) : (
+            <>
+              <div className="rounded-lg border border-border bg-secondary/30 px-3 py-3 text-[11px] text-muted-foreground">
+                stored in {storageBackend === 'keychain' ? 'your system keychain' : '~/.dorabot/.skill-env.json'}
+              </div>
+
+              {envNames.map(name => {
+                const ready = configured[name];
+                return (
+                  <div key={name} className="rounded-xl border border-border bg-secondary/20 p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-[11px] font-semibold font-mono">{name}</div>
+                        <div className="text-[10px] text-muted-foreground">
+                          {ready ? 'already configured. leave blank to keep it.' : 'required to unlock this skill.'}
+                        </div>
+                      </div>
+                      <Badge variant={ready ? 'secondary' : 'outline'} className="h-5 text-[9px] px-2">
+                        {ready ? 'saved' : 'missing'}
+                      </Badge>
+                    </div>
+                    <Input
+                      type="password"
+                      value={values[name] || ''}
+                      onChange={e => onChangeValue(name, e.target.value)}
+                      placeholder={ready ? 'replace secret' : 'paste secret'}
+                      className="h-8 text-[11px] font-mono"
+                      disabled={saving}
+                    />
+                  </div>
+                );
+              })}
+
+              {error && (
+                <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-[11px] text-destructive">
+                  {error}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <SheetFooter className="border-t border-border">
+          <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => onOpenChange(false)} disabled={saving}>
+            close
+          </Button>
+          <Button size="sm" className="h-8 text-xs" onClick={onSave} disabled={loading || saving || !canSave}>
+            {saving ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <KeyRound className="w-3.5 h-3.5 mr-1.5" />}
+            {saving ? 'saving...' : 'save keys'}
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -1253,10 +1729,22 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
 
 // ── utils ────────────────────────────────────────────────────────
 
-function formatCount(n: number): string {
-  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}K`;
-  return String(n);
+function formatInstalledSource(skill: SkillInfo): string {
+  if (skill.marketplaceSource === 'official') return 'official curated';
+  if (skill.marketplaceSource === 'community') return 'community';
+  switch (skill.source) {
+    case 'dorabot': return 'manual';
+    case 'bundled': return 'bundled';
+    case 'claude': return 'claude import';
+    case 'project': return 'project';
+    default: return 'external';
+  }
+}
+
+function formatCount(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}m`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
+  return String(value);
 }
 
 function formatBytes(bytes: number): string {

@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { DORABOT_DB_PATH, DORABOT_DIR } from './workspace.js';
 
 let db: Database.Database | null = null;
+const SESSION_STATS_REPAIR_KEY = 'session_stats_repair_v1';
 
 export function getDb(): Database.Database {
   if (db) return db;
@@ -108,6 +109,11 @@ export function getDb(): Database.Database {
       value TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS db_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+
     -- checkpoint for fast cold-start recovery (skip full event replay)
     CREATE TABLE IF NOT EXISTS session_checkpoints (
       session_key TEXT PRIMARY KEY,
@@ -127,7 +133,63 @@ export function getDb(): Database.Database {
   try { db.exec(`ALTER TABLE sessions ADD COLUMN name TEXT`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE sessions ADD COLUMN model TEXT`); } catch { /* already exists */ }
 
+  runSessionStatsRepair(db);
+
   return db;
+}
+
+function runSessionStatsRepair(database: Database.Database): number {
+  const repaired = database.prepare('SELECT value FROM db_meta WHERE key = ?').get(SESSION_STATS_REPAIR_KEY) as { value: string } | undefined;
+  if (repaired?.value === 'done') return 0;
+
+  const stats = database.prepare(`
+    SELECT
+      session_id,
+      COUNT(*) AS message_count,
+      MAX(timestamp) AS last_timestamp
+    FROM messages
+    GROUP BY session_id
+  `).all() as {
+    session_id: string;
+    message_count: number;
+    last_timestamp: string | null;
+  }[];
+
+  const statsBySession = new Map(stats.map(row => [row.session_id, row]));
+  const sessions = database.prepare('SELECT id, last_message_at FROM sessions').all() as {
+    id: string;
+    last_message_at: number | null;
+  }[];
+
+  const update = database.prepare(`
+    UPDATE sessions
+    SET message_count = ?, last_message_at = ?
+    WHERE id = ?
+  `);
+  const markDone = database.prepare('INSERT OR REPLACE INTO db_meta (key, value) VALUES (?, ?)');
+
+  let changed = 0;
+  const tx = database.transaction(() => {
+    for (const session of sessions) {
+      const stat = statsBySession.get(session.id);
+      const messageCount = stat?.message_count || 0;
+      const lastMessageAt = stat?.last_timestamp ? Date.parse(stat.last_timestamp) : session.last_message_at;
+      const result = update.run(messageCount, Number.isFinite(lastMessageAt) ? lastMessageAt : null, session.id);
+      changed += result.changes;
+    }
+    markDone.run(SESSION_STATS_REPAIR_KEY, 'done');
+  });
+  tx();
+
+  if (changed > 0) {
+    console.log(`[db] repaired session stats for ${changed} sessions`);
+  }
+
+  return changed;
+}
+
+export function repairSessionStats(): number {
+  return runSessionStatsRepair(getDb());
 }
 
 // extract human-readable text from a message content blob (text blocks only, no tool calls)
@@ -191,7 +253,6 @@ export function backfillFtsIndex(): void {
   const d = getDb();
 
   // Check if index needs a full rebuild (version mismatch or empty)
-  d.exec("CREATE TABLE IF NOT EXISTS db_meta (key TEXT PRIMARY KEY, value TEXT)");
   const versionRow = d.prepare("SELECT value FROM db_meta WHERE key = 'fts_version'").get() as { value: string } | undefined;
   const currentVersion = versionRow ? parseInt(versionRow.value, 10) : 0;
   const needsRebuild = currentVersion < FTS_VERSION;

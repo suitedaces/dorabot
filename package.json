@@ -1,6 +1,6 @@
 {
   "name": "dorabot",
-  "version": "0.2.89",
+  "version": "0.2.90",
   "type": "module",
   "description": "Open-source personal AI agent. Persistent memory, multi-channel messaging, browser automation, and proactive goal management.",
   "main": "dist/index.js",
@@ -34,7 +34,7 @@
     "@grammyjs/runner": "2.0.3",
     "@grammyjs/transformer-throttler": "1.2.1",
     "@modelcontextprotocol/sdk": "1.26.0",
-    "@openai/codex-sdk": "0.98.0",
+    "@openai/codex": "0.128.0",
     "@types/luxon": "3.7.1",
     "@whiskeysockets/baileys": "6.7.21",
     "better-sqlite3": "12.6.2",

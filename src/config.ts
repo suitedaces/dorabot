@@ -6,6 +6,7 @@ import {
   GATEWAY_SOCKET_PATH,
   GATEWAY_TOKEN_PATH,
   LEGACY_CODEX_AUTH_PATH,
+  SKILL_ENV_PATH,
   SESSIONS_DIR,
   SKILLS_DIR,
   CLAUDE_SKILLS_DIR,
@@ -129,15 +130,20 @@ export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-ac
 export type CodexApprovalPolicy = 'never' | 'on-request' | 'on-failure' | 'untrusted';
 export type CodexWebSearchMode = 'disabled' | 'cached' | 'live';
 export type CodexMcpOauthCredentialsStore = 'auto' | 'file' | 'keyring';
+export type CodexCliConfigValue = string | number | boolean | CodexCliConfigValue[] | { [key: string]: CodexCliConfigValue };
 
 export type CodexProviderConfig = {
   authMethod?: 'oauth' | 'api_key';
   model?: string;
+  baseUrl?: string;
   sandboxMode?: CodexSandboxMode;
   approvalPolicy?: CodexApprovalPolicy;
   networkAccess?: boolean;
   webSearch?: CodexWebSearchMode;
   mcpOauthCredentialsStore?: CodexMcpOauthCredentialsStore;
+  skipGitRepoCheck?: boolean;
+  additionalDirectories?: string[];
+  config?: Record<string, CodexCliConfigValue>;
 };
 
 export type ProviderConfig = {
@@ -146,12 +152,21 @@ export type ProviderConfig = {
 };
 
 export type McpServerEntry = {
-  type?: 'stdio' | 'sse' | 'http';
+  type?: 'stdio' | 'sse' | 'http' | 'streamable_http';
   url?: string;
   command?: string;
   args?: string[];
   env?: Record<string, string>;
   headers?: Record<string, string>;
+  http_headers?: Record<string, string>;
+  bearer_token_env_var?: string;
+  env_vars?: string[];
+  enabled_tools?: string[];
+  disabled_tools?: string[];
+  enabled?: boolean;
+  startup_timeout_sec?: number;
+  tool_timeout_sec?: number;
+  cwd?: string;
 };
 
 export type Config = {
@@ -288,6 +303,7 @@ export const ALWAYS_DENIED = [
   toHomeAlias(WHATSAPP_AUTH_DIR),
   toHomeAlias(GATEWAY_TOKEN_PATH),
   toHomeAlias(GATEWAY_SOCKET_PATH),
+  toHomeAlias(SKILL_ENV_PATH),
   toHomeAlias(LEGACY_CODEX_AUTH_PATH),
   '~/.config/nanoclaw',
 ];

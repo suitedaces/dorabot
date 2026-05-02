@@ -3,6 +3,9 @@ import { join, basename, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import matter from 'gray-matter';
 import type { Config } from '../config.js';
+import { getPersistedSkillEnv } from './env.js';
+
+const DORABOT_SKILL_META_NAME = '.dorabot-skill.json';
 
 export type SkillMetadata = {
   requires?: {
@@ -48,7 +51,7 @@ function checkBinaryExists(bin: string): boolean {
 }
 
 function checkEnvVar(env: string): boolean {
-  return !!process.env[env];
+  return !!process.env[env] || !!getPersistedSkillEnv(env);
 }
 
 export function checkSkillEligibility(skill: Skill, config: Config): SkillEligibility {
@@ -130,7 +133,7 @@ export function loadSkill(skillPath: string): Skill | null {
 
     // collect all files in the skill directory except SKILL.md itself
     const allFiles = isFile ? [] : collectFiles(skillDir, skillDir)
-      .filter(f => f.relativePath !== 'SKILL.md');
+      .filter(f => f.relativePath !== 'SKILL.md' && f.relativePath !== DORABOT_SKILL_META_NAME);
 
     return {
       name,

@@ -48,6 +48,39 @@ export type SessionMessage = {
   metadata?: MessageMetadata;
 };
 
+function sanitizeToolResultBlock(block: any): any {
+  if (!Array.isArray(block?.content)) return block;
+
+  const sanitizedContent = block.content.filter((item: any) => item?.type !== 'image');
+  if (sanitizedContent.length === block.content.length) return block;
+  return { ...block, content: sanitizedContent };
+}
+
+export function sanitizeStoredSessionContent(content: unknown): unknown {
+  if (!content || typeof content !== 'object') return content;
+
+  const parsed = content as Record<string, any>;
+  const blocks = parsed.message?.content;
+  if (!Array.isArray(blocks)) return content;
+
+  let changed = false;
+  const sanitizedBlocks = blocks.map((block: any) => {
+    if (block?.type !== 'tool_result') return block;
+    const sanitized = sanitizeToolResultBlock(block);
+    if (sanitized !== block) changed = true;
+    return sanitized;
+  });
+
+  if (!changed) return content;
+  return {
+    ...parsed,
+    message: {
+      ...parsed.message,
+      content: sanitizedBlocks,
+    },
+  };
+}
+
 export class SessionManager {
   constructor(_config: Config) {
     // ensure db is initialized
@@ -148,9 +181,10 @@ export class SessionManager {
   append(sessionId: string, message: SessionMessage): void {
     const db = getDb();
     const now = new Date().toISOString();
-    const contentStr = JSON.stringify(message.content);
+    const contentStr = JSON.stringify(sanitizeStoredSessionContent(message.content));
+    const lastMessageAt = resolveMessageTimestampMs(message.timestamp);
 
-    (this._appendTx ??= db.transaction((sid: string, msg: SessionMessage, ts: string, content: string) => {
+    (this._appendTx ??= db.transaction((sid: string, msg: SessionMessage, ts: string, content: string, lastAt: number) => {
       db.prepare(`
         INSERT INTO sessions (id, created_at, updated_at, message_count)
         VALUES (?, ?, ?, 0)
@@ -173,10 +207,11 @@ export class SessionManager {
       indexMessageForSearch(Number(result.lastInsertRowid), content, msg.type);
 
       db.prepare(`
-        UPDATE sessions SET updated_at = ?, last_message_at = ?
+        UPDATE sessions
+        SET message_count = message_count + 1, updated_at = ?, last_message_at = ?
         WHERE id = ?
-      `).run(ts, Date.now(), sid);
-    }))(sessionId, message, now, contentStr);
+      `).run(ts, lastAt, sid);
+    }))(sessionId, message, now, contentStr, lastMessageAt);
   }
 
   private _appendTx: ReturnType<ReturnType<typeof getDb>['transaction']> | null = null;
@@ -184,6 +219,9 @@ export class SessionManager {
   save(sessionId: string, messages: SessionMessage[]): void {
     const db = getDb();
     const now = new Date().toISOString();
+    const lastMessageAt = messages.length > 0
+      ? resolveMessageTimestampMs(messages[messages.length - 1].timestamp)
+      : null;
 
     const run = db.transaction(() => {
       db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
@@ -197,17 +235,17 @@ export class SessionManager {
           sessionId,
           msg.uuid || null,
           msg.type,
-          JSON.stringify(msg.content),
+          JSON.stringify(sanitizeStoredSessionContent(msg.content)),
           msg.metadata ? JSON.stringify(msg.metadata) : null,
           msg.timestamp,
         );
       }
 
       db.prepare(`
-        INSERT INTO sessions (id, created_at, updated_at, message_count)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET message_count = ?, updated_at = ?
-      `).run(sessionId, now, now, messages.length, messages.length, now);
+        INSERT INTO sessions (id, created_at, updated_at, message_count, last_message_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET message_count = ?, updated_at = ?, last_message_at = ?
+      `).run(sessionId, now, now, messages.length, lastMessageAt, messages.length, now, lastMessageAt);
     });
     run();
   }
@@ -310,6 +348,11 @@ function extractFirstUserPreview(content: string | null): string | undefined {
   return undefined;
 }
 
+function resolveMessageTimestampMs(timestamp: string): number {
+  const parsed = Date.parse(timestamp);
+  return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
 // helper to convert SDK messages to our session format
 export function sdkMessageToSession(msg: unknown): SessionMessage | null {
   const m = msg as Record<string, unknown>;
@@ -324,6 +367,6 @@ export function sdkMessageToSession(msg: unknown): SessionMessage | null {
     type: type as SessionMessage['type'],
     uuid: m.uuid as string | undefined,
     timestamp: new Date().toISOString(),
-    content: m,
+    content: sanitizeStoredSessionContent(m),
   };
 }

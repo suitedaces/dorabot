@@ -102,6 +102,10 @@ function applyStreamEvent(items: ChatItem[], evt: Record<string, unknown>): Chat
 
 export type ImageAttachment = { data: string; mediaType: string };
 
+export type ProviderInputItem =
+  | { type: 'skill'; name: string; path: string }
+  | { type: 'mention'; name: string; path: string };
+
 export type ChatItem =
   | { type: 'user'; content: string; images?: ImageAttachment[]; timestamp: number }
   | { type: 'text'; content: string; streaming?: boolean; timestamp: number }
@@ -230,6 +234,8 @@ type ProviderAuthInfo = {
   authenticated: boolean;
   method?: string;
   identity?: string;
+  accountEmail?: string;
+  planType?: string;
   error?: string;
   model?: string;
   cliVersion?: string;
@@ -238,6 +244,43 @@ type ProviderAuthInfo = {
   tokenHealth?: 'valid' | 'expiring' | 'expired';
   nextRefreshAt?: number;
   reconnectRequired?: boolean;
+};
+
+export type CodexCatalogModel = {
+  id: string;
+  model?: string;
+  displayName?: string;
+  description?: string;
+  hidden?: boolean;
+  supportedReasoningEfforts?: Array<{ reasoningEffort: string; description?: string | null }>;
+  defaultReasoningEffort?: string | null;
+  inputModalities?: string[];
+  supportsPersonality?: boolean;
+  isDefault?: boolean;
+  upgrade?: string | null;
+  upgradeInfo?: unknown;
+  availabilityNux?: unknown;
+  additionalSpeedTiers?: unknown[];
+};
+
+export type CodexModelCatalog = {
+  account: { type?: string; email?: string; planType?: string } | null;
+  requiresOpenaiAuth: boolean;
+  models: CodexCatalogModel[];
+  source: 'app-server';
+};
+
+export type CodexAppServerSnapshot = CodexModelCatalog & {
+  config: unknown;
+  configLayers: unknown[] | null;
+  configOrigins: Record<string, unknown>;
+  experimentalFeatures: unknown[];
+  skills: unknown[];
+  plugins: unknown;
+  apps: unknown[];
+  mcpServers: unknown[];
+  rateLimits: unknown | null;
+  configRequirements: unknown | null;
 };
 
 export type TaskProgress = {
@@ -1744,7 +1787,7 @@ export function useGateway() {
     };
   }, []);
 
-  const sendMessage = useCallback(async (prompt: string, sessionKey?: string, chatId?: string, images?: ImageAttachment[]) => {
+  const sendMessage = useCallback(async (prompt: string, sessionKey?: string, chatId?: string, images?: ImageAttachment[], inputItems?: ProviderInputItem[]) => {
     const sk = sessionKey || activeSessionKeyRef.current;
     const cid = chatId || sk.split(':').slice(2).join(':') || currentChatIdRef.current;
     activeSessionKeyRef.current = sk;
@@ -1767,7 +1810,13 @@ export function useGateway() {
       };
     });
     try {
-      const res = await rpc('chat.send', { prompt, images: images?.length ? images : undefined, chatId: cid, sessionKey: sk }) as { sessionKey?: string } | undefined;
+      const res = await rpc('chat.send', {
+        prompt,
+        images: images?.length ? images : undefined,
+        inputItems: inputItems?.length ? inputItems : undefined,
+        chatId: cid,
+        sessionKey: sk,
+      }) as { sessionKey?: string } | undefined;
       if (res?.sessionKey && res.sessionKey !== sk) {
         // sessionKey changed (e.g. server normalized it) — migrate state
         activeSessionKeyRef.current = res.sessionKey;
@@ -2103,6 +2152,18 @@ export function useGateway() {
     return await rpc('provider.auth.status', { provider }) as ProviderAuthInfo;
   }, [rpc]);
 
+  const getCodexModels = useCallback(async () => {
+    return await rpc('provider.codex.models') as CodexModelCatalog;
+  }, [rpc]);
+
+  const getCodexAppServerSnapshot = useCallback(async (cwd?: string) => {
+    return await rpc('provider.codex.appServerSnapshot', cwd ? { cwd } : {}) as CodexAppServerSnapshot;
+  }, [rpc]);
+
+  const codexAppServerRpc = useCallback(async (method: string, params?: Record<string, unknown>) => {
+    return await rpc('provider.codex.rpc', { method, params });
+  }, [rpc]);
+
   const detectProviders = useCallback(async () => {
     return await rpc('provider.detect') as {
       claude: { installed: boolean; hasOAuth: boolean; hasApiKey: boolean };
@@ -2290,6 +2351,9 @@ export function useGateway() {
     completeOAuth,
     checkProvider,
     getProviderAuth,
+    getCodexModels,
+    getCodexAppServerSnapshot,
+    codexAppServerRpc,
     detectProviders,
   };
 }

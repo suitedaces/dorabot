@@ -47,20 +47,33 @@ echo "  Electron version: $ELECTRON_VER"
 cd "$GATEWAY_BUNDLE"
 npx --yes @electron/rebuild -v "$ELECTRON_VER" -m . -w better-sqlite3 2>&1 | tail -5
 
-# 5. Strip non-macOS vendor binaries from Codex SDK (~330MB savings)
-echo "  Stripping non-macOS binaries from @openai/codex-sdk..."
-CODEX_VENDOR="$GATEWAY_BUNDLE/node_modules/@openai/codex-sdk/vendor"
-if [ -d "$CODEX_VENDOR" ]; then
-  # Detect current arch
-  ARCH=$(uname -m)
-  if [ "$ARCH" = "arm64" ]; then
-    KEEP_DIR="aarch64-apple-darwin"
-  else
-    KEEP_DIR="x86_64-apple-darwin"
+# 5. Strip non-macOS Codex CLI packages
+echo "  Stripping non-macOS binaries from @openai/codex..."
+ARCH=$(uname -m)
+if [ "$ARCH" = "arm64" ]; then
+  KEEP_PLATFORM="@openai/codex-darwin-arm64"
+  KEEP_TRIPLE="aarch64-apple-darwin"
+else
+  KEEP_PLATFORM="@openai/codex-darwin-x64"
+  KEEP_TRIPLE="x86_64-apple-darwin"
+fi
+
+for dir in "$GATEWAY_BUNDLE"/node_modules/@openai/codex-*; do
+  if [ ! -d "$dir" ]; then
+    continue
   fi
+  scoped_name="@openai/$(basename "$dir")"
+  if [ "$scoped_name" != "$KEEP_PLATFORM" ]; then
+    echo "    Removing $scoped_name"
+    rm -rf "$dir"
+  fi
+done
+
+CODEX_VENDOR="$GATEWAY_BUNDLE/node_modules/@openai/codex/vendor"
+if [ -d "$CODEX_VENDOR" ]; then
   for dir in "$CODEX_VENDOR"/*/; do
     dirname=$(basename "$dir")
-    if [ "$dirname" != "$KEEP_DIR" ]; then
+    if [ "$dirname" != "$KEEP_TRIPLE" ]; then
       echo "    Removing vendor/$dirname"
       rm -rf "$dir"
     fi

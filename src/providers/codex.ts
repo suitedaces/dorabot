@@ -1,18 +1,17 @@
-import { Codex } from '@openai/codex-sdk';
-import type { Input, ModelReasoningEffort } from '@openai/codex-sdk';
 import { createServer, type Server } from 'node:http';
-import { execFile, execSync } from 'node:child_process';
+import { execFile, execSync, spawn } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync, unlinkSync } from 'node:fs';
 import { randomBytes, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import type { Provider, ProviderRunOptions, ProviderMessage, ProviderAuthStatus, ProviderQueryResult } from './types.js';
-import type { ReasoningEffort, CodexMcpOauthCredentialsStore } from '../config.js';
+import type { Provider, ProviderRunOptions, ProviderMessage, ProviderAuthStatus, ProviderQueryResult, ProviderInputItem } from './types.js';
+import type { ReasoningEffort, CodexCliConfigValue, CodexMcpOauthCredentialsStore } from '../config.js';
 import { DORABOT_DIR, CODEX_OAUTH_PATH, OPENAI_KEY_PATH, TMP_DIR } from '../workspace.js';
 import { getSecretStorageBackend, keychainDelete, keychainLoad, keychainStore, type SecretStorageBackend } from '../auth/keychain.js';
 import { guardImages } from './image-guard.js';
 import { isLoggedInCodexStatusText, summarizeCodexCliAuthRecord } from './codex-auth-state.js';
+import { mergeSkillEnv } from '../skills/env.js';
 
 // ── OAuth constants (same client as Codex CLI) ──────────────────────
 const OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
@@ -49,30 +48,66 @@ function ensureDorabotDir(): void {
  * Find the codex binary — prefer the SDK's bundled binary, fall back to global.
  */
 function findCodexBinary(): string {
-  // 1. Explicit override
   if (process.env.CODEX_BINARY) return process.env.CODEX_BINARY;
 
-  // 2. SDK bundled binary
-  try {
-    const sdkDir = dirname(fileURLToPath(import.meta.resolve('@openai/codex-sdk')));
-    const pkgDir = join(sdkDir, '..');
-    const targets: Record<string, Record<string, string>> = {
-      linux:  { x64: 'x86_64-unknown-linux-musl', arm64: 'aarch64-unknown-linux-musl' },
-      darwin: { x64: 'x86_64-apple-darwin',       arm64: 'aarch64-apple-darwin' },
-      win32:  { x64: 'x86_64-pc-windows-msvc',    arm64: 'aarch64-pc-windows-msvc' },
-    };
-    const target = targets[process.platform]?.[process.arch];
-    if (target) {
-      const bin = join(pkgDir, 'vendor', target, 'codex', process.platform === 'win32' ? 'codex.exe' : 'codex');
-      if (existsSync(bin)) return bin;
-    }
-  } catch { /* fallthrough */ }
+  const localBin = join(projectRoot(), 'node_modules', '.bin', process.platform === 'win32' ? 'codex.cmd' : 'codex');
+  if (existsSync(localBin)) return localBin;
 
-  // 3. Global binary
   return 'codex';
 }
 
 const codexBinary = findCodexBinary();
+
+export type CodexModelCatalogEntry = {
+  id: string;
+  model?: string;
+  displayName?: string;
+  description?: string;
+  hidden?: boolean;
+  supportedReasoningEfforts?: Array<{ reasoningEffort: string; description?: string | null }>;
+  defaultReasoningEffort?: string | null;
+  inputModalities?: string[];
+  supportsPersonality?: boolean;
+  isDefault?: boolean;
+  upgrade?: string | null;
+  upgradeInfo?: unknown;
+  availabilityNux?: unknown;
+  additionalSpeedTiers?: unknown[];
+};
+
+export type CodexAccountInfo = {
+  type?: string;
+  email?: string;
+  planType?: string;
+};
+
+export type CodexModelCatalog = {
+  account: CodexAccountInfo | null;
+  requiresOpenaiAuth: boolean;
+  models: CodexModelCatalogEntry[];
+  source: 'app-server';
+};
+
+export type CodexAppServerSnapshot = CodexModelCatalog & {
+  config: unknown;
+  configLayers: unknown[] | null;
+  configOrigins: Record<string, unknown>;
+  experimentalFeatures: unknown[];
+  skills: unknown[];
+  plugins: unknown;
+  apps: unknown[];
+  mcpServers: unknown[];
+  rateLimits: unknown | null;
+  configRequirements: unknown | null;
+};
+
+type CodexAppReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
+type AppServerUserInput =
+  | { type: 'text'; text: string; text_elements: unknown[] }
+  | { type: 'localImage'; path: string }
+  | { type: 'skill'; name: string; path: string }
+  | { type: 'mention'; name: string; path: string };
 
 function resolveNodeBinary(): string {
   if (!process.versions.electron && process.execPath) return process.execPath;
@@ -117,7 +152,7 @@ function pickMcpChildEnv(baseEnv: Record<string, string>): Record<string, string
     const value = baseEnv[key];
     if (value) env[key] = value;
   }
-  return env;
+  return mergeSkillEnv(env);
 }
 
 function getDorabotMcpServerSpec(baseEnv: Record<string, string>): { command: string; args: string[]; env: Record<string, string> } {
@@ -156,6 +191,26 @@ function normalizeMcpServerEnv(env: unknown): Record<string, string> | undefined
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+function normalizeStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const strings = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+  return strings.length > 0 ? strings : undefined;
+}
+
+function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, item]) => item !== undefined && item !== null)
+    .map(([key, item]) => [key, String(item)]);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function copyMcpOption(target: Record<string, unknown>, config: Record<string, unknown>, from: string, to = from): void {
+  const value = config[from];
+  if (value === undefined || value === null) return;
+  target[to] = value;
+}
+
 function normalizeCodexMcpServers(rawServers: unknown, baseEnv: Record<string, string>): Record<string, Record<string, unknown>> | undefined {
   if (!rawServers || typeof rawServers !== 'object') return undefined;
 
@@ -175,20 +230,65 @@ function normalizeCodexMcpServers(rawServers: unknown, baseEnv: Record<string, s
         ? config.args.filter((arg): arg is string => typeof arg === 'string')
         : undefined;
       const env = normalizeMcpServerEnv(config.env);
-      mcpServers[name] = {
+      const server: Record<string, unknown> = {
         command: config.command,
         ...(args && args.length > 0 ? { args } : {}),
         ...(env ? { env } : {}),
       };
+      copyMcpOption(server, config, 'cwd');
+      copyMcpOption(server, config, 'enabled');
+      copyMcpOption(server, config, 'startup_timeout_sec');
+      copyMcpOption(server, config, 'tool_timeout_sec');
+      copyMcpOption(server, config, 'enabled_tools');
+      copyMcpOption(server, config, 'disabled_tools');
+      copyMcpOption(server, config, 'env_vars');
+      mcpServers[name] = server;
       continue;
     }
 
     if (typeof config.url === 'string') {
-      mcpServers[name] = { url: config.url };
+      const httpHeaders = normalizeStringRecord(config.http_headers || config.headers);
+      const server: Record<string, unknown> = { url: config.url };
+      copyMcpOption(server, config, 'enabled');
+      copyMcpOption(server, config, 'startup_timeout_sec');
+      copyMcpOption(server, config, 'tool_timeout_sec');
+      copyMcpOption(server, config, 'enabled_tools');
+      copyMcpOption(server, config, 'disabled_tools');
+      copyMcpOption(server, config, 'bearer_token_env_var');
+      if (httpHeaders) server.http_headers = httpHeaders;
+      mcpServers[name] = server;
     }
   }
 
   return Object.keys(mcpServers).length > 0 ? mcpServers : undefined;
+}
+
+function isCodexCliConfigValue(value: unknown): value is CodexCliConfigValue {
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return true;
+  if (Array.isArray(value)) return value.every(isCodexCliConfigValue);
+  if (!value || typeof value !== 'object') return false;
+  return Object.values(value as Record<string, unknown>).every(isCodexCliConfigValue);
+}
+
+function normalizeCodexCliConfig(rawConfig: unknown): Record<string, CodexCliConfigValue> {
+  if (!rawConfig || typeof rawConfig !== 'object' || Array.isArray(rawConfig)) return {};
+  const config: Record<string, CodexCliConfigValue> = {};
+  for (const [key, value] of Object.entries(rawConfig as Record<string, unknown>)) {
+    if (isCodexCliConfigValue(value)) config[key] = value;
+  }
+  return config;
+}
+
+function extractMcpServersFromConfig(config: Record<string, CodexCliConfigValue>): Record<string, Record<string, unknown>> | undefined {
+  const rawMcpServers = config.mcp_servers;
+  if (!rawMcpServers || typeof rawMcpServers !== 'object' || Array.isArray(rawMcpServers)) return undefined;
+  const servers: Record<string, Record<string, unknown>> = {};
+  for (const [name, server] of Object.entries(rawMcpServers as Record<string, unknown>)) {
+    if (server && typeof server === 'object' && !Array.isArray(server)) {
+      servers[name] = server as Record<string, unknown>;
+    }
+  }
+  return Object.keys(servers).length > 0 ? servers : undefined;
 }
 
 function extensionForMediaType(mediaType: string): string {
@@ -210,9 +310,13 @@ function stripDataUri(data: string): string {
   return data.includes(',') ? data.split(',')[1] : data;
 }
 
-async function prepareCodexInput(prompt: string, images?: ProviderRunOptions['images']): Promise<{ input: Input; cleanup: () => void }> {
+async function prepareCodexInput(
+  prompt: string,
+  images?: ProviderRunOptions['images'],
+  extraItems: ProviderInputItem[] = [],
+): Promise<{ input: AppServerUserInput[]; cleanup: () => void }> {
   if (!images?.length) {
-    return { input: prompt, cleanup: () => {} };
+    return { input: [{ type: 'text', text: prompt, text_elements: [] }, ...extraItems], cleanup: () => {} };
   }
 
   mkdirSync(TMP_DIR, { recursive: true });
@@ -223,11 +327,11 @@ async function prepareCodexInput(prompt: string, images?: ProviderRunOptions['im
     : prompt;
 
   if (!valid.length) {
-    return { input: promptText, cleanup: () => {} };
+    return { input: [{ type: 'text', text: promptText, text_elements: [] }, ...extraItems], cleanup: () => {} };
   }
 
   const tempPaths: string[] = [];
-  const input: Input = [{ type: 'text', text: promptText }];
+  const input: AppServerUserInput[] = [{ type: 'text', text: promptText, text_elements: [] }, ...extraItems];
 
   try {
     for (const image of valid) {
@@ -235,7 +339,7 @@ async function prepareCodexInput(prompt: string, images?: ProviderRunOptions['im
       const path = join(TMP_DIR, `codex-image-${Date.now()}-${randomBytes(6).toString('hex')}.${ext}`);
       writeFileSync(path, Buffer.from(stripDataUri(image.data), 'base64'));
       tempPaths.push(path);
-      input.push({ type: 'local_image', path });
+      input.push({ type: 'localImage', path });
     }
   } catch (err) {
     for (const path of tempPaths) {
@@ -281,6 +385,483 @@ function runCodexCmd(args: string[], input?: string): Promise<{ stdout: string; 
       proc.stdin?.end();
     }
   });
+}
+
+type JsonRpcResponse = {
+  id?: number;
+  method?: string;
+  params?: unknown;
+  result?: unknown;
+  error?: { message?: string } | string;
+};
+
+function jsonRpcErrorMessage(error: JsonRpcResponse['error']): string {
+  if (!error) return 'unknown JSON-RPC error';
+  if (typeof error === 'string') return error;
+  return error.message || JSON.stringify(error);
+}
+
+class AsyncQueue<T> implements AsyncIterable<T> {
+  private values: T[] = [];
+  private waiters: Array<(value: IteratorResult<T>) => void> = [];
+  private closed = false;
+
+  push(value: T): void {
+    if (this.closed) return;
+    const waiter = this.waiters.shift();
+    if (waiter) {
+      waiter({ value, done: false });
+    } else {
+      this.values.push(value);
+    }
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    for (const waiter of this.waiters.splice(0)) {
+      waiter({ value: undefined as T, done: true });
+    }
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<T> {
+    return {
+      next: () => {
+        if (this.values.length > 0) {
+          return Promise.resolve({ value: this.values.shift()!, done: false });
+        }
+        if (this.closed) {
+          return Promise.resolve({ value: undefined as T, done: true });
+        }
+        return new Promise<IteratorResult<T>>(resolve => this.waiters.push(resolve));
+      },
+    };
+  }
+}
+
+type AppServerRequestHandler = (message: JsonRpcResponse) => Promise<unknown>;
+
+class CodexAppServerClient {
+  private readonly child: ReturnType<typeof spawn>;
+  private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  private readonly notifications = new AsyncQueue<JsonRpcResponse>();
+  private nextId = 1;
+  private stdoutBuffer = '';
+  private stderrBuffer = '';
+  private closed = false;
+  private requestHandler: AppServerRequestHandler | null;
+
+  private constructor(env: Record<string, string>, requestHandler?: AppServerRequestHandler | null) {
+    this.requestHandler = requestHandler || null;
+    this.child = spawn(codexBinary, ['app-server'], {
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    this.child.once('error', (err) => this.failAll(err instanceof Error ? err : new Error(String(err))));
+    this.child.once('exit', (code, signal) => {
+      if (this.closed) return;
+      const detail = signal ? `signal ${signal}` : `code ${code ?? 1}`;
+      this.failAll(new Error(`Codex app-server exited with ${detail}${this.stderrBuffer ? `: ${this.stderrBuffer.slice(0, 500)}` : ''}`));
+    });
+    this.child.stderr?.on('data', (chunk) => { this.stderrBuffer += chunk.toString(); });
+    this.child.stdout?.on('data', (chunk) => this.readStdout(chunk.toString()));
+  }
+
+  static async start(args: { env?: Record<string, string>; requestHandler?: AppServerRequestHandler | null } = {}): Promise<CodexAppServerClient> {
+    ensureCodexHome();
+    const client = new CodexAppServerClient(args.env || codexEnv(), args.requestHandler);
+    await client.request('initialize', {
+      clientInfo: {
+        name: 'dorabot',
+        title: 'Dorabot',
+        version: process.env.npm_package_version || 'unknown',
+      },
+      capabilities: {
+        experimentalApi: true,
+      },
+    });
+    client.notify('initialized', {});
+    return client;
+  }
+
+  setRequestHandler(handler: AppServerRequestHandler | null): void {
+    this.requestHandler = handler;
+  }
+
+  isClosed(): boolean {
+    return this.closed;
+  }
+
+  async request(method: string, params?: unknown): Promise<unknown> {
+    if (this.closed) throw new Error('Codex app-server is closed');
+    const id = this.nextId++;
+    const message: Record<string, unknown> = { method, id };
+    if (params !== undefined) message.params = params;
+    const promise = new Promise<unknown>((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+    });
+    this.send(message);
+    return promise;
+  }
+
+  notify(method: string, params?: unknown): void {
+    const message: Record<string, unknown> = { method };
+    if (params !== undefined) message.params = params;
+    this.send(message);
+  }
+
+  respond(id: number, result: unknown): void {
+    this.send({ id, result });
+  }
+
+  respondError(id: number, message: string): void {
+    this.send({ id, error: { code: -32000, message } });
+  }
+
+  events(): AsyncIterable<JsonRpcResponse> {
+    return this.notifications;
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.notifications.close();
+    for (const [, pending] of this.pending) {
+      pending.reject(new Error('Codex app-server closed'));
+    }
+    this.pending.clear();
+    try { this.child.kill(); } catch { /* ignore */ }
+  }
+
+  private send(message: Record<string, unknown>): void {
+    this.child.stdin?.write(JSON.stringify(message) + '\n');
+  }
+
+  private readStdout(chunk: string): void {
+    this.stdoutBuffer += chunk;
+    let newline = this.stdoutBuffer.indexOf('\n');
+    while (newline >= 0) {
+      const line = this.stdoutBuffer.slice(0, newline).trim();
+      this.stdoutBuffer = this.stdoutBuffer.slice(newline + 1);
+      newline = this.stdoutBuffer.indexOf('\n');
+      if (!line) continue;
+
+      let message: JsonRpcResponse;
+      try {
+        message = JSON.parse(line) as JsonRpcResponse;
+      } catch {
+        continue;
+      }
+      this.handleMessage(message);
+    }
+  }
+
+  private handleMessage(message: JsonRpcResponse): void {
+    if (message.id !== undefined && !message.method) {
+      const pending = this.pending.get(message.id);
+      if (!pending) return;
+      this.pending.delete(message.id);
+      if (message.error) {
+        pending.reject(new Error(jsonRpcErrorMessage(message.error)));
+      } else {
+        pending.resolve(message.result);
+      }
+      return;
+    }
+
+    if (message.id !== undefined && message.method) {
+      const id = message.id;
+      if (!this.requestHandler) {
+        this.respondError(id, `Unhandled server request: ${message.method}`);
+        return;
+      }
+      this.requestHandler(message)
+        .then(result => this.respond(id, result ?? {}))
+        .catch(err => this.respondError(id, err instanceof Error ? err.message : String(err)));
+      return;
+    }
+
+    if (message.method) this.notifications.push(message);
+  }
+
+  private failAll(error: Error): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.notifications.close();
+    for (const [, pending] of this.pending) {
+      pending.reject(error);
+    }
+    this.pending.clear();
+  }
+}
+
+export async function getCodexModelCatalog(): Promise<CodexModelCatalog> {
+  const client = await CodexAppServerClient.start();
+  try {
+    const accountResult = await client.request('account/read', { refreshToken: false }) as {
+      account?: CodexAccountInfo | null;
+      requiresOpenaiAuth?: boolean;
+    };
+    return {
+      account: accountResult.account || null,
+      requiresOpenaiAuth: accountResult.requiresOpenaiAuth ?? true,
+      models: await listCodexModels(client),
+      source: 'app-server',
+    };
+  } finally {
+    client.close();
+  }
+}
+
+async function listCodexModels(client: CodexAppServerClient): Promise<CodexModelCatalogEntry[]> {
+  const models: CodexModelCatalogEntry[] = [];
+  let cursor: string | null | undefined;
+  do {
+    const result = await client.request('model/list', {
+      includeHidden: true,
+      limit: 100,
+      ...(cursor ? { cursor } : {}),
+    }) as { data?: CodexModelCatalogEntry[]; nextCursor?: string | null };
+    if (Array.isArray(result?.data)) {
+      models.push(...result.data.filter(model => typeof model?.id === 'string' && model.id.length > 0));
+    }
+    cursor = result?.nextCursor;
+  } while (cursor);
+  return models;
+}
+
+async function listPaged(client: CodexAppServerClient, method: string, params: Record<string, unknown>): Promise<unknown[]> {
+  const data: unknown[] = [];
+  let cursor: string | null | undefined;
+  do {
+    const result = await client.request(method, { ...params, ...(cursor ? { cursor } : {}) }) as { data?: unknown[]; nextCursor?: string | null };
+    if (Array.isArray(result?.data)) data.push(...result.data);
+    cursor = result?.nextCursor;
+  } while (cursor);
+  return data;
+}
+
+function normalizeMentionName(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function markerNamesFromPrompt(prompt: string): Set<string> {
+  const names = new Set<string>();
+  for (const match of prompt.matchAll(/(?:^|\s)\$([a-zA-Z0-9][a-zA-Z0-9_-]{0,80})\b/g)) {
+    names.add(match[1]!);
+  }
+  return names;
+}
+
+function addUniqueInputItem(items: ProviderInputItem[], item: ProviderInputItem): void {
+  if (items.some(existing => existing.type === item.type && existing.path === item.path)) return;
+  items.push(item);
+}
+
+async function resolveCodexStructuredInputItems(
+  client: CodexAppServerClient,
+  prompt: string,
+  cwd: string,
+  explicitItems: ProviderInputItem[] | undefined,
+): Promise<ProviderInputItem[]> {
+  const items: ProviderInputItem[] = [];
+  for (const item of explicitItems || []) {
+    if ((item.type === 'skill' || item.type === 'mention') && item.name && item.path) {
+      addUniqueInputItem(items, item);
+    }
+  }
+
+  const markers = markerNamesFromPrompt(prompt);
+  if (markers.size === 0) return items;
+
+  const skillsResult = await client.request('skills/list', { cwds: [cwd], forceReload: false })
+    .catch(() => ({ data: [] })) as { data?: Array<{ skills?: Array<Record<string, unknown>> }> };
+  for (const group of skillsResult.data || []) {
+    for (const skill of group.skills || []) {
+      const name = typeof skill.name === 'string' ? skill.name : '';
+      const path = typeof skill.path === 'string' ? skill.path : '';
+      if (name && path && markers.has(name)) addUniqueInputItem(items, { type: 'skill', name, path });
+    }
+  }
+
+  const apps = await listPaged(client, 'app/list', { limit: 100, forceRefetch: false }).catch(() => []);
+  for (const app of apps as Array<Record<string, unknown>>) {
+    const id = typeof app.id === 'string' ? app.id : '';
+    const name = typeof app.name === 'string' ? app.name : id;
+    if (!id) continue;
+    const candidates = new Set([id, normalizeMentionName(id), normalizeMentionName(name)]);
+    if ([...markers].some(marker => candidates.has(marker) || candidates.has(normalizeMentionName(marker)))) {
+      addUniqueInputItem(items, { type: 'mention', name, path: `app://${id}` });
+    }
+  }
+
+  return items;
+}
+
+export async function getCodexAppServerSnapshot(cwd?: string): Promise<CodexAppServerSnapshot> {
+  const client = await CodexAppServerClient.start();
+  try {
+    const accountResult = await client.request('account/read', { refreshToken: false }) as {
+      account?: CodexAccountInfo | null;
+      requiresOpenaiAuth?: boolean;
+    };
+
+    const [
+      models,
+      configResult,
+      experimentalFeatures,
+      skillsResult,
+      plugins,
+      apps,
+      mcpServers,
+      rateLimits,
+      configRequirements,
+    ] = await Promise.all([
+      listCodexModels(client),
+      client.request('config/read', { includeLayers: true, ...(cwd ? { cwd } : {}) }).catch(err => ({ error: err instanceof Error ? err.message : String(err) })),
+      listPaged(client, 'experimentalFeature/list', { limit: 100 }).catch(() => []),
+      client.request('skills/list', { cwds: cwd ? [cwd] : [], forceReload: true }).catch(err => ({ error: err instanceof Error ? err.message : String(err), data: [] })),
+      client.request('plugin/list', { ...(cwd ? { cwds: [cwd] } : {}) }).catch(err => ({ error: err instanceof Error ? err.message : String(err) })),
+      listPaged(client, 'app/list', { limit: 100, forceRefetch: false }).catch(() => []),
+      listPaged(client, 'mcpServerStatus/list', { limit: 100, detail: 'full' }).catch(() => []),
+      client.request('account/rateLimits/read', undefined).catch(err => ({ error: err instanceof Error ? err.message : String(err) })),
+      client.request('configRequirements/read', undefined).catch(err => ({ error: err instanceof Error ? err.message : String(err) })),
+    ]);
+
+    const configRead = configResult as { config?: unknown; layers?: unknown[] | null; origins?: Record<string, unknown> };
+    const skillsRead = skillsResult as { data?: unknown[] };
+
+    return {
+      account: accountResult.account || null,
+      requiresOpenaiAuth: accountResult.requiresOpenaiAuth ?? true,
+      models,
+      source: 'app-server',
+      config: configRead.config ?? configResult,
+      configLayers: configRead.layers ?? null,
+      configOrigins: configRead.origins ?? {},
+      experimentalFeatures,
+      skills: Array.isArray(skillsRead.data) ? skillsRead.data : [],
+      plugins,
+      apps,
+      mcpServers,
+      rateLimits,
+      configRequirements,
+    };
+  } finally {
+    client.close();
+  }
+}
+
+const CODEX_APP_SERVER_RPC_METHODS = new Set([
+  'account/read',
+  'account/login/start',
+  'account/login/cancel',
+  'account/logout',
+  'account/rateLimits/read',
+  'account/sendAddCreditsNudgeEmail',
+  'getAuthStatus',
+  'thread/list',
+  'thread/start',
+  'thread/resume',
+  'thread/read',
+  'thread/turns/list',
+  'thread/loaded/list',
+  'thread/name/set',
+  'thread/goal/set',
+  'thread/goal/get',
+  'thread/goal/clear',
+  'thread/metadata/update',
+  'thread/archive',
+  'thread/unsubscribe',
+  'thread/unarchive',
+  'thread/compact/start',
+  'thread/shellCommand',
+  'thread/approveGuardianDeniedAction',
+  'thread/backgroundTerminals/clean',
+  'thread/rollback',
+  'thread/fork',
+  'thread/inject_items',
+  'turn/start',
+  'turn/steer',
+  'turn/interrupt',
+  'review/start',
+  'command/exec',
+  'command/exec/write',
+  'command/exec/resize',
+  'command/exec/terminate',
+  'model/list',
+  'modelProvider/capabilities/read',
+  'experimentalFeature/list',
+  'experimentalFeature/enablement/set',
+  'collaborationMode/list',
+  'skills/list',
+  'skills/config/write',
+  'hooks/list',
+  'marketplace/add',
+  'marketplace/remove',
+  'marketplace/upgrade',
+  'plugin/list',
+  'plugin/read',
+  'plugin/install',
+  'plugin/uninstall',
+  'app/list',
+  'device/key/create',
+  'device/key/public',
+  'device/key/sign',
+  'mcpServer/oauth/login',
+  'config/mcpServer/reload',
+  'mcpServerStatus/list',
+  'mcpServer/resource/read',
+  'mcpServer/tool/call',
+  'feedback/upload',
+  'config/read',
+  'config/value/write',
+  'config/batchWrite',
+  'configRequirements/read',
+  'externalAgentConfig/detect',
+  'externalAgentConfig/import',
+  'getConversationSummary',
+  'gitDiffToRemote',
+  'fs/readFile',
+  'fs/writeFile',
+  'fs/createDirectory',
+  'fs/getMetadata',
+  'fs/readDirectory',
+  'fs/remove',
+  'fs/copy',
+  'fs/watch',
+  'fs/unwatch',
+  'windowsSandbox/setupStart',
+  'fuzzyFileSearch',
+]);
+
+let sharedCodexAppServerRpcClient: CodexAppServerClient | null = null;
+
+async function getSharedCodexAppServerRpcClient(): Promise<CodexAppServerClient> {
+  if (sharedCodexAppServerRpcClient && !sharedCodexAppServerRpcClient.isClosed()) {
+    return sharedCodexAppServerRpcClient;
+  }
+  sharedCodexAppServerRpcClient = await CodexAppServerClient.start();
+  return sharedCodexAppServerRpcClient;
+}
+
+export function closeCodexAppServerRpcClient(): void {
+  sharedCodexAppServerRpcClient?.close();
+  sharedCodexAppServerRpcClient = null;
+}
+
+export async function callCodexAppServer(method: string, params?: unknown): Promise<unknown> {
+  if (!CODEX_APP_SERVER_RPC_METHODS.has(method)) {
+    throw new Error(`Codex app-server RPC is not exposed: ${method}`);
+  }
+  const client = await getSharedCodexAppServerRpcClient();
+  try {
+    return await client.request(method, params);
+  } catch (err) {
+    if (client.isClosed()) sharedCodexAppServerRpcClient = null;
+    throw err;
+  }
 }
 
 // ── PKCE helpers ────────────────────────────────────────────────────
@@ -838,7 +1419,7 @@ export function hasCodexAuth(): boolean {
 
 // ── Reasoning effort mapping ────────────────────────────────────────
 
-const EFFORT_MAP: Record<ReasoningEffort, ModelReasoningEffort> = {
+const EFFORT_MAP: Record<ReasoningEffort, CodexAppReasoningEffort> = {
   minimal: 'low',
   low: 'low',
   medium: 'medium',
@@ -846,6 +1427,195 @@ const EFFORT_MAP: Record<ReasoningEffort, ModelReasoningEffort> = {
   max: 'xhigh',
   xhigh: 'xhigh',
 };
+
+function appServerConfigForRun(
+  codexConfig: NonNullable<ProviderRunOptions['config']['provider']>['codex'] | undefined,
+  mergedMcpServers: Record<string, Record<string, unknown>> | undefined,
+  mcpOauthCredentialsStore: CodexMcpOauthCredentialsStore,
+  cwd: string,
+): Record<string, CodexCliConfigValue> {
+  const config = normalizeCodexCliConfig(codexConfig?.config);
+  if (codexConfig?.baseUrl) config.openai_base_url = codexConfig.baseUrl;
+  if (codexConfig?.webSearch) config.web_search = codexConfig.webSearch;
+  if (codexConfig?.skipGitRepoCheck !== undefined) config.skip_git_repo_check = codexConfig.skipGitRepoCheck;
+  config.mcp_oauth_credentials_store = mcpOauthCredentialsStore;
+  if (mergedMcpServers) config.mcp_servers = mergedMcpServers as CodexCliConfigValue;
+
+  const additionalDirectories = normalizeStringArray(codexConfig?.additionalDirectories);
+  if ((codexConfig?.sandboxMode || 'danger-full-access') === 'workspace-write' || additionalDirectories?.length) {
+    config.sandbox_workspace_write = {
+      writable_roots: [cwd, ...(additionalDirectories || [])],
+      network_access: codexConfig?.networkAccess ?? true,
+      exclude_tmpdir_env_var: false,
+      exclude_slash_tmp: false,
+    };
+  }
+  return config;
+}
+
+function serviceTierFromConfig(config: Record<string, CodexCliConfigValue>): 'fast' | 'flex' | undefined {
+  return config.service_tier === 'fast' || config.service_tier === 'flex' ? config.service_tier : undefined;
+}
+
+function reasoningSummaryFromConfig(config: Record<string, CodexCliConfigValue>): 'auto' | 'none' | 'concise' | 'detailed' | undefined {
+  const value = config.model_reasoning_summary;
+  return value === 'auto' || value === 'none' || value === 'concise' || value === 'detailed' ? value : undefined;
+}
+
+function sandboxPolicyForRun(
+  sandboxMode: string,
+  cwd: string,
+  additionalDirectories: string[] | undefined,
+  networkAccess: boolean,
+): Record<string, unknown> {
+  if (sandboxMode === 'danger-full-access') return { type: 'dangerFullAccess' };
+  if (sandboxMode === 'read-only') return { type: 'readOnly', networkAccess };
+  return {
+    type: 'workspaceWrite',
+    writableRoots: [cwd, ...(additionalDirectories || [])],
+    networkAccess,
+    excludeTmpdirEnvVar: false,
+    excludeSlashTmp: false,
+  };
+}
+
+function isToolAllowedDecision(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return true;
+  const behavior = (result as Record<string, unknown>).behavior;
+  return behavior !== 'deny';
+}
+
+function textFromUnknownContent(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    return value.map(textFromUnknownContent).filter(Boolean).join('\n');
+  }
+  if (!value || typeof value !== 'object') return '';
+  const record = value as Record<string, unknown>;
+  if (typeof record.text === 'string') return record.text;
+  if (typeof record.message === 'string') return record.message;
+  return JSON.stringify(record);
+}
+
+async function handleCodexServerRequest(message: JsonRpcResponse, opts: ProviderRunOptions): Promise<unknown> {
+  const method = message.method || '';
+  const params = (message.params && typeof message.params === 'object' ? message.params : {}) as Record<string, unknown>;
+
+  if (method === 'item/commandExecution/requestApproval') {
+    if (!opts.canUseTool) return { decision: 'decline' };
+    const input = {
+      command: typeof params.command === 'string' ? params.command : '',
+      cwd: typeof params.cwd === 'string' ? params.cwd : opts.cwd,
+      reason: typeof params.reason === 'string' ? params.reason : undefined,
+    };
+    const decision = await opts.canUseTool('Bash', input, {});
+    return { decision: isToolAllowedDecision(decision) ? 'accept' : 'decline' };
+  }
+
+  if (method === 'execCommandApproval') {
+    if (!opts.canUseTool) return { decision: 'denied' };
+    const command = Array.isArray(params.command) ? params.command.map(String).join(' ') : '';
+    const input = {
+      command,
+      cwd: typeof params.cwd === 'string' ? params.cwd : opts.cwd,
+      reason: typeof params.reason === 'string' ? params.reason : undefined,
+    };
+    const decision = await opts.canUseTool('Bash', input, {});
+    return { decision: isToolAllowedDecision(decision) ? 'approved' : 'denied' };
+  }
+
+  if (method === 'item/fileChange/requestApproval') {
+    if (!opts.canUseTool) return { decision: 'decline' };
+    const input = {
+      description: typeof params.reason === 'string' ? params.reason : 'Codex file change',
+      grantRoot: typeof params.grantRoot === 'string' ? params.grantRoot : undefined,
+    };
+    const decision = await opts.canUseTool('Edit', input, {});
+    return { decision: isToolAllowedDecision(decision) ? 'accept' : 'decline' };
+  }
+
+  if (method === 'applyPatchApproval') {
+    if (!opts.canUseTool) return { decision: 'denied' };
+    const input = {
+      description: typeof params.reason === 'string' ? params.reason : 'Codex file change',
+      grantRoot: typeof params.grantRoot === 'string' ? params.grantRoot : undefined,
+      fileChanges: params.fileChanges,
+    };
+    const decision = await opts.canUseTool('Edit', input, {});
+    return { decision: isToolAllowedDecision(decision) ? 'approved' : 'denied' };
+  }
+
+  if (method === 'item/permissions/requestApproval') {
+    const requested = params.permissions && typeof params.permissions === 'object'
+      ? params.permissions as Record<string, unknown>
+      : {};
+    if (!opts.canUseTool) return { permissions: {}, scope: 'turn' };
+    const decision = await opts.canUseTool('Bash', {
+      reason: typeof params.reason === 'string' ? params.reason : 'Codex permission request',
+      permissions: requested,
+      cwd: typeof params.cwd === 'string' ? params.cwd : opts.cwd,
+    }, {});
+    if (!isToolAllowedDecision(decision)) return { permissions: {}, scope: 'turn' };
+    const permissions: Record<string, unknown> = {};
+    if (requested.network && typeof requested.network === 'object') permissions.network = requested.network;
+    if (requested.fileSystem && typeof requested.fileSystem === 'object') permissions.fileSystem = requested.fileSystem;
+    return { permissions, scope: 'turn' };
+  }
+
+  if (method === 'item/tool/requestUserInput') {
+    if (!opts.canUseTool) return { answers: {} };
+    const questions = Array.isArray(params.questions) ? params.questions as Array<Record<string, unknown>> : [];
+    const routedQuestions = questions.map((question) => ({
+      question: String(question.question || question.header || 'Question'),
+      header: String(question.header || 'Question'),
+      options: Array.isArray(question.options)
+        ? (question.options as Array<Record<string, unknown>>).map(option => ({
+            label: String(option.label || ''),
+            description: String(option.description || ''),
+          }))
+        : [{ label: 'OK', description: '' }],
+    }));
+    const decision = await opts.canUseTool('AskUserQuestion', { questions: routedQuestions }, {});
+    const updated = decision && typeof decision === 'object'
+      ? (decision as Record<string, unknown>).updatedInput as Record<string, unknown> | undefined
+      : undefined;
+    const rawAnswers = updated?.answers && typeof updated.answers === 'object'
+      ? updated.answers as Record<string, unknown>
+      : {};
+    const answers: Record<string, { answers: string[] }> = {};
+    questions.forEach((question, index) => {
+      const id = String(question.id || index);
+      const text = String(question.question || question.header || 'Question');
+      const value = rawAnswers[text] || rawAnswers[id] || routedQuestions[index]?.options?.[0]?.label || '';
+      answers[id] = { answers: [String(value)] };
+    });
+    return { answers };
+  }
+
+  if (method === 'account/chatgptAuthTokens/refresh') {
+    const accessToken = await ensureCodexOAuthToken();
+    const latest = loadCodexOAuthTokens();
+    if (!accessToken || !latest) throw new Error('No ChatGPT OAuth token available');
+    return {
+      accessToken,
+      chatgptAccountId: latest.account_id,
+      chatgptPlanType: null,
+    };
+  }
+
+  if (method === 'mcpServer/elicitation/request') {
+    return { action: 'decline', content: null, _meta: null };
+  }
+
+  if (method === 'item/tool/call') {
+    return {
+      success: false,
+      contentItems: [{ type: 'inputText', text: `Dynamic tool calls are not implemented in Dorabot for ${String(params.tool || 'unknown')}.` }],
+    };
+  }
+
+  throw new Error(`Unhandled Codex app-server request: ${method}`);
+}
 
 // ── Provider ────────────────────────────────────────────────────────
 
@@ -955,14 +1725,11 @@ export class CodexProvider implements Provider {
 
   async *query(opts: ProviderRunOptions): AsyncGenerator<ProviderMessage, ProviderQueryResult, unknown> {
     const codexConfig = opts.config.provider?.codex;
-    const model = codexConfig?.model || 'gpt-5-codex';
+    const model = codexConfig?.model || 'gpt-5.5';
     const reasoningEffort = opts.config.reasoningEffort;
-    // Default to file-backed MCP OAuth credentials to avoid repeated macOS keychain prompts
-    // for "Codex MCP Credentials" during every non-interactive `codex exec` turn.
     const mcpOauthCredentialsStore = (codexConfig?.mcpOauthCredentialsStore || 'file') as CodexMcpOauthCredentialsStore;
 
     const authState = await resolveCodexAuthState();
-    const apiKey = authState.apiKey;
     if (!authState.status.authenticated) {
       const result = `Codex error: ${authState.status.error || 'Not authenticated with Codex'}`;
       yield {
@@ -978,306 +1745,343 @@ export class CodexProvider implements Provider {
       };
     }
 
-    const sdkEnv = {
+    const appEnv: Record<string, string> = {
+      ...codexEnv(),
       ...opts.env,
       CODEX_HOME: codexHome(),
     };
-    const mcpServers = normalizeCodexMcpServers(opts.mcpServer, sdkEnv);
+    if (authState.apiKey) {
+      appEnv.OPENAI_API_KEY = authState.apiKey;
+      appEnv.CODEX_API_KEY = authState.apiKey;
+    }
 
-    // Create SDK instance
-    const codex = new Codex({
-      apiKey,
-      env: sdkEnv,
-      codexPathOverride: codexBinary !== 'codex' ? codexBinary : undefined,
-      config: {
-        mcp_oauth_credentials_store: mcpOauthCredentialsStore,
-        ...(mcpServers ? { mcp_servers: mcpServers } : {}),
-      } as any,
-    });
+    const mcpServers = normalizeCodexMcpServers(opts.mcpServer, appEnv);
+    const codexCliConfig = normalizeCodexCliConfig(codexConfig?.config);
+    const configuredMcpServers = extractMcpServersFromConfig(codexCliConfig);
+    const mergedMcpServers = configuredMcpServers || mcpServers
+      ? { ...(configuredMcpServers || {}), ...(mcpServers || {}) }
+      : undefined;
 
-    // Map reasoning effort
     const modelReasoningEffort = reasoningEffort ? EFFORT_MAP[reasoningEffort] : undefined;
-    if (reasoningEffort === 'minimal') {
-      console.log('[codex] mapping reasoning effort "minimal" to "low" because the Codex API rejects "minimal"');
-    }
-    const requestedWebSearchMode = codexConfig?.webSearch;
-    const effectiveWebSearchMode = modelReasoningEffort === 'minimal' && requestedWebSearchMode !== 'disabled'
-      ? 'disabled'
-      : requestedWebSearchMode;
-    if (modelReasoningEffort === 'minimal' && requestedWebSearchMode !== 'disabled') {
-      console.log('[codex] disabling web search because reasoning effort "minimal" does not support it');
-    }
+    const additionalDirectories = normalizeStringArray(codexConfig?.additionalDirectories);
+    const appServerConfig = appServerConfigForRun(codexConfig, mergedMcpServers, mcpOauthCredentialsStore, opts.cwd);
+    const serviceTier = serviceTierFromConfig(appServerConfig);
+    const reasoningSummary = reasoningSummaryFromConfig(appServerConfig);
+    const sandboxMode = (codexConfig?.sandboxMode as string) || 'danger-full-access';
+    const networkAccess = codexConfig?.networkAccess ?? true;
+    const sandboxPolicy = sandboxPolicyForRun(sandboxMode, opts.cwd, additionalDirectories, networkAccess);
 
-    const threadOpts = {
+    const threadParams = {
       model,
-      workingDirectory: opts.cwd,
-      sandboxMode: (codexConfig?.sandboxMode as any) || 'danger-full-access',
-      skipGitRepoCheck: true,
-      modelReasoningEffort,
+      cwd: opts.cwd,
       approvalPolicy: (codexConfig?.approvalPolicy as any) || 'never',
-      networkAccessEnabled: codexConfig?.networkAccess ?? true,
-      webSearchMode: effectiveWebSearchMode as any,
+      sandbox: sandboxMode,
+      config: appServerConfig,
+      serviceName: 'dorabot',
+      developerInstructions: opts.systemPrompt,
+      ...(serviceTier ? { serviceTier } : {}),
     };
 
-    // Resume existing thread or start a new one
-    const thread = opts.resumeId
-      ? codex.resumeThread(opts.resumeId, threadOpts)
-      : codex.startThread(threadOpts);
-
-    // Only prepend system instructions on the first message (new thread).
-    // Resumed threads already have the system prompt from their initial turn.
-    const fullPrompt = opts.resumeId
-      ? opts.prompt
-      : opts.systemPrompt
-        ? `<system_instructions>\n${opts.systemPrompt}\n</system_instructions>\n\n${opts.prompt}`
-        : opts.prompt;
-    const { input, cleanup } = await prepareCodexInput(fullPrompt, opts.images);
-
-    console.log(`[codex] ${opts.resumeId ? 'resuming' : 'starting'} thread: model=${model || 'default'} effort=${modelReasoningEffort || 'default'}${opts.resumeId ? ` threadId=${opts.resumeId}` : ''}`);
-
-    // Run with streaming
     const abort = opts.abortController || new AbortController();
     this.activeAbort = abort;
 
-    // Track state — seed sessionId from resumeId so it's set even if
-    // the SDK doesn't emit thread.started on a resumed thread
     let sessionId = opts.resumeId || '';
+    let currentTurnId = '';
     let result = '';
     let lastAgentMessage = '';
     let usage = { inputTokens: 0, outputTokens: 0, totalCostUsd: 0 };
+    let active = true;
+    let emittedInit = false;
+    let turnDone = false;
+    let client: CodexAppServerClient | null = null;
+    const pendingInputCleanups = new Set<() => void>();
 
-    // stream event helpers — emit Claude-compatible stream_events so the gateway
-    // and frontend handle Codex through the exact same code path as Claude
     const se = (ev: Record<string, unknown>): ProviderMessage =>
       ({ type: 'stream_event', event: ev } as ProviderMessage);
     const itemTexts = new Map<string, string>();
     const startedBlocks = new Set<string>();
+    const toolItems = new Set<string>();
+
+    const startTextBlock = function*(itemId: string, blockType: 'text' | 'thinking'): Generator<ProviderMessage> {
+      if (startedBlocks.has(itemId)) return;
+      startedBlocks.add(itemId);
+      yield se({ type: 'content_block_start', content_block: { type: blockType } });
+    };
+
+    const appendText = function*(itemId: string, blockType: 'text' | 'thinking', text: string): Generator<ProviderMessage> {
+      if (!text) return;
+      yield* startTextBlock(itemId, blockType);
+      yield se({
+        type: 'content_block_delta',
+        delta: blockType === 'text'
+          ? { type: 'text_delta', text }
+          : { type: 'thinking_delta', thinking: text },
+      });
+      itemTexts.set(itemId, (itemTexts.get(itemId) || '') + text);
+    };
+
+    const stopBlock = function*(itemId: string): Generator<ProviderMessage> {
+      if (!startedBlocks.has(itemId)) return;
+      yield se({ type: 'content_block_stop' });
+      startedBlocks.delete(itemId);
+      itemTexts.delete(itemId);
+    };
+
+    const emitToolUse = function*(itemId: string, name: string, input: Record<string, unknown>): Generator<ProviderMessage> {
+      const toolId = `codex-${itemId}`;
+      if (!toolItems.has(itemId)) {
+        toolItems.add(itemId);
+        yield se({ type: 'content_block_start', content_block: { type: 'tool_use', id: toolId, name } });
+        yield se({ type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } });
+        yield se({ type: 'content_block_stop' });
+        yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: toolId, name, input }] } } as ProviderMessage;
+      }
+    };
+
+    const emitToolResult = function*(itemId: string, text: string, isError = false): Generator<ProviderMessage> {
+      toolItems.delete(itemId);
+      yield {
+        type: 'result',
+        subtype: 'tool_result',
+        tool_use_id: `codex-${itemId}`,
+        content: [{ type: 'text', text: text || '(no output)' }],
+        is_error: isError,
+      } as ProviderMessage;
+    };
+
+    const handleNotification = function*(message: JsonRpcResponse): Generator<ProviderMessage> {
+      const params = (message.params && typeof message.params === 'object' ? message.params : {}) as Record<string, unknown>;
+      if (params.threadId && params.threadId !== sessionId) return;
+      if (params.turnId && currentTurnId && params.turnId !== currentTurnId) return;
+
+      if (message.method === 'thread/started') {
+        const thread = params.thread as Record<string, unknown> | undefined;
+        sessionId = String(thread?.id || sessionId || `codex-${Date.now()}`);
+        if (!emittedInit) {
+          emittedInit = true;
+          yield { type: 'system', subtype: 'init', session_id: sessionId, model } as ProviderMessage;
+        }
+        return;
+      }
+
+      if (message.method === 'turn/started') {
+        const turn = params.turn as Record<string, unknown> | undefined;
+        currentTurnId = String(turn?.id || currentTurnId);
+        return;
+      }
+
+      if (message.method === 'item/agentMessage/delta') {
+        const itemId = String(params.itemId || '');
+        const delta = typeof params.delta === 'string' ? params.delta : '';
+        yield* appendText(itemId, 'text', delta);
+        return;
+      }
+
+      if (message.method === 'item/reasoning/textDelta' || message.method === 'item/reasoning/summaryTextDelta') {
+        const itemId = String(params.itemId || '');
+        const delta = typeof params.delta === 'string' ? params.delta : '';
+        yield* appendText(itemId, 'thinking', delta);
+        return;
+      }
+
+      if (message.method === 'item/started' || message.method === 'item/completed') {
+        const item = params.item as Record<string, any> | undefined;
+        if (!item) return;
+
+        if (item.type === 'commandExecution') {
+          yield* emitToolUse(item.id, 'Bash', { command: item.command, cwd: item.cwd });
+          if (message.method === 'item/completed') {
+            yield* emitToolResult(item.id, item.aggregatedOutput || '(no output)', item.status === 'failed' || item.status === 'declined');
+          }
+          return;
+        }
+
+        if (item.type === 'mcpToolCall') {
+          yield* emitToolUse(item.id, item.tool || 'unknown', item.arguments || {});
+          if (message.method === 'item/completed') {
+            const text = item.error?.message || textFromUnknownContent(item.result?.content) || textFromUnknownContent(item.result?.structuredContent) || '(no result)';
+            yield* emitToolResult(item.id, text, item.status === 'failed');
+          }
+          return;
+        }
+
+        if (item.type === 'webSearch') {
+          yield* emitToolUse(item.id, 'WebSearch', { query: item.query, action: item.action });
+          if (message.method === 'item/completed') {
+            yield* emitToolResult(item.id, `Searched: ${item.query || ''}`);
+          }
+          return;
+        }
+
+        if (item.type === 'fileChange' && message.method === 'item/completed') {
+          const changes = Array.isArray(item.changes) ? item.changes : [];
+          const firstPath = changes[0]?.path || '';
+          const desc = changes.map((change: any) => `${change.kind}: ${change.path}`).join('\n') || 'Files modified';
+          const isCreate = changes.length === 1 && changes[0]?.kind === 'add';
+          yield* emitToolUse(item.id, isCreate ? 'Write' : 'Edit', { file_path: firstPath, description: desc });
+          yield* emitToolResult(item.id, desc, item.status === 'failed' || item.status === 'declined');
+          return;
+        }
+
+        if (item.type === 'imageView') {
+          yield* emitToolUse(item.id, 'imageView', { path: item.path });
+          if (message.method === 'item/completed') yield* emitToolResult(item.id, String(item.path || ''));
+          return;
+        }
+
+        if (item.type === 'imageGeneration') {
+          yield* emitToolUse(item.id, 'imageGeneration', { status: item.status, prompt: item.revisedPrompt });
+          if (message.method === 'item/completed') yield* emitToolResult(item.id, item.savedPath || item.result || item.status || '');
+          return;
+        }
+
+        if (item.type === 'contextCompaction') {
+          if (message.method === 'item/started') yield { type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'thinking' } } } as ProviderMessage;
+          if (message.method === 'item/completed') yield { type: 'stream_event', event: { type: 'content_block_stop' } } as ProviderMessage;
+          return;
+        }
+
+        if (item.type === 'agentMessage' && message.method === 'item/completed') {
+          const text = String(item.text || '');
+          const prev = itemTexts.get(item.id) || '';
+          const delta = text.startsWith(prev) ? text.slice(prev.length) : text;
+          if (delta) yield* appendText(item.id, 'text', delta);
+          yield* stopBlock(item.id);
+          lastAgentMessage = text || lastAgentMessage;
+          result = lastAgentMessage || result;
+          if (text) yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } } as ProviderMessage;
+          return;
+        }
+
+        if (item.type === 'reasoning' && message.method === 'item/completed') {
+          const text = [...(item.summary || []), ...(item.content || [])].join('\n');
+          const prev = itemTexts.get(item.id) || '';
+          const delta = text.startsWith(prev) ? text.slice(prev.length) : text;
+          if (delta) yield* appendText(item.id, 'thinking', delta);
+          yield* stopBlock(item.id);
+          if (text) yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', thinking: text }] } } as ProviderMessage;
+          return;
+        }
+      }
+
+      if (message.method === 'thread/tokenUsage/updated') {
+        const tokenUsage = params.tokenUsage as Record<string, any> | undefined;
+        const last = tokenUsage?.last || tokenUsage?.total;
+        if (last) {
+          usage.inputTokens = Number(last.input_tokens || last.inputTokens || last.input || usage.inputTokens || 0);
+          usage.outputTokens = Number(last.output_tokens || last.outputTokens || last.output || usage.outputTokens || 0);
+        }
+        return;
+      }
+
+      if (message.method === 'turn/completed') {
+        const turn = params.turn as Record<string, any> | undefined;
+        if (turn?.status === 'failed') {
+          const errMsg = turn.error?.message || 'Turn failed';
+          result = lastAgentMessage || `Codex error: ${errMsg}`;
+          yield { type: 'result', subtype: 'error_max_turns', result, session_id: sessionId } as ProviderMessage;
+        } else {
+          result = lastAgentMessage || result;
+          yield {
+            type: 'result',
+            result,
+            session_id: sessionId,
+            usage: { input_tokens: usage.inputTokens, output_tokens: usage.outputTokens },
+            total_cost_usd: 0,
+          } as ProviderMessage;
+        }
+        turnDone = true;
+        return;
+      }
+
+      if (message.method === 'error') {
+        const error = params.error as Record<string, unknown> | undefined;
+        const errMsg = String(error?.message || params.message || 'Codex app-server error');
+        result = lastAgentMessage || `Codex error: ${errMsg}`;
+        yield { type: 'result', subtype: 'error_max_turns', result, session_id: sessionId } as ProviderMessage;
+        turnDone = true;
+      }
+    };
 
     try {
-      const { events } = await thread.runStreamed(input, {
-        signal: abort.signal,
+      client = await CodexAppServerClient.start({
+        env: appEnv,
+        requestHandler: (message) => handleCodexServerRequest(message, opts),
+      });
+      const structuredInputItems = await resolveCodexStructuredInputItems(client, opts.prompt, opts.cwd, opts.inputItems);
+      const { input, cleanup } = await prepareCodexInput(opts.prompt, opts.images, structuredInputItems);
+      pendingInputCleanups.add(cleanup);
+
+      const threadResult = opts.resumeId
+        ? await client.request('thread/resume', { threadId: opts.resumeId, ...threadParams, excludeTurns: true })
+        : await client.request('thread/start', threadParams);
+      const thread = (threadResult as Record<string, any>).thread;
+      sessionId = String(thread?.id || sessionId || `codex-${Date.now()}`);
+      if (!emittedInit) {
+        emittedInit = true;
+        yield { type: 'system', subtype: 'init', session_id: sessionId, model } as ProviderMessage;
+      }
+
+      const turnResult = await client.request('turn/start', {
+        threadId: sessionId,
+        input,
+        cwd: opts.cwd,
+        approvalPolicy: (codexConfig?.approvalPolicy as any) || 'never',
+        sandboxPolicy,
+        model,
+        ...(serviceTier ? { serviceTier } : {}),
+        ...(modelReasoningEffort ? { effort: modelReasoningEffort } : {}),
+        ...(reasoningSummary ? { summary: reasoningSummary } : {}),
+        ...(opts.outputSchema ? { outputSchema: opts.outputSchema } : {}),
+      }) as Record<string, any>;
+      cleanup();
+      pendingInputCleanups.delete(cleanup);
+      currentTurnId = String(turnResult.turn?.id || currentTurnId);
+
+      opts.onRunReady?.({
+        get active() { return active; },
+        inject(text: string, images?: ProviderRunOptions['images'], inputItems?: ProviderInputItem[]): boolean {
+          if (!active || !client || !currentTurnId) return false;
+          resolveCodexStructuredInputItems(client, text, opts.cwd, inputItems)
+            .then(items => prepareCodexInput(text, images, items))
+            .then(({ input: steerInput, cleanup: steerCleanup }) => {
+              pendingInputCleanups.add(steerCleanup);
+              return client!.request('turn/steer', {
+                threadId: sessionId,
+                expectedTurnId: currentTurnId,
+                input: steerInput,
+              }).finally(() => {
+                steerCleanup();
+                pendingInputCleanups.delete(steerCleanup);
+              });
+            })
+            .catch(err => console.error('[codex] failed to steer turn:', err));
+          return true;
+        },
+        close() {
+          active = false;
+          abort.abort();
+        },
+        async interrupt() {
+          if (client && currentTurnId) {
+            await client.request('turn/interrupt', { threadId: sessionId, turnId: currentTurnId }).catch(() => {});
+          }
+          abort.abort();
+        },
+        async mcpServerStatus() {
+          if (!client) return [];
+          const response = await client.request('mcpServerStatus/list', { limit: 100, detail: 'full' }) as { data?: unknown[] };
+          return response.data || [];
+        },
       });
 
-      for await (const event of events) {
-        switch (event.type) {
-          case 'thread.started': {
-            sessionId = event.thread_id || sessionId || `codex-${Date.now()}`;
-            yield {
-              type: 'system',
-              subtype: 'init',
-              session_id: sessionId,
-              model: model || 'codex-default',
-            } as ProviderMessage;
-            break;
-          }
-
-          case 'turn.started':
-            break;
-
-          case 'turn.completed': {
-            if (event.usage) {
-              usage.inputTokens = event.usage.input_tokens || 0;
-              usage.outputTokens = event.usage.output_tokens || 0;
-            }
-            result = lastAgentMessage || result;
-            yield {
-              type: 'result',
-              result,
-              session_id: sessionId,
-              usage: {
-                input_tokens: usage.inputTokens,
-                output_tokens: usage.outputTokens,
-              },
-              total_cost_usd: 0,
-            } as ProviderMessage;
-            break;
-          }
-
-          case 'turn.failed': {
-            const errMsg = event.error?.message || 'Turn failed';
-            console.error(`[codex] turn failed: ${errMsg}`);
-            result = lastAgentMessage || `Codex error: ${errMsg}`;
-            yield {
-              type: 'result',
-              subtype: 'error_max_turns',
-              result,
-              session_id: sessionId,
-            } as ProviderMessage;
-            break;
-          }
-
-          case 'error': {
-            if (event.message?.includes('Reconnecting')) {
-              console.log(`[codex] ${event.message}`);
-              break;
-            }
-            console.error(`[codex] error: ${event.message}`);
-            break;
-          }
-
-          case 'item.started':
-          case 'item.updated':
-          case 'item.completed': {
-            const item = event.item;
-            if (!item) break;
-
-            switch (item.type) {
-              case 'agent_message': {
-                const text = item.text || '';
-                if (!text && event.type === 'item.completed') break;
-                const prev = itemTexts.get(item.id) || '';
-
-                if (!startedBlocks.has(item.id)) {
-                  startedBlocks.add(item.id);
-                  yield se({ type: 'content_block_start', content_block: { type: 'text' } });
-                }
-
-                const delta = text.slice(prev.length);
-                if (delta) {
-                  yield se({ type: 'content_block_delta', delta: { type: 'text_delta', text: delta } });
-                  itemTexts.set(item.id, text);
-                }
-
-                if (event.type === 'item.completed') {
-                  yield se({ type: 'content_block_stop' });
-                  startedBlocks.delete(item.id);
-                  itemTexts.delete(item.id);
-                  lastAgentMessage = text;
-                  result = text;
-                  yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } } as ProviderMessage;
-                }
-                break;
-              }
-
-              case 'reasoning': {
-                const text = item.text || '';
-                if (!text && event.type === 'item.completed') break;
-                const prev = itemTexts.get(item.id) || '';
-
-                if (!startedBlocks.has(item.id)) {
-                  startedBlocks.add(item.id);
-                  yield se({ type: 'content_block_start', content_block: { type: 'thinking' } });
-                }
-
-                const delta = text.slice(prev.length);
-                if (delta) {
-                  yield se({ type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: delta } });
-                  itemTexts.set(item.id, text);
-                }
-
-                if (event.type === 'item.completed') {
-                  yield se({ type: 'content_block_stop' });
-                  startedBlocks.delete(item.id);
-                  itemTexts.delete(item.id);
-                  yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', thinking: text }] } } as ProviderMessage;
-                }
-                break;
-              }
-
-              case 'command_execution': {
-                const toolId = `codex-${item.id}`;
-                if (event.type === 'item.started') {
-                  yield se({ type: 'content_block_start', content_block: { type: 'tool_use', id: toolId, name: 'Bash' } });
-                  yield se({ type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: JSON.stringify({ command: item.command }) } });
-                  yield se({ type: 'content_block_stop' });
-                  yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: toolId, name: 'Bash', input: { command: item.command } }] } } as ProviderMessage;
-                }
-                if (event.type === 'item.completed') {
-                  yield {
-                    type: 'result', subtype: 'tool_result', tool_use_id: toolId,
-                    content: [{ type: 'text', text: item.aggregated_output || '(no output)' }],
-                    is_error: item.status === 'failed',
-                  } as ProviderMessage;
-                }
-                break;
-              }
-
-              case 'file_change': {
-                if (event.type !== 'item.completed') break;
-                const changes = item.changes || [];
-                const firstPath = changes[0]?.path || '';
-                const desc = changes.map(c => `${c.kind}: ${c.path}`).join('\n') || 'Files modified';
-                const isCreate = changes.length === 1 && changes[0]?.kind === 'add';
-                const toolName = isCreate ? 'Write' : 'Edit';
-                const toolId = `codex-${item.id}`;
-                const input = { file_path: firstPath, description: desc };
-
-                yield se({ type: 'content_block_start', content_block: { type: 'tool_use', id: toolId, name: toolName } });
-                yield se({ type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } });
-                yield se({ type: 'content_block_stop' });
-                yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: toolId, name: toolName, input }] } } as ProviderMessage;
-                yield { type: 'result', subtype: 'tool_result', tool_use_id: toolId, content: [{ type: 'text', text: desc }] } as ProviderMessage;
-                break;
-              }
-
-              case 'mcp_tool_call': {
-                const toolId = `codex-${item.id}`;
-                const tool = item.tool || 'unknown';
-                if (!startedBlocks.has(item.id)) {
-                  startedBlocks.add(item.id);
-                  const input = item.arguments || {};
-                  yield se({ type: 'content_block_start', content_block: { type: 'tool_use', id: toolId, name: tool } });
-                  yield se({ type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } });
-                  yield se({ type: 'content_block_stop' });
-                  yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: toolId, name: tool, input }] } } as ProviderMessage;
-                }
-                if (event.type === 'item.completed') {
-                  startedBlocks.delete(item.id);
-                  const text = item.error?.message
-                    || (item.result?.content?.map((b: any) => b.text || '').join('\n'))
-                    || '(no result)';
-                  yield {
-                    type: 'result', subtype: 'tool_result', tool_use_id: toolId,
-                    content: [{ type: 'text', text }],
-                    is_error: item.status === 'failed',
-                  } as ProviderMessage;
-                }
-                break;
-              }
-
-              case 'web_search': {
-                const toolId = `codex-${item.id}`;
-                if (!startedBlocks.has(item.id)) {
-                  startedBlocks.add(item.id);
-                  yield se({ type: 'content_block_start', content_block: { type: 'tool_use', id: toolId, name: 'WebSearch' } });
-                  yield se({ type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: JSON.stringify({ query: item.query }) } });
-                  yield se({ type: 'content_block_stop' });
-                  yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: toolId, name: 'WebSearch', input: { query: item.query } }] } } as ProviderMessage;
-                }
-                if (event.type === 'item.completed') {
-                  startedBlocks.delete(item.id);
-                  yield { type: 'result', subtype: 'tool_result', tool_use_id: toolId, content: [{ type: 'text', text: `Searched: ${item.query}` }] } as ProviderMessage;
-                }
-                break;
-              }
-
-              case 'todo_list': {
-                if (event.type !== 'item.completed') break;
-                const todos = (item as any).items || [];
-                const toolId = `codex-${item.id}`;
-                const input = { todos: todos.map((t: any) => ({ content: t.text, status: t.completed ? 'completed' : 'in_progress', activeForm: t.text })) };
-
-                yield se({ type: 'content_block_start', content_block: { type: 'tool_use', id: toolId, name: 'TodoWrite' } });
-                yield se({ type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } });
-                yield se({ type: 'content_block_stop' });
-                yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: toolId, name: 'TodoWrite', input }] } } as ProviderMessage;
-                yield { type: 'result', subtype: 'tool_result', tool_use_id: toolId, content: [{ type: 'text', text: 'Plan updated' }] } as ProviderMessage;
-                break;
-              }
-
-              case 'error': {
-                console.error(`[codex] item error: ${item.message}`);
-                break;
-              }
-            }
-            break;
-          }
+      console.log(`[codex] ${opts.resumeId ? 'resumed' : 'started'} app-server thread: model=${model} effort=${modelReasoningEffort || 'default'} threadId=${sessionId}`);
+      for await (const notification of client.events()) {
+        if (abort.signal.aborted || !active) break;
+        for (const providerMessage of handleNotification(notification)) {
+          yield providerMessage;
         }
-
-        // Break on terminal events
-        if (event.type === 'turn.completed' || event.type === 'turn.failed') {
-          break;
-        }
+        if (turnDone) break;
       }
     } catch (err: any) {
       if (err?.name === 'AbortError') {
@@ -1292,8 +2096,12 @@ export class CodexProvider implements Provider {
         } as ProviderMessage;
       }
     } finally {
+      active = false;
       this.activeAbort = null;
-      cleanup();
+      for (const cleanup of pendingInputCleanups) {
+        try { cleanup(); } catch { /* ignore */ }
+      }
+      client?.close();
     }
 
     return {
@@ -1321,5 +2129,6 @@ export class CodexProvider implements Provider {
       refreshTimer = null;
       nextRefreshAt = null;
     }
+    closeCodexAppServerRpcClient();
   }
 }

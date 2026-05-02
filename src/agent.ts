@@ -21,6 +21,7 @@ function resolveSandbox(sandbox: SandboxSettings, channel?: string): SandboxSett
 import { buildSystemPrompt } from './system-prompt.js';
 import { createAgentMcpServer } from './tools/index.js';
 import { getEligibleSkills, matchSkillToPrompt, type Skill } from './skills/loader.js';
+import { applyPersistedSkillEnv, mergeSkillEnv } from './skills/env.js';
 import { createDefaultHooks, mergeHooks, type HookEvent, type HookCallbackMatcher } from './hooks/index.js';
 import { getAllAgents } from './agents/definitions.js';
 import { SessionManager, sdkMessageToSession, type SessionMessage, type MessageMetadata } from './session/manager.js';
@@ -112,7 +113,7 @@ function getShellEnv(): Record<string, string> {
 
 // clean env for SDK subprocess - strip vscode vars that cause file watcher crashes
 function cleanEnvForSdk(): Record<string, string> {
-  const env = getShellEnv();
+  const env = mergeSkillEnv(getShellEnv());
   // Strip vars that cause issues in the SDK subprocess
   for (const key of Object.keys(env)) {
     if (key.startsWith('VSCODE_')) delete env[key];
@@ -132,6 +133,7 @@ function cleanEnvForSdk(): Record<string, string> {
 export type AgentOptions = {
   prompt: string;
   images?: import('./providers/types.js').ImageAttachment[];
+  inputItems?: import('./providers/types.js').ProviderInputItem[];
   sessionId?: string;
   resumeId?: string;
   config: Config;
@@ -147,6 +149,7 @@ export type AgentOptions = {
   hooks?: Partial<Record<HookEvent, HookCallbackMatcher[]>>;
   canUseTool?: (toolName: string, input: Record<string, unknown>, options: unknown) => Promise<unknown>;
   abortController?: AbortController;
+  outputSchema?: unknown;
   messageMetadata?: MessageMetadata;
   onRunReady?: (handle: RunHandle) => void;
   lastPulseAt?: number;
@@ -168,6 +171,7 @@ export type AgentResult = {
 export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
   const {
     prompt,
+    inputItems,
     sessionId: providedSessionId,
     resumeId,
     config,
@@ -186,6 +190,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
 
   const startTime = Date.now();
   const sessionManager = new SessionManager(config);
+  applyPersistedSkillEnv();
 
   const sessionId = providedSessionId || sessionManager.generateSessionId();
 
@@ -195,7 +200,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
   // match skill to prompt if applicable
   const matchedSkill = matchSkillToPrompt(prompt, skills);
   let enhancedPrompt = prompt;
-  if (matchedSkill) {
+  if (matchedSkill && !(config.provider.name === 'codex' && inputItems?.some(item => item.type === 'skill'))) {
     enhancedPrompt = `[Skill: ${matchedSkill.name}]\n\n${matchedSkill.content}\n\n---\n\nUser request: ${prompt}`;
   }
 
@@ -242,6 +247,8 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
   console.log(`[agent] runAgent starting: provider=${provider.name} model=${config.model} permissionMode=${config.permissionMode} sessionId=${sessionId} resumeId=${resumeId || 'none'} sandbox=${effectiveSandbox.enabled ? 'on' : 'off'} mcpServers=${Object.keys(allMcpServers).join(',')}`);
   const q = provider.query({
     prompt: enhancedPrompt,
+    inputItems,
+    images: opts.images,
     systemPrompt,
     model: config.model,
     config,
@@ -255,6 +262,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     hooks: hooks as any,
     mcpServer: allMcpServers,
     sandbox: effectiveSandbox,
+    outputSchema: opts.outputSchema,
   });
 
   // collect messages
@@ -355,6 +363,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
 export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, AgentResult, unknown> {
   const {
     prompt,
+    inputItems,
     sessionId: providedSessionId,
     resumeId,
     config,
@@ -370,12 +379,13 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
 
   const startTime = Date.now();
   const sessionManager = new SessionManager(config);
+  applyPersistedSkillEnv();
   const sessionId = providedSessionId || sessionManager.generateSessionId();
 
   const skills = getEligibleSkills(config);
   const matchedSkill = matchSkillToPrompt(prompt, skills);
   let enhancedPrompt = prompt;
-  if (matchedSkill) {
+  if (matchedSkill && !(config.provider.name === 'codex' && inputItems?.some(item => item.type === 'skill'))) {
     enhancedPrompt = `[Skill: ${matchedSkill.name}]\n\n${matchedSkill.content}\n\n---\n\nUser request: ${prompt}`;
   }
 
@@ -417,6 +427,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
   console.log(`[agent] streamAgent starting: provider=${provider.name} model=${config.model} permissionMode=${config.permissionMode} sessionId=${sessionId} resumeId=${resumeId || 'none'} sandbox=${effectiveSandbox.enabled ? 'on' : 'off'} channel=${channel || 'desktop'} mcpServers=${Object.keys(allMcpServers).join(',')}`);
   const q = provider.query({
     prompt: enhancedPrompt,
+    inputItems,
     images: opts.images,
     systemPrompt,
     model: config.model,
@@ -432,6 +443,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
     hooks: hooks as any,
     mcpServer: allMcpServers,
     sandbox: effectiveSandbox,
+    outputSchema: opts.outputSchema,
     onRunReady: opts.onRunReady,
   });
 

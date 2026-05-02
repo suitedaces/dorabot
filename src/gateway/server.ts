@@ -1,13 +1,14 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'node:http';
-import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, chmodSync, unlinkSync, realpathSync, cpSync, createWriteStream, watch, type FSWatcher } from 'node:fs';
+import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, chmodSync, unlinkSync, realpathSync, watch, cpSync, createWriteStream, type FSWatcher } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
-import { pipeline } from 'node:stream/promises';
 import * as nodePty from 'node-pty';
 import { resolve as pathResolve, join, dirname, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { execSync, execFileSync } from 'node:child_process';
 import { createConnection } from 'node:net';
+import { pipeline } from 'node:stream/promises';
+import matter from 'gray-matter';
 
 // Resolve a user-supplied path. Relative paths resolve against `base` when
 // provided (fall back to process.cwd() for legacy callers), NOT against the
@@ -29,6 +30,7 @@ import { streamAgent, type AgentResult } from '../agent.js';
 import type { RunHandle } from '../providers/types.js';
 import { startScheduler, loadCalendarItems, migrateCronToCalendar, type SchedulerRunner } from '../calendar/scheduler.js';
 import { checkSkillEligibility, loadAllSkills, findSkillByName } from '../skills/loader.js';
+import { applyPersistedSkillEnv, getSkillEnvStatus, saveSkillEnv } from '../skills/env.js';
 import { builtInAgents, getAllAgents } from '../agents/definitions.js';
 import { getWorktreeStats, removeWorktree } from '../worktree/manager.js';
 import type { InboundMessage } from '../channels/types.js';
@@ -52,7 +54,7 @@ import {
 import { loadResearch, saveResearch, readResearchContent, writeResearchFile, nextId as nextResearchId, type ResearchItem } from '../tools/research.js';
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
 import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, onClaudeAuthRequired } from '../providers/claude.js';
-import { isCodexInstalled, hasCodexAuth, onCodexAuthRequired } from '../providers/codex.js';
+import { isCodexInstalled, hasCodexAuth, onCodexAuthRequired, getCodexModelCatalog, getCodexAppServerSnapshot, callCodexAppServer, closeCodexAppServerRpcClient } from '../providers/codex.js';
 import type { ProviderName } from '../config.js';
 import { buildProviderAuthGate, classifyAuthRecovery, type ProviderAuthGate } from './auth-state.js';
 import { startHttpAuthServer, type HttpAuthServer } from './http-auth-server.js';
@@ -65,6 +67,7 @@ import {
   GATEWAY_SOCKET_PATH,
   GATEWAY_TOKEN_PATH,
   OWNER_CHAT_IDS_PATH,
+  CODEX_DIR,
   SKILLS_DIR,
   TELEGRAM_DIR,
   TELEGRAM_TOKEN_PATH,
@@ -75,6 +78,148 @@ import {
 // The old osascript approach triggered macOS TCC prompts on every call.
 function macNotify(_title: string, _body: string) {
   // no-op: desktop picks up broadcast events and shows toasts/native notifications
+}
+
+const MARKETPLACE_REPO = 'openai/skills';
+const MARKETPLACE_PATH = 'skills/.curated';
+const SKILL_INSTALLER_DIR = join(CODEX_DIR, 'skills', '.system', 'skill-installer');
+const SKILL_LIST_SCRIPT = join(SKILL_INSTALLER_DIR, 'scripts', 'list-skills.py');
+const SKILL_INSTALL_SCRIPT = join(SKILL_INSTALLER_DIR, 'scripts', 'install-skill-from-github.py');
+const DORABOT_SKILL_META_NAME = '.dorabot-skill.json';
+
+type MarketplaceSkill = {
+  name: string;
+  description: string;
+  repo: string;
+  skillPath: string;
+  htmlUrl: string;
+  installed: boolean;
+  source: 'official';
+  metadata: { requires?: { bins?: string[]; env?: string[] } };
+};
+
+type SkillSource = 'dorabot' | 'bundled' | 'claude' | 'project' | 'other';
+type SkillMarketplaceSource = 'community' | 'official';
+type InstalledSkillMeta = {
+  source: SkillMarketplaceSource;
+  repo: string;
+  skillPath: string;
+  installedAt: string;
+};
+
+function skillManagerEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    CODEX_HOME: CODEX_DIR,
+  };
+}
+
+function parseSkillMetadata(raw: string): { description: string; metadata: { requires?: { bins?: string[]; env?: string[] } } } {
+  const parsed = matter(raw);
+  return {
+    description: typeof parsed.data.description === 'string' ? parsed.data.description : '',
+    metadata: (parsed.data.metadata as { requires?: { bins?: string[]; env?: string[] } } | undefined) || {},
+  };
+}
+
+async function loadMarketplaceSkill(name: string, installed: boolean): Promise<MarketplaceSkill> {
+  const skillPath = `${MARKETPLACE_PATH}/${name}`;
+  const htmlUrl = `https://github.com/${MARKETPLACE_REPO}/tree/main/${skillPath}`;
+  const rawUrl = `https://raw.githubusercontent.com/${MARKETPLACE_REPO}/main/${skillPath}/SKILL.md`;
+  const res = await fetch(rawUrl);
+  if (!res.ok) {
+    throw new Error(`failed to fetch marketplace skill ${name}: HTTP ${res.status}`);
+  }
+  const raw = await res.text();
+  const { description, metadata } = parseSkillMetadata(raw);
+  return {
+    name,
+    description,
+    repo: MARKETPLACE_REPO,
+    skillPath,
+    htmlUrl,
+    installed,
+    source: 'official',
+    metadata,
+  };
+}
+
+function readInstalledSkillMeta(skillDir: string): InstalledSkillMeta | null {
+  const metaPath = join(skillDir, DORABOT_SKILL_META_NAME);
+  if (!existsSync(metaPath)) return null;
+  try {
+    const raw = readFileSync(metaPath, 'utf-8');
+    const parsed = JSON.parse(raw) as Partial<InstalledSkillMeta>;
+    if (parsed.source !== 'community' && parsed.source !== 'official') return null;
+    if (typeof parsed.repo !== 'string' || typeof parsed.skillPath !== 'string') return null;
+    return {
+      source: parsed.source,
+      repo: parsed.repo,
+      skillPath: parsed.skillPath,
+      installedAt: typeof parsed.installedAt === 'string' ? parsed.installedAt : new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeInstalledSkillMeta(skillDir: string, meta: InstalledSkillMeta) {
+  writeFileSync(join(skillDir, DORABOT_SKILL_META_NAME), JSON.stringify(meta, null, 2), 'utf-8');
+}
+
+function isUserInstalledSkill(skillPath: string): boolean {
+  const prefix = SKILLS_DIR + sep;
+  return skillPath.startsWith(prefix);
+}
+
+function getSkillSource(skillPath: string, config: Config): SkillSource {
+  if (skillPath.startsWith(SKILLS_DIR)) return 'dorabot';
+  const bundledSkillsDir = join(config.cwd, 'skills');
+  if (skillPath.startsWith(bundledSkillsDir)) return 'bundled';
+  const claudeSkillsDir = config.skills.dirs.find(dir => dir.includes('/.claude/skills'));
+  if (claudeSkillsDir && skillPath.startsWith(claudeSkillsDir)) return 'claude';
+  if (skillPath.startsWith(config.cwd)) return 'project';
+  return 'other';
+}
+
+function isSkillEnabled(name: string, config: Config): boolean {
+  if (config.skills.disabled.includes(name)) return false;
+  return config.skills.enabled.length === 0 || config.skills.enabled.includes(name);
+}
+
+async function installSkillFromRepoTarball(repo: string, skillPath: string, installDir: string) {
+  const tmp = join(tmpdir(), `dorabot-skill-${Date.now()}`);
+  const tarPath = tmp + '.tar.gz';
+  const extractDir = tmp + '-extract';
+
+  try {
+    const tarUrl = `https://github.com/${repo}/archive/HEAD.tar.gz`;
+    const res = await fetch(tarUrl, { redirect: 'follow' });
+    if (!res.ok || !res.body) throw new Error(`download failed: HTTP ${res.status}`);
+
+    await pipeline(res.body as any, createWriteStream(tarPath));
+
+    mkdirSync(extractDir, { recursive: true });
+    execFileSync('tar', ['xzf', tarPath, '-C', extractDir]);
+
+    const roots = readdirSync(extractDir);
+    if (roots.length !== 1) throw new Error('unexpected tarball structure');
+    const srcDir = join(extractDir, roots[0], skillPath);
+
+    if (!existsSync(srcDir) || !statSync(srcDir).isDirectory()) {
+      throw new Error(`skill path not found in repo: ${skillPath}`);
+    }
+
+    if (!existsSync(join(srcDir, 'SKILL.md'))) {
+      throw new Error(`no SKILL.md found in ${skillPath}`);
+    }
+
+    mkdirSync(SKILLS_DIR, { recursive: true });
+    cpSync(srcDir, installDir, { recursive: true });
+  } finally {
+    if (existsSync(tarPath)) rmSync(tarPath, { force: true });
+    if (existsSync(extractDir)) rmSync(extractDir, { recursive: true, force: true });
+  }
 }
 
 // ── Tool status display maps ──────────────────────────────────────────
@@ -426,6 +571,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   // default and ignores ~/.dorabot/config.json.
   setBrowserConfig(config.browser || {});
   ensureWorkspace();
+  applyPersistedSkillEnv();
   mkdirSync(dirname(socketPath), { recursive: true });
 
   // stable gateway auth token — reuse existing, only generate on first run
@@ -2292,6 +2438,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   async function handleAgentRun(params: {
     prompt: string;
     images?: Array<{ data: string; mediaType: string }>;
+    inputItems?: import('../providers/types.js').ProviderInputItem[];
     sessionKey: string;
     source: string;
     channel?: string;
@@ -2299,7 +2446,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     extraContext?: string;
     messageMetadata?: import('../session/manager.js').MessageMetadata;
   }): Promise<AgentResult | null> {
-    const { prompt, images, sessionKey, source, channel, cwd, extraContext, messageMetadata } = params;
+    const { prompt, images, inputItems, sessionKey, source, channel, cwd, extraContext, messageMetadata } = params;
     console.log(`[gateway] agent run: source=${source} sessionKey=${sessionKey} prompt="${prompt.slice(0, 80)}..."`);
 
     let providerAuth = await getProviderAuthGate();
@@ -2317,7 +2464,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     if (!providerAuth.authenticated && providerAuth.reconnectRequired) {
       console.log(`[gateway] ${providerAuth.providerName} silent refresh failed, triggering re-auth for ${source}`);
       const started = await startReauthFlow({ prompt, sessionKey, source, channel, chatId: messageMetadata?.chatId, messageMetadata }).catch(() => false);
-      if (started) return null;
+      if (started) {
+        sessionRegistry.refreshFromDb(sessionKey);
+        broadcastSessionUpdate(sessionKey);
+        return null;
+      }
     }
     if (!providerAuth.authenticated) {
       const error = providerAuth.error || 'Not authenticated';
@@ -2326,6 +2477,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         broadcastAuthRequired(providerAuth.providerName, error);
       }
       broadcast({ event: 'agent.error', data: { source, sessionKey, error, timestamp: Date.now() } });
+      sessionRegistry.refreshFromDb(sessionKey);
+      broadcastSessionUpdate(sessionKey);
       return null;
     }
 
@@ -2383,6 +2536,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         const gen = streamAgent({
           prompt,
           images,
+          inputItems,
           sessionId: session?.sessionId,
           resumeId,
           config: runConfig,
@@ -2976,6 +3130,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
             // per-turn: mark idle so sidebar spinner stops
             sessionRegistry.setActiveRun(sessionKey, false);
+            sessionRegistry.refreshFromDb(sessionKey);
             broadcastStatus(sessionKey, 'idle');
             broadcast({ event: 'status.update', data: { activeRun: false, source, sessionKey } });
             broadcastSessionUpdate(sessionKey);
@@ -3081,6 +3236,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         cancelPendingQuestionsForSession(sessionKey, 'cancelled');
         sessionSnapshots.delete(sessionKey);
         sessionRegistry.setActiveRun(sessionKey, false);
+        sessionRegistry.refreshFromDb(sessionKey);
         broadcastStatus(sessionKey, 'idle');
         broadcast({ event: 'status.update', data: { activeRun: false, source, sessionKey } });
         broadcastSessionUpdate(sessionKey);
@@ -3217,6 +3373,14 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'chat.send': {
           const prompt = params?.prompt as string;
           const images = params?.images as Array<{ data: string; mediaType: string }> | undefined;
+          const inputItems = Array.isArray(params?.inputItems)
+            ? (params.inputItems as import('../providers/types.js').ProviderInputItem[]).filter((item) => (
+                item
+                && (item.type === 'skill' || item.type === 'mention')
+                && typeof item.name === 'string'
+                && typeof item.path === 'string'
+              ))
+            : undefined;
           if (!prompt) return { id, error: 'prompt required' };
 
           const chatId = (params?.chatId as string) || randomUUID();
@@ -3247,7 +3411,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           // try injection into active run first
           const handle = runHandles.get(sessionKey);
           if (handle?.active) {
-            handle.inject(prompt, images);
+            handle.inject(prompt, images, inputItems);
             // record injected user message in session (CLI doesn't echo user text back)
             const injectedContent: Array<Record<string, unknown>> = [];
             if (images?.length) {
@@ -3271,6 +3435,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           handleAgentRun({
             prompt,
             images,
+            inputItems,
             sessionKey,
             source: 'desktop/chat',
           });
@@ -4261,9 +4426,33 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             metadata: skill.metadata,
             eligibility: checkSkillEligibility(skill, config),
             builtIn: !skill.path.startsWith(userSkillsDir),
+            source: getSkillSource(skill.path, config),
+            enabled: isSkillEnabled(skill.name, config),
+            marketplaceSource: isUserInstalledSkill(skill.path) ? readInstalledSkillMeta(skill.dir)?.source || null : null,
             files: skill.files,
           }));
           return { id, result };
+        }
+
+        case 'skills.marketplace.list': {
+          try {
+            const raw = execFileSync('python3', [SKILL_LIST_SCRIPT, '--format', 'json'], {
+              env: skillManagerEnv(),
+              encoding: 'utf-8',
+            });
+            const installedNames = new Set(
+              loadAllSkills(config)
+                .filter(skill => isUserInstalledSkill(skill.path))
+                .map(skill => skill.name),
+            );
+            const listed = JSON.parse(raw) as Array<{ name: string; installed?: boolean }>;
+            const skills = await Promise.all(
+              listed.map(skill => loadMarketplaceSkill(skill.name, installedNames.has(skill.name))),
+            );
+            return { id, result: skills };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
         }
 
         case 'skills.read': {
@@ -4303,6 +4492,69 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           } catch (err) {
             return { id, error: err instanceof Error ? err.message : String(err) };
           }
+        }
+
+        case 'skills.env.status': {
+          const name = params?.name as string;
+          if (!name) return { id, error: 'name required' };
+          const skill = findSkillByName(name, config);
+          if (!skill) return { id, error: `skill not found: ${name}` };
+          const envNames = skill.metadata.requires?.env || [];
+          return {
+            id,
+            result: {
+              name: skill.name,
+              env: envNames,
+              ...getSkillEnvStatus(envNames),
+            },
+          };
+        }
+
+        case 'skills.env.set': {
+          const name = params?.name as string;
+          const values = params?.values as Record<string, unknown> | undefined;
+          if (!name) return { id, error: 'name required' };
+          if (!values || typeof values !== 'object') return { id, error: 'values required' };
+
+          const skill = findSkillByName(name, config);
+          if (!skill) return { id, error: `skill not found: ${name}` };
+
+          const allowedEnv = new Set(skill.metadata.requires?.env || []);
+          if (!allowedEnv.size) {
+            return { id, error: `skill "${name}" does not declare env requirements` };
+          }
+
+          const entries = Object.entries(values);
+          if (!entries.length) return { id, error: 'no values provided' };
+
+          const normalized: Record<string, string> = {};
+          for (const [key, value] of entries) {
+            if (!allowedEnv.has(key)) {
+              return { id, error: `env var not allowed for skill "${name}": ${key}` };
+            }
+            if (!/^[A-Z][A-Z0-9_]*$/.test(key)) {
+              return { id, error: `invalid env var name: ${key}` };
+            }
+            if (typeof value !== 'string') {
+              return { id, error: `env var value must be a string: ${key}` };
+            }
+            if (!value.trim()) continue;
+            normalized[key] = value.trim();
+          }
+
+          if (!Object.keys(normalized).length) {
+            return { id, error: 'no non-empty values provided' };
+          }
+
+          const saved = saveSkillEnv(normalized);
+          return {
+            id,
+            result: {
+              name: skill.name,
+              ...saved,
+              ...getSkillEnvStatus(skill.metadata.requires?.env || []),
+            },
+          };
         }
 
         case 'skills.create': {
@@ -4354,6 +4606,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const repo = params?.repo as string;
           const skillPath = params?.skillPath as string;
           const skillName = (params?.name as string) || skillPath?.split('/').pop();
+          const sourceParam = params?.source as string | undefined;
           if (!repo) return { id, error: 'repo required' };
           if (!skillPath) return { id, error: 'skillPath required' };
           if (!skillName) return { id, error: 'could not determine skill name' };
@@ -4368,55 +4621,44 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!/^[a-zA-Z0-9_\-]+$/.test(skillName)) {
             return { id, error: 'invalid skill name' };
           }
+          if (sourceParam && !['community', 'official'].includes(sourceParam)) {
+            return { id, error: 'invalid skill source' };
+          }
+          const source: SkillMarketplaceSource = sourceParam === 'official' ? 'official' : 'community';
 
           const installDir = join(SKILLS_DIR, skillName);
           if (existsSync(installDir)) {
             return { id, error: `skill "${skillName}" already installed` };
           }
 
-          const tmp = join(tmpdir(), `dorabot-skill-${Date.now()}`);
-          const tarPath = tmp + '.tar.gz';
-          const extractDir = tmp + '-extract';
-
           try {
-            // Download repo tarball (single HTTP request, no API rate limits, no auth)
-            const tarUrl = `https://github.com/${repo}/archive/HEAD.tar.gz`;
-            const res = await fetch(tarUrl, { redirect: 'follow' });
-            if (!res.ok || !res.body) throw new Error(`download failed: HTTP ${res.status}`);
-
-            await pipeline(res.body as any, createWriteStream(tarPath));
-
-            // Extract tarball using system tar (always available on macOS)
-            mkdirSync(extractDir, { recursive: true });
-            execFileSync('tar', ['xzf', tarPath, '-C', extractDir], { timeout: 30_000 });
-
-            // Find extracted root dir (format: repo-name-{sha}/)
-            const roots = readdirSync(extractDir);
-            if (roots.length !== 1) throw new Error('unexpected tarball structure');
-            const srcDir = join(extractDir, roots[0], skillPath);
-
-            if (!existsSync(srcDir) || !statSync(srcDir).isDirectory()) {
-              throw new Error(`skill path not found in repo: ${skillPath}`);
+            if (source === 'official') {
+              execFileSync('python3', [
+                SKILL_INSTALL_SCRIPT,
+                '--repo', repo,
+                '--path', skillPath,
+                '--dest', SKILLS_DIR,
+                '--name', skillName,
+              ], {
+                env: skillManagerEnv(),
+                encoding: 'utf-8',
+              });
+            } else {
+              await installSkillFromRepoTarball(repo, skillPath, installDir);
             }
 
-            // Verify SKILL.md exists
-            if (!existsSync(join(srcDir, 'SKILL.md'))) {
-              throw new Error(`no SKILL.md found in ${skillPath}`);
-            }
-
-            // Copy skill directory to install location
-            mkdirSync(SKILLS_DIR, { recursive: true });
-            cpSync(srcDir, installDir, { recursive: true });
+            writeInstalledSkillMeta(installDir, {
+              source,
+              repo,
+              skillPath,
+              installedAt: new Date().toISOString(),
+            });
 
             const skill = findSkillByName(skillName, config);
             return { id, result: { name: skillName, installed: true, path: installDir, skill } };
           } catch (err) {
             if (existsSync(installDir)) rmSync(installDir, { recursive: true, force: true });
             return { id, error: err instanceof Error ? err.message : String(err) };
-          } finally {
-            // cleanup temp files
-            if (existsSync(tarPath)) rmSync(tarPath, { force: true });
-            if (existsSync(extractDir)) rmSync(extractDir, { recursive: true, force: true });
           }
         }
 
@@ -4439,6 +4681,31 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           } catch (err) {
             return { id, error: err instanceof Error ? err.message : String(err) };
           }
+        }
+
+        case 'skills.setEnabled': {
+          const name = params?.name as string;
+          const enabled = params?.enabled;
+          if (!name) return { id, error: 'name required' };
+          if (typeof enabled !== 'boolean') return { id, error: 'enabled required' };
+
+          config.skills.disabled = config.skills.disabled.filter(skill => skill !== name);
+          if (enabled) {
+            if (config.skills.enabled.length > 0 && !config.skills.enabled.includes(name)) {
+              config.skills.enabled = [...config.skills.enabled, name].sort();
+            }
+          } else {
+            if (!config.skills.disabled.includes(name)) {
+              config.skills.disabled = [...config.skills.disabled, name].sort();
+            }
+            if (config.skills.enabled.includes(name)) {
+              config.skills.enabled = config.skills.enabled.filter(skill => skill !== name);
+            }
+          }
+
+          saveConfig(config);
+          broadcast({ event: 'config.update', data: { key: 'skills', value: config.skills } });
+          return { id, result: { name, enabled } };
         }
 
         // ── provider RPCs ─────────────────────────────────────────
@@ -4492,6 +4759,33 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             const providerName = (params?.provider as string) || config.provider.name;
             const p = await getProviderByName(providerName);
             return { id, result: await p.getAuthStatus() };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'provider.codex.models': {
+          try {
+            return { id, result: await getCodexModelCatalog() };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'provider.codex.appServerSnapshot': {
+          try {
+            const cwd = typeof params?.cwd === 'string' ? params.cwd : config.cwd;
+            return { id, result: await getCodexAppServerSnapshot(cwd) };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'provider.codex.rpc': {
+          try {
+            const methodName = params?.method as string;
+            if (!methodName) return { id, error: 'method required' };
+            return { id, result: await callCodexAppServer(methodName, params?.params) };
           } catch (err) {
             return { id, error: err instanceof Error ? err.message : String(err) };
           }
@@ -4720,6 +5014,28 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             return { id, result: { key, value } };
           }
 
+          if (key === 'provider.codex.baseUrl') {
+            if (!config.provider.codex) config.provider.codex = {};
+            if (value === null || value === undefined || value === '') {
+              config.provider.codex.baseUrl = undefined;
+            } else if (typeof value === 'string') {
+              try {
+                const url = new URL(value);
+                if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+                  return { id, error: 'baseUrl must start with http:// or https://' };
+                }
+                config.provider.codex.baseUrl = value;
+              } catch {
+                return { id, error: 'baseUrl must be a valid URL' };
+              }
+            } else {
+              return { id, error: 'baseUrl must be a string or null' };
+            }
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
           if (key === 'provider.codex.approvalPolicy' && typeof value === 'string') {
             const valid = ['never', 'on-request', 'on-failure', 'untrusted'];
             if (!valid.includes(value)) return { id, error: `approvalPolicy must be one of: ${valid.join(', ')}` };
@@ -4748,6 +5064,28 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             return { id, result: { key, value } };
           }
 
+          if (key === 'provider.codex.skipGitRepoCheck' && typeof value === 'boolean') {
+            if (!config.provider.codex) config.provider.codex = {};
+            config.provider.codex.skipGitRepoCheck = value;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          if (key === 'provider.codex.additionalDirectories') {
+            if (!config.provider.codex) config.provider.codex = {};
+            if (value === null || value === undefined) {
+              config.provider.codex.additionalDirectories = undefined;
+            } else if (Array.isArray(value) && value.every(v => typeof v === 'string')) {
+              config.provider.codex.additionalDirectories = value as string[];
+            } else {
+              return { id, error: 'additionalDirectories must be a string array or null' };
+            }
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
           if (key === 'provider.codex.webSearch' && typeof value === 'string') {
             const valid = ['disabled', 'cached', 'live'];
             if (!valid.includes(value)) return { id, error: `webSearch must be one of: ${valid.join(', ')}` };
@@ -4763,6 +5101,20 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             if (!valid.includes(value)) return { id, error: `mcpOauthCredentialsStore must be one of: ${valid.join(', ')}` };
             if (!config.provider.codex) config.provider.codex = {};
             config.provider.codex.mcpOauthCredentialsStore = value as any;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          if (key === 'provider.codex.config') {
+            if (!config.provider.codex) config.provider.codex = {};
+            if (value === null || value === undefined) {
+              config.provider.codex.config = undefined;
+            } else if (typeof value === 'object' && !Array.isArray(value)) {
+              config.provider.codex.config = value as any;
+            } else {
+              return { id, error: 'provider.codex.config must be an object or null' };
+            }
             saveConfig(config);
             broadcast({ event: 'config.update', data: { key, value } });
             return { id, result: { key, value } };
@@ -6638,6 +6990,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       scheduler?.stop();
       await channelManager.stopAll();
       await closeBrowser();
+      closeCodexAppServerRpcClient();
       await disposeAllProviders();
 
       // close all file watchers

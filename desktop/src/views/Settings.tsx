@@ -1,5 +1,5 @@
 import { useCallback, useState, useEffect } from 'react';
-import type { useGateway } from '../hooks/useGateway';
+import type { useGateway, CodexModelCatalog, CodexAppServerSnapshot } from '../hooks/useGateway';
 import { ToolsView } from './Tools';
 import { StatusView } from './Status';
 import { useTheme } from '../hooks/useTheme';
@@ -11,10 +11,19 @@ import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Textarea } from '@/components/ui/textarea';
 import { Shield, Brain, Globe, Settings2, Box, Lock, FolderLock, X, Plus, Wrench, Activity, Sun, Check } from 'lucide-react';
 import { PALETTES } from '../lib/palettes';
 import type { Palette } from '../lib/palettes';
-import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL, codexModelsForAuth } from '@/lib/modelCatalog';
+import {
+  CLAUDE_AGENT_SDK_REASONING_EFFORTS,
+  CLAUDE_MODELS,
+  DEFAULT_CLAUDE_MODEL,
+  DEFAULT_CODEX_MODEL,
+  codexModelsForAuth,
+  codexReasoningEffortOptions,
+  reasoningEffortIsSupported,
+} from '@/lib/modelCatalog';
 import { useEditorPrefs } from '../hooks/useEditorPrefs';
 import { FileCode } from 'lucide-react';
 
@@ -40,6 +49,13 @@ export function SettingsView({ gateway }: Props) {
   const approvalMode = cfg?.security?.approvalMode || 'approve-sensitive';
   const browserEnabled = cfg?.browser?.enabled ?? false;
   const browserHeadless = cfg?.browser?.headless ?? false;
+  const providerName = cfg?.provider?.name || 'claude';
+  const agentReasoningOptions = providerName === 'codex'
+    ? codexReasoningEffortOptions()
+    : CLAUDE_AGENT_SDK_REASONING_EFFORTS;
+  const agentReasoningEffort = reasoningEffortIsSupported(agentReasoningOptions, cfg?.reasoningEffort)
+    ? cfg?.reasoningEffort
+    : 'off';
 
   // sandbox
   const sandboxMode = cfg?.sandbox?.mode || 'off';
@@ -265,18 +281,18 @@ export function SettingsView({ gateway }: Props) {
                     <div className="text-[10px] text-muted-foreground">How much the model thinks before responding</div>
                   </div>
                   <Select
-                    value={cfg?.reasoningEffort || 'medium'}
-                    onValueChange={v => set('reasoningEffort', v === 'medium' ? null : v)}
+                    value={agentReasoningEffort}
+                    onValueChange={v => set('reasoningEffort', v === 'off' ? null : v)}
                     disabled={disabled}
                   >
                     <SelectTrigger className="w-[140px] h-7 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="minimal">Minimal</SelectItem>
-                      <SelectItem value="low">Low</SelectItem>
-                      <SelectItem value="medium">Medium (default)</SelectItem>
-                      <SelectItem value="high">High</SelectItem>
-                      <SelectItem value="max">Max</SelectItem>
-                      <SelectItem value="xhigh">xhigh</SelectItem>
+                      <SelectItem value="off">auto (default)</SelectItem>
+                      {agentReasoningOptions.map(effort => (
+                        <SelectItem key={effort.value} value={effort.value}>
+                          {effort.label}{effort.description ? ` (${effort.description})` : ''}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -476,6 +492,8 @@ type ProviderAuthView = {
   authenticated: boolean;
   method?: string;
   identity?: string;
+  accountEmail?: string;
+  planType?: string;
   error?: string;
   storageBackend?: 'keychain' | 'file';
   tokenHealth?: 'valid' | 'expiring' | 'expired';
@@ -619,13 +637,39 @@ function AnthropicCard({ gateway, disabled }: { gateway: ReturnType<typeof useGa
 function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGateway>; disabled: boolean }) {
   const [showAuth, setShowAuth] = useState(false);
   const [authStatus, setAuthStatus] = useState<ProviderAuthView | null>(null);
+  const [codexCatalog, setCodexCatalog] = useState<CodexModelCatalog | null>(null);
+  const [codexCatalogError, setCodexCatalogError] = useState<string | null>(null);
+  const [codexSnapshot, setCodexSnapshot] = useState<CodexAppServerSnapshot | null>(null);
+  const [codexSnapshotError, setCodexSnapshotError] = useState<string | null>(null);
+  const [codexSnapshotLoading, setCodexSnapshotLoading] = useState(false);
   const cfg = gateway.configData as Record<string, any> | null;
   const codexModel = cfg?.provider?.codex?.model || DEFAULT_CODEX_MODEL;
   const reasoningEffort = cfg?.reasoningEffort as string | null;
   const sandboxMode = cfg?.provider?.codex?.sandboxMode || 'danger-full-access';
   const approvalPolicy = cfg?.provider?.codex?.approvalPolicy || 'never';
+  const networkAccess = cfg?.provider?.codex?.networkAccess ?? true;
   const webSearch = cfg?.provider?.codex?.webSearch || 'disabled';
   const mcpOauthCredentialsStore = cfg?.provider?.codex?.mcpOauthCredentialsStore || 'file';
+  const codexCliConfig = cfg?.provider?.codex?.config && typeof cfg.provider.codex.config === 'object'
+    ? cfg.provider.codex.config as Record<string, any>
+    : {};
+  const serviceTier = typeof codexCliConfig.service_tier === 'string' ? codexCliConfig.service_tier : 'auto';
+  const reasoningSummary = typeof codexCliConfig.model_reasoning_summary === 'string' ? codexCliConfig.model_reasoning_summary : 'auto';
+  const modelVerbosity = typeof codexCliConfig.model_verbosity === 'string' ? codexCliConfig.model_verbosity : 'auto';
+  const memoriesEnabled = Boolean(codexCliConfig.features && typeof codexCliConfig.features === 'object' && codexCliConfig.features.memories === true);
+  const rawReasoningEnabled = codexCliConfig.show_raw_agent_reasoning === true;
+  const skipGitRepoCheck = cfg?.provider?.codex?.skipGitRepoCheck ?? true;
+  const baseUrl = cfg?.provider?.codex?.baseUrl || '';
+  const additionalDirectories = Array.isArray(cfg?.provider?.codex?.additionalDirectories)
+    ? cfg.provider.codex.additionalDirectories.join(', ')
+    : '';
+  const codexConfigKey = JSON.stringify(cfg?.provider?.codex?.config || null);
+  const [baseUrlDraft, setBaseUrlDraft] = useState<string>(baseUrl);
+  const [additionalDirsDraft, setAdditionalDirsDraft] = useState<string>(additionalDirectories);
+  const [codexConfigDraft, setCodexConfigDraft] = useState<string>('');
+  const [codexConfigError, setCodexConfigError] = useState<string | null>(null);
+  const [codexConfigSyncing, setCodexConfigSyncing] = useState(false);
+  const [codexConfigWriteStatus, setCodexConfigWriteStatus] = useState<string | null>(null);
 
   // Query auth independently
   useEffect(() => {
@@ -643,17 +687,171 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
   const authMethod = authStatus?.method;
   const storageBackend = authStatus?.storageBackend || 'file';
   const tokenHealth = authStatus?.tokenHealth || (authenticated ? 'valid' : 'expired');
-  const codexOptions = codexModelsForAuth(authMethod, codexModel);
+  const codexOptions = codexModelsForAuth(authMethod, codexModel, codexCatalog?.models);
+  const selectedCodexOption = codexOptions.find(option => option.value === codexModel) || null;
+  const codexReasoningOptions = codexReasoningEffortOptions(selectedCodexOption);
+  const codexReasoningEffort = reasoningEffortIsSupported(codexReasoningOptions, reasoningEffort)
+    ? reasoningEffort
+    : 'off';
+  const account = codexCatalog?.account;
+  const planType = account?.planType || authStatus?.planType;
 
   const handleAuthSuccess = useCallback(() => {
     setShowAuth(false);
     gateway.getProviderAuth('codex').then(setAuthStatus).catch(() => {});
+    gateway.getCodexModels().then((catalog) => {
+      setCodexCatalog(catalog);
+      setCodexCatalogError(null);
+    }).catch((err) => setCodexCatalogError(err instanceof Error ? err.message : String(err)));
     if (providerName === 'codex') gateway.getProviderStatus();
-  }, [gateway.getProviderAuth, gateway.getProviderStatus, providerName]);
+  }, [gateway.getProviderAuth, gateway.getCodexModels, gateway.getProviderStatus, providerName]);
 
   const set = useCallback(async (key: string, value: unknown) => {
     try { await gateway.setConfig(key, value); } catch (err) { console.error(`failed to set ${key}:`, err); }
   }, [gateway.setConfig]);
+
+  useEffect(() => setBaseUrlDraft(baseUrl), [baseUrl]);
+  useEffect(() => setAdditionalDirsDraft(additionalDirectories), [additionalDirectories]);
+  useEffect(() => {
+    if (!authenticated || gateway.connectionState !== 'connected') return;
+    let cancelled = false;
+    gateway.getCodexModels()
+      .then((catalog) => {
+        if (cancelled) return;
+        setCodexCatalog(catalog);
+        setCodexCatalogError(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setCodexCatalogError(err instanceof Error ? err.message : String(err));
+      });
+    return () => { cancelled = true; };
+  }, [authenticated, gateway.connectionState, gateway.getCodexModels]);
+  useEffect(() => {
+    const parsed = codexConfigKey ? JSON.parse(codexConfigKey) : null;
+    setCodexConfigDraft(parsed ? JSON.stringify(parsed, null, 2) : '');
+    setCodexConfigError(null);
+  }, [codexConfigKey]);
+
+  const commitBaseUrl = useCallback(() => {
+    const value = baseUrlDraft.trim();
+    set('provider.codex.baseUrl', value || null);
+  }, [baseUrlDraft, set]);
+
+  const commitAdditionalDirectories = useCallback(() => {
+    const dirs = additionalDirsDraft
+      .split(',')
+      .map(dir => dir.trim())
+      .filter(Boolean);
+    set('provider.codex.additionalDirectories', dirs.length > 0 ? dirs : null);
+  }, [additionalDirsDraft, set]);
+
+  const commitCodexConfig = useCallback(() => {
+    const raw = codexConfigDraft.trim();
+    if (!raw) {
+      setCodexConfigError(null);
+      set('provider.codex.config', null);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        setCodexConfigError('must be a JSON object');
+        return;
+      }
+      setCodexConfigError(null);
+      set('provider.codex.config', parsed);
+    } catch (err) {
+      setCodexConfigError(err instanceof Error ? err.message : 'invalid JSON');
+    }
+  }, [codexConfigDraft, set]);
+
+  const pullCodexSnapshot = useCallback(async () => {
+    setCodexSnapshotLoading(true);
+    try {
+      const snapshot = await gateway.getCodexAppServerSnapshot();
+      setCodexSnapshot(snapshot);
+      setCodexSnapshotError(null);
+      setCodexCatalog(snapshot);
+      setCodexConfigDraft(snapshot.config ? JSON.stringify(snapshot.config, null, 2) : '');
+      setCodexConfigError(null);
+    } catch (err) {
+      setCodexSnapshotError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCodexSnapshotLoading(false);
+    }
+  }, [gateway.getCodexAppServerSnapshot]);
+
+  const writeCodexConfigToHome = useCallback(async () => {
+    const raw = codexConfigDraft.trim();
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        setCodexConfigError('must be a JSON object');
+        return;
+      }
+      setCodexConfigError(null);
+      setCodexConfigWriteStatus(null);
+      setCodexConfigSyncing(true);
+      const edits = Object.entries(parsed as Record<string, unknown>).map(([keyPath, value]) => ({
+        keyPath,
+        value,
+        mergeStrategy: 'replace',
+      }));
+      await gateway.codexAppServerRpc('config/batchWrite', { edits });
+      setCodexConfigWriteStatus('wrote .codex config');
+      await pullCodexSnapshot();
+    } catch (err) {
+      setCodexConfigError(err instanceof Error ? err.message : 'failed to write .codex config');
+    } finally {
+      setCodexConfigSyncing(false);
+    }
+  }, [codexConfigDraft, gateway.codexAppServerRpc, pullCodexSnapshot]);
+
+  const updateCodexCliConfig = useCallback((updater: (draft: Record<string, any>) => void) => {
+    const next = JSON.parse(JSON.stringify(codexCliConfig || {})) as Record<string, any>;
+    updater(next);
+    const compact = Object.fromEntries(Object.entries(next).filter(([, value]) => value !== undefined));
+    set('provider.codex.config', Object.keys(compact).length > 0 ? compact : null);
+  }, [codexCliConfig, set]);
+
+  const setCodexCliConfigKey = useCallback((key: string, value: unknown) => {
+    updateCodexCliConfig((draft) => {
+      if (value === null || value === undefined || value === 'auto') {
+        delete draft[key];
+      } else {
+        draft[key] = value;
+      }
+    });
+  }, [updateCodexCliConfig]);
+
+  const setCodexFeature = useCallback((feature: string, enabled: boolean) => {
+    updateCodexCliConfig((draft) => {
+      const features = draft.features && typeof draft.features === 'object' && !Array.isArray(draft.features)
+        ? { ...draft.features }
+        : {};
+      if (enabled) {
+        features[feature] = true;
+      } else {
+        delete features[feature];
+      }
+      if (Object.keys(features).length > 0) {
+        draft.features = features;
+      } else {
+        delete draft.features;
+      }
+    });
+  }, [updateCodexCliConfig]);
+
+  const selectCodexModel = useCallback(async (model: string) => {
+    await set('provider.codex.model', model);
+    const option = codexOptions.find(candidate => candidate.value === model) || null;
+    const efforts = codexReasoningEffortOptions(option);
+    if (reasoningEffort && !reasoningEffortIsSupported(efforts, reasoningEffort)) {
+      await set('reasoningEffort', null);
+    }
+  }, [codexOptions, reasoningEffort, set]);
 
   return (
     <Card>
@@ -679,6 +877,13 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
                     ? `connected via ${authMethod === 'oauth' ? 'ChatGPT subscription' : 'API key'}`
                     : 'not authenticated'}
                 </div>
+                {authenticated && (
+                  <div className="text-[10px] text-muted-foreground">
+                    {authMethod === 'oauth'
+                      ? `tier: ${planType || 'unknown'}${account?.email ? ` · ${account.email}` : ''}`
+                      : 'tier: API project limits'}
+                  </div>
+                )}
                 <div className="text-[10px] text-muted-foreground">
                   storage: {storageBackend} · token: {tokenHealth}
                 </div>
@@ -710,22 +915,78 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
 
           {/* model selector */}
           <SettingRow label="model" description="codex model for agent runs">
-            <Select value={codexModel} onValueChange={v => set('provider.codex.model', v)} disabled={disabled}>
+            <Select value={codexModel} onValueChange={selectCodexModel} disabled={disabled}>
               <SelectTrigger className="h-7 w-52 text-[11px]">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="min-w-72">
                 {codexOptions.map(m => (
-                  <SelectItem key={m.value} value={m.value} className="text-[11px]">{m.label}</SelectItem>
+                  <SelectItem key={m.value} value={m.value} className="text-[11px]">
+                    <div className="flex flex-col gap-0.5 min-w-0">
+                      <span className="flex items-center gap-1.5">
+                        {m.label}
+                        {m.isDefault && <span className="text-[9px] text-primary">default</span>}
+                        {m.researchPreview && <span className="text-[9px] text-amber-500">preview</span>}
+                        {m.deprecated && <span className="text-[9px] text-muted-foreground">legacy</span>}
+                      </span>
+                      {m.description && <span className="text-[10px] text-muted-foreground truncate">{m.description}</span>}
+                    </div>
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </SettingRow>
+          <div className="text-[10px] text-muted-foreground -mt-2">
+            {codexCatalog
+              ? `models from Codex app-server${planType ? ` for ${planType}` : ''}`
+              : codexCatalogError
+                ? `using fallback model list: ${codexCatalogError}`
+                : 'loading Codex model catalog...'}
+          </div>
+
+          <div className="flex items-center justify-between gap-3 rounded border border-border bg-secondary/20 px-3 py-2">
+            <div className="min-w-0">
+              <div className="text-[11px] font-medium text-foreground">Codex app-server</div>
+              <div className="text-[10px] text-muted-foreground truncate">
+                {codexSnapshot
+                  ? `${codexSnapshot.models.length} models · ${codexSnapshot.experimentalFeatures.length} features · ${codexSnapshot.skills.length} skill roots · ${codexSnapshot.apps.length} apps · ${codexSnapshot.mcpServers.length} MCP servers`
+                  : codexSnapshotError || 'pull live config, skills, plugins, apps, MCP status, and limits from .codex/'}
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 text-[10px] px-2 shrink-0"
+              onClick={pullCodexSnapshot}
+              disabled={disabled || codexSnapshotLoading}
+            >
+              {codexSnapshotLoading ? 'pulling...' : 'pull from .codex'}
+            </Button>
+          </div>
+
+          {codexSnapshot && (
+            <details className="rounded border border-border bg-card px-3 py-2">
+              <summary className="text-[11px] font-medium text-foreground cursor-pointer">
+                live config, limits, and admin requirements
+              </summary>
+              <Textarea
+                className="mt-2 min-h-48 text-[11px] font-mono"
+                value={JSON.stringify({
+                  account: codexSnapshot.account,
+                  rateLimits: codexSnapshot.rateLimits,
+                  configRequirements: codexSnapshot.configRequirements,
+                  configOrigins: codexSnapshot.configOrigins,
+                  configLayers: codexSnapshot.configLayers,
+                }, null, 2)}
+                readOnly
+              />
+            </details>
+          )}
 
           {/* reasoning effort */}
           <SettingRow label="reasoning effort" description="how much the model reasons before responding">
             <Select
-              value={reasoningEffort || 'off'}
+              value={codexReasoningEffort}
               onValueChange={v => set('reasoningEffort', v === 'off' ? null : v)}
               disabled={disabled}
             >
@@ -734,12 +995,11 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="off" className="text-[11px]">auto (default)</SelectItem>
-                <SelectItem value="minimal" className="text-[11px]">minimal</SelectItem>
-                <SelectItem value="low" className="text-[11px]">low</SelectItem>
-                <SelectItem value="medium" className="text-[11px]">medium</SelectItem>
-                <SelectItem value="high" className="text-[11px]">high</SelectItem>
-                <SelectItem value="max" className="text-[11px]">max</SelectItem>
-                <SelectItem value="xhigh" className="text-[11px]">xhigh</SelectItem>
+                {codexReasoningOptions.map(effort => (
+                  <SelectItem key={effort.value} value={effort.value} className="text-[11px]">
+                    {effort.label}{effort.description ? ` (${effort.description})` : ''}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </SettingRow>
@@ -773,6 +1033,15 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
             </Select>
           </SettingRow>
 
+          <SettingRow label="network" description="allow network access from Codex">
+            <Switch
+              size="sm"
+              checked={networkAccess}
+              onCheckedChange={v => set('provider.codex.networkAccess', v)}
+              disabled={disabled}
+            />
+          </SettingRow>
+
           {/* web search */}
           <SettingRow label="web search" description="allow Codex to search the web">
             <Select value={webSearch} onValueChange={v => set('provider.codex.webSearch', v)} disabled={disabled}>
@@ -785,6 +1054,96 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
                 <SelectItem value="live" className="text-[11px]">live</SelectItem>
               </SelectContent>
             </Select>
+          </SettingRow>
+
+          <SettingRow label="service tier" description="Codex service_tier preference">
+            <Select value={serviceTier} onValueChange={v => setCodexCliConfigKey('service_tier', v)} disabled={disabled}>
+              <SelectTrigger className="h-7 w-40 text-[11px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto" className="text-[11px]">auto</SelectItem>
+                <SelectItem value="flex" className="text-[11px]">flex</SelectItem>
+                <SelectItem value="fast" className="text-[11px]">fast</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingRow>
+
+          <SettingRow label="reasoning summary" description="model_reasoning_summary config">
+            <Select value={reasoningSummary} onValueChange={v => setCodexCliConfigKey('model_reasoning_summary', v)} disabled={disabled}>
+              <SelectTrigger className="h-7 w-40 text-[11px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto" className="text-[11px]">auto</SelectItem>
+                <SelectItem value="none" className="text-[11px]">none</SelectItem>
+                <SelectItem value="concise" className="text-[11px]">concise</SelectItem>
+                <SelectItem value="detailed" className="text-[11px]">detailed</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingRow>
+
+          <SettingRow label="verbosity" description="model_verbosity config">
+            <Select value={modelVerbosity} onValueChange={v => setCodexCliConfigKey('model_verbosity', v)} disabled={disabled}>
+              <SelectTrigger className="h-7 w-40 text-[11px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto" className="text-[11px]">auto</SelectItem>
+                <SelectItem value="low" className="text-[11px]">low</SelectItem>
+                <SelectItem value="medium" className="text-[11px]">medium</SelectItem>
+                <SelectItem value="high" className="text-[11px]">high</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingRow>
+
+          <SettingRow label="Codex memories" description="enable Codex native memories feature">
+            <Switch
+              size="sm"
+              checked={memoriesEnabled}
+              onCheckedChange={v => setCodexFeature('memories', v)}
+              disabled={disabled}
+            />
+          </SettingRow>
+
+          <SettingRow label="raw reasoning" description="show_raw_agent_reasoning config">
+            <Switch
+              size="sm"
+              checked={rawReasoningEnabled}
+              onCheckedChange={v => setCodexCliConfigKey('show_raw_agent_reasoning', v ? true : null)}
+              disabled={disabled}
+            />
+          </SettingRow>
+
+          <SettingRow label="skip git check" description="allow Codex in non-git working directories">
+            <Switch
+              size="sm"
+              checked={skipGitRepoCheck}
+              onCheckedChange={v => set('provider.codex.skipGitRepoCheck', v)}
+              disabled={disabled}
+            />
+          </SettingRow>
+
+          <SettingRow label="additional dirs" description="extra readable/writable roots, comma-separated">
+            <Input
+              className="h-7 w-72 text-[11px]"
+              value={additionalDirsDraft}
+              onChange={e => setAdditionalDirsDraft(e.target.value)}
+              onBlur={commitAdditionalDirectories}
+              placeholder="/Users/me/other-project"
+              disabled={disabled}
+            />
+          </SettingRow>
+
+          <SettingRow label="base URL" description="optional OpenAI-compatible API endpoint">
+            <Input
+              className="h-7 w-72 text-[11px]"
+              value={baseUrlDraft}
+              onChange={e => setBaseUrlDraft(e.target.value)}
+              onBlur={commitBaseUrl}
+              placeholder="https://api.openai.com/v1"
+              disabled={disabled}
+            />
           </SettingRow>
 
           {/* MCP OAuth credential storage */}
@@ -800,6 +1159,45 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
               </SelectContent>
             </Select>
           </SettingRow>
+
+          <div className="space-y-1">
+            <SettingRow label="CLI config" description="raw Codex --config overrides as JSON">
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-[10px] px-2"
+                  onClick={commitCodexConfig}
+                  disabled={disabled}
+                >
+                  apply
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-[10px] px-2"
+                  onClick={writeCodexConfigToHome}
+                  disabled={disabled || codexConfigSyncing}
+                >
+                  {codexConfigSyncing ? 'writing...' : 'write .codex'}
+                </Button>
+              </div>
+            </SettingRow>
+            <Textarea
+              className="min-h-24 text-[11px] font-mono"
+              value={codexConfigDraft}
+              onChange={e => setCodexConfigDraft(e.target.value)}
+              onBlur={commitCodexConfig}
+              placeholder={'{\n  "show_raw_agent_reasoning": false\n}'}
+              disabled={disabled}
+            />
+            {codexConfigError && (
+              <div className="text-[10px] text-destructive">{codexConfigError}</div>
+            )}
+            {codexConfigWriteStatus && (
+              <div className="text-[10px] text-muted-foreground">{codexConfigWriteStatus}</div>
+            )}
+          </div>
 
           {sandboxMode === 'danger-full-access' && approvalPolicy === 'never' && (
             <div className="text-[10px] text-warning bg-warning/10 rounded px-2 py-1.5">
@@ -829,8 +1227,11 @@ const TOOL_NAMES = [
   'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash',
   'WebFetch', 'WebSearch', 'Agent', 'AskUserQuestion', 'TodoWrite',
   'message', 'browser', 'screenshot',
-  'schedule_reminder', 'schedule_recurring', 'schedule_cron',
-  'list_reminders', 'cancel_reminder',
+  'schedule', 'list_schedule', 'update_schedule', 'cancel_schedule',
+  'projects_view', 'projects_add', 'projects_update', 'projects_delete',
+  'tasks_view', 'tasks_add', 'tasks_update', 'tasks_done', 'tasks_delete',
+  'research_view', 'research_add', 'research_update', 'research_delete',
+  'memory_search', 'memory_read',
 ];
 
 function ToolPoliciesCard({ gateway, disabled }: { gateway: ReturnType<typeof useGateway>; disabled: boolean }) {
