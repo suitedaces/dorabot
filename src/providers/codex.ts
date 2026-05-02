@@ -1801,6 +1801,7 @@ export class CodexProvider implements Provider {
     const itemTexts = new Map<string, string>();
     const startedBlocks = new Set<string>();
     const toolItems = new Set<string>();
+    const toolOutputTexts = new Map<string, string>();
 
     const startTextBlock = function*(itemId: string, blockType: 'text' | 'thinking'): Generator<ProviderMessage> {
       if (startedBlocks.has(itemId)) return;
@@ -1840,6 +1841,7 @@ export class CodexProvider implements Provider {
 
     const emitToolResult = function*(itemId: string, text: string, isError = false): Generator<ProviderMessage> {
       toolItems.delete(itemId);
+      toolOutputTexts.delete(itemId);
       yield {
         type: 'result',
         subtype: 'tool_result',
@@ -1847,6 +1849,28 @@ export class CodexProvider implements Provider {
         content: [{ type: 'text', text: text || '(no output)' }],
         is_error: isError,
       } as ProviderMessage;
+    };
+
+    const emitToolOutputDelta = function*(itemId: string, text: string): Generator<ProviderMessage> {
+      if (!itemId || !text) return;
+      toolOutputTexts.set(itemId, (toolOutputTexts.get(itemId) || '') + text);
+      yield {
+        type: 'result',
+        subtype: 'tool_output_delta',
+        tool_use_id: `codex-${itemId}`,
+        content: [{ type: 'text', text }],
+      } as ProviderMessage;
+    };
+
+    const describeFileChanges = (changes: any[]): string => (
+      changes.map((change: any) => `${change.kind}: ${change.path}`).join('\n') || 'Files modified'
+    );
+
+    const emitFileChangeToolUse = function*(itemId: string, changes: any[]): Generator<ProviderMessage> {
+      const firstPath = changes[0]?.path || '';
+      const desc = describeFileChanges(changes);
+      const isCreate = changes.length === 1 && changes[0]?.kind === 'add';
+      yield* emitToolUse(itemId, isCreate ? 'Write' : 'Edit', { file_path: firstPath, description: desc });
     };
 
     const handleNotification = function*(message: JsonRpcResponse): Generator<ProviderMessage> {
@@ -1884,6 +1908,28 @@ export class CodexProvider implements Provider {
         return;
       }
 
+      if (message.method === 'item/commandExecution/outputDelta' || message.method === 'item/fileChange/outputDelta') {
+        const itemId = String(params.itemId || '');
+        const delta = typeof params.delta === 'string' ? params.delta : '';
+        yield* emitToolOutputDelta(itemId, delta);
+        return;
+      }
+
+      if (message.method === 'item/fileChange/patchUpdated') {
+        const itemId = String(params.itemId || '');
+        const changes = Array.isArray(params.changes) ? params.changes : [];
+        yield* emitFileChangeToolUse(itemId, changes);
+        yield* emitToolOutputDelta(itemId, `${describeFileChanges(changes)}\n`);
+        return;
+      }
+
+      if (message.method === 'item/mcpToolCall/progress') {
+        const itemId = String(params.itemId || '');
+        const progress = typeof params.message === 'string' ? params.message : '';
+        yield* emitToolOutputDelta(itemId, progress ? `${progress}\n` : '');
+        return;
+      }
+
       if (message.method === 'item/started' || message.method === 'item/completed') {
         const item = params.item as Record<string, any> | undefined;
         if (!item) return;
@@ -1913,13 +1959,22 @@ export class CodexProvider implements Provider {
           return;
         }
 
-        if (item.type === 'fileChange' && message.method === 'item/completed') {
+        if (item.type === 'fileChange') {
           const changes = Array.isArray(item.changes) ? item.changes : [];
-          const firstPath = changes[0]?.path || '';
-          const desc = changes.map((change: any) => `${change.kind}: ${change.path}`).join('\n') || 'Files modified';
-          const isCreate = changes.length === 1 && changes[0]?.kind === 'add';
-          yield* emitToolUse(item.id, isCreate ? 'Write' : 'Edit', { file_path: firstPath, description: desc });
-          yield* emitToolResult(item.id, desc, item.status === 'failed' || item.status === 'declined');
+          yield* emitFileChangeToolUse(item.id, changes);
+          if (message.method === 'item/completed') {
+            const desc = describeFileChanges(changes);
+            yield* emitToolResult(item.id, desc, item.status === 'failed' || item.status === 'declined');
+          }
+          return;
+        }
+
+        if (item.type === 'dynamicToolCall') {
+          yield* emitToolUse(item.id, item.tool || 'dynamicTool', item.arguments || {});
+          if (message.method === 'item/completed') {
+            const text = textFromUnknownContent(item.contentItems) || item.error?.message || item.status || '(no result)';
+            yield* emitToolResult(item.id, text, item.status === 'failed');
+          }
           return;
         }
 

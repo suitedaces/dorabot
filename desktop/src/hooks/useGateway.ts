@@ -25,6 +25,7 @@ const TOOL_PENDING_TEXT: Record<string, string> = {
   AskUserQuestion: 'asking question', TodoWrite: 'updating tasks',
   NotebookEdit: 'editing notebook', message: 'sending message',
   screenshot: 'taking screenshot', browser: 'using browser',
+  imageView: 'viewing image', imageGeneration: 'generating image',
   schedule: 'scheduling', list_schedule: 'listing schedule',
   update_schedule: 'updating schedule', cancel_schedule: 'cancelling schedule',
   projects_view: 'viewing projects', projects_add: 'adding project', projects_update: 'updating project', projects_delete: 'deleting project',
@@ -98,6 +99,18 @@ function applyStreamEvent(items: ChatItem[], evt: Record<string, unknown>): Chat
     }
   }
   return items;
+}
+
+function appendToolOutputDelta(items: ChatItem[], toolUseId: string, delta: string): { items: ChatItem[]; applied: boolean } {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.type === 'tool_use' && it.id === toolUseId) {
+      const u = [...items];
+      u[i] = { ...it, output: `${it.output || ''}${delta}`, streaming: true };
+      return { items: u, applied: true };
+    }
+  }
+  return { items, applied: false };
 }
 
 export type ImageAttachment = { data: string; mediaType: string };
@@ -771,6 +784,7 @@ export function useGateway() {
   // stash for tool results that arrive before their tool_use (server batching race)
   type PendingToolResult = { toolUseId: string; content: string; imageData?: string; is_error?: boolean; toolName?: string; parentToolUseId?: string | null };
   const pendingToolResultsRef = useRef<Map<string, PendingToolResult>>(new Map());
+  const pendingToolOutputDeltasRef = useRef<Map<string, string>>(new Map());
   const STREAM_FLUSH_INTERVAL_MS = 16;
   const STREAM_FLUSH_MAX_DELAY_MS = 50;
   const STREAM_QUEUE_OVERLOAD = 250;
@@ -802,6 +816,26 @@ export function useGateway() {
         } else {
           next = updateSessionChatItems(next, sk, items => applyStreamEvent(items, evt));
         }
+      }
+      const pendingDeltas = pendingToolOutputDeltasRef.current;
+      if (pendingDeltas.size > 0) {
+        const appliedDeltas = new Set<string>();
+        for (const [sessionKey, state] of Object.entries(next)) {
+          let items = state.chatItems;
+          let changed = false;
+          for (const [toolUseId, delta] of pendingDeltas) {
+            const result = appendToolOutputDelta(items, toolUseId, delta);
+            if (result.applied) {
+              items = result.items;
+              changed = true;
+              appliedDeltas.add(toolUseId);
+            }
+          }
+          if (changed) {
+            next = { ...next, [sessionKey]: { ...state, chatItems: items } };
+          }
+        }
+        for (const id of appliedDeltas) pendingDeltas.delete(id);
       }
       // apply any stashed tool results that now have matching tool_use items
       const pending = pendingToolResultsRef.current;
@@ -1095,6 +1129,23 @@ export function useGateway() {
             return updated;
           }));
         }
+        break;
+      }
+
+      case 'agent.tool_output_delta': {
+        const d = data as { sessionKey?: string; tool_use_id: string; delta: string };
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk)) break;
+        flushStreamQueue();
+        setSessionStates(prev => updateSessionChatItems(prev, sk, items => {
+          const result = appendToolOutputDelta(items, d.tool_use_id, d.delta || '');
+          if (result.applied) return result.items;
+          pendingToolOutputDeltasRef.current.set(
+            d.tool_use_id,
+            `${pendingToolOutputDeltasRef.current.get(d.tool_use_id) || ''}${d.delta || ''}`
+          );
+          return items;
+        }));
         break;
       }
 

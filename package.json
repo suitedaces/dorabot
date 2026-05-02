@@ -1,6 +1,6 @@
 {
   "name": "dorabot",
-  "version": "0.2.90",
+  "version": "0.2.91",
   "type": "module",
   "description": "Open-source personal AI agent. Persistent memory, multi-channel messaging, browser automation, and proactive goal management.",
   "main": "dist/index.js",
@@ -43,7 +43,7 @@
     "gray-matter": "4.0.3",
     "ical-generator": "10.0.0",
     "luxon": "3.7.2",
-    "marked": "18.0.0",
+    "marked": "18.0.2",
     "mime-types": "3.0.2",
     "node-pty": "1.1.0",
     "playwright-core": "1.58.2",
@@ -60,6 +60,10 @@
     "@types/ws": "8.18.1",
     "tsx": "4.21.0",
     "typescript": "5.9.3"
+  },
+  "overrides": {
+    "axios": "1.15.2",
+    "protobufjs": "7.5.5"
   },
   "engines": {
     "node": ">=22.0.0"

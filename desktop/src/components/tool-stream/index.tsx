@@ -19,6 +19,8 @@ const STREAM_MAP: Record<string, React.ComponentType<ToolUIProps>> = {
   WebSearch: SearchStream,
   WebFetch: WebFetchStream,
   screenshot: ScreenshotStream,
+  imageView: ScreenshotStream,
+  imageGeneration: ScreenshotStream,
   Write: FileStream,
   Edit: FileStream,
   Task: TaskStream,

@@ -35,6 +35,8 @@ const TOOL_MAP: Record<string, React.ComponentType<ToolUIProps>> = {
   WebFetch: WebFetchTool,
   WebSearch: WebSearchTool,
   screenshot: ScreenshotTool,
+  imageView: ScreenshotTool,
+  imageGeneration: ScreenshotTool,
   message: MessageTool,
   browser: BrowserTool,
   schedule: CronTool,

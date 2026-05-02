@@ -692,8 +692,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       if (event.event === 'agent.stream') {
         queueStreamEvent(ws, data);
       } else {
-        // flush pending stream batch before tool_result/done so client has all deltas
-        if (event.event === 'agent.tool_result' || event.event === 'agent.done' || event.event === 'agent.result') flushStreamBatch(ws);
+        // flush pending stream batch before tool output/result events so clients
+        // have the matching tool_use block before output lands.
+        if (event.event === 'agent.tool_output_delta' || event.event === 'agent.tool_result' || event.event === 'agent.done' || event.event === 'agent.result') flushStreamBatch(ws);
         ws.send(data);
       }
     }
@@ -3038,6 +3039,23 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
 
           // Codex tool results come as type: 'result' with subtype: 'tool_result'
+          if (m.type === 'result' && m.subtype === 'tool_output_delta') {
+            const toolUseId = m.tool_use_id as string;
+            const deltaContent = Array.isArray(m.content)
+              ? (m.content as Array<Record<string, unknown>>).filter(c => c.type === 'text').map(c => c.text).join('\n')
+              : String(m.content || '');
+            broadcast({
+              event: 'agent.tool_output_delta',
+              data: {
+                source,
+                sessionKey,
+                tool_use_id: toolUseId,
+                delta: deltaContent.slice(0, 2000),
+                timestamp: Date.now(),
+              },
+            });
+          }
+
           if (m.type === 'result' && m.subtype === 'tool_result') {
             const toolUseId = m.tool_use_id as string;
             const resultContent = Array.isArray(m.content)
@@ -3057,7 +3075,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             });
           }
 
-          if (m.type === 'result' && m.subtype !== 'tool_result') {
+          if (m.type === 'result' && m.subtype !== 'tool_result' && m.subtype !== 'tool_output_delta') {
             agentText = (m.result as string) || agentText;
             agentSessionId = (m.session_id as string) || agentSessionId;
             if (agentSessionId && session) {

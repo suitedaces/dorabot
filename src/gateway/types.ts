@@ -144,6 +144,7 @@ export type RpcMethod =
 export type GatewayEventName =
   | 'agent.stream'
   | 'agent.tool_use'
+  | 'agent.tool_output_delta'
   | 'agent.tool_result'
   | 'agent.message'
   | 'agent.result'
