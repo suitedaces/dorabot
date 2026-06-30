@@ -859,11 +859,11 @@ export class ClaudeProvider implements Provider {
       ? EFFORT_MAP[opts.config.reasoningEffort]
       : undefined;
 
-    // Build thinking config — auto-coerce to adaptive for 4.6+ models and the Fable/Mythos family
+    // Build thinking config — auto-coerce to adaptive for 4.6+ models, all 5+ majors, and the Fable/Mythos family
     // (adaptive thinking always-on, extended thinking / budgetTokens unsupported → 400)
     let thinking: { type: 'adaptive'; display?: 'summarized' | 'omitted' } | { type: 'enabled'; budgetTokens: number } | { type: 'disabled' } | undefined;
     const thinkingCfg = opts.config.thinking;
-    const modelNeedAdaptive = /claude-(?:opus|sonnet)-4-(?:[6-9]|\d{2,})(?:-|$)|claude-(?:fable|mythos)-/.test(opts.model);
+    const modelNeedAdaptive = /claude-(?:opus|sonnet)-4-(?:[6-9]|\d{2,})(?:-|$)|claude-(?:opus|sonnet|haiku)-(?:[5-9]|\d{2,})(?:-|$)|claude-(?:fable|mythos)-/.test(opts.model);
     if (modelNeedAdaptive && thinkingCfg && typeof thinkingCfg === 'object' && 'type' in thinkingCfg && (thinkingCfg as any).type === 'enabled') {
       // budgetTokens is deprecated on 4.6, removed on 4.7 (returns 400) — force adaptive
       console.warn(`[claude] budgetTokens not supported on ${opts.model}, using adaptive thinking instead`);
