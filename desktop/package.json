@@ -1,6 +1,6 @@
 {
   "name": "dorabot-desktop",
-  "version": "0.2.95",
+  "version": "0.2.96",
   "description": "Desktop control center for dorabot",
   "main": "out/main/main.js",
   "scripts": {
@@ -11,7 +11,7 @@
     "package": "npm run bundle-gateway && electron-vite build && electron-builder --mac && npm run verify-sig && npm run make-dmg && npm run install-app",
     "package:arm64": "npm run bundle-gateway && electron-vite build && electron-builder --mac --arm64 && npm run verify-sig && npm run make-dmg && npm run install-app",
     "package:universal": "npm run bundle-gateway && electron-vite build && electron-builder --mac --universal && npm run verify-sig && npm run make-dmg && npm run install-app",
-    "verify-sig": "APP=$(find release -maxdepth 2 -name 'dorabot.app' -type d | head -1) && SIG=$(codesign -d --verbose=2 \"$APP\" 2>&1) && if echo \"$SIG\" | grep -q 'Signature=adhoc'; then echo '\\033[33m\u26a0 WARNING: Ad-hoc signed (no certificate). Auto-updates will NOT work.\\033[0m' && echo 'Set CSC_LINK and CSC_KEY_PASSWORD to sign properly.' && echo 'Or install from GitHub release: gh release download --pattern *.dmg'; fi && codesign --verify --deep --strict \"$APP\" && echo 'Signature verified.'",
+    "verify-sig": "APP=$(find release -maxdepth 2 -name 'dorabot.app' -type d | head -1) && SIG=$(codesign -d --verbose=2 \"$APP\" 2>&1) && if echo \"$SIG\" | grep -q 'Signature=adhoc'; then echo '\\033[33m⚠ WARNING: Ad-hoc signed (no certificate). Auto-updates will NOT work.\\033[0m' && echo 'Set CSC_LINK and CSC_KEY_PASSWORD to sign properly.' && echo 'Or install from GitHub release: gh release download --pattern *.dmg'; fi && codesign --verify --deep --strict \"$APP\" && echo 'Signature verified.'",
     "make-dmg": "APP=$(find release -maxdepth 2 -name 'dorabot.app' -type d | head -1) && VER=$(node -p \"require('./package.json').version\") && DMG=\"release/dorabot-${VER}-arm64.dmg\" && rm -f \"$DMG\" && hdiutil create -volname dorabot -srcfolder \"$APP\" -ov -format UDZO \"$DMG\" && echo \"Created $DMG\"",
     "install-app": "APP=$(find release -maxdepth 2 -name 'dorabot.app' -type d | head -1) && rm -rf /Applications/dorabot.app && cp -R \"$APP\" /Applications/ && echo \"Installed $APP to /Applications/\"",
     "typecheck": "tsc --noEmit"
