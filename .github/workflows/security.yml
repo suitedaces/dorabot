@@ -110,8 +110,10 @@ jobs:
       - name: Check package age (desktop, 7 days)
         run: node scripts/check-package-age.mjs --min-days=7 --dir=desktop --allow=@anthropic-ai/claude-agent-sdk,@openai/codex
 
+      # next temporarily allowed: 16.2.11 (published 2026-07-21) is the only patch for
+      # the Jul 22 advisory wave (4 highs incl. SSRF). Remove from allowlist after 2026-07-28.
       - name: Check package age (site, 7 days)
-        run: node scripts/check-package-age.mjs --min-days=7 --dir=site --allow=@anthropic-ai/claude-agent-sdk,@openai/codex
+        run: node scripts/check-package-age.mjs --min-days=7 --dir=site --allow=@anthropic-ai/claude-agent-sdk,@openai/codex,next
 
   snyk:
     runs-on: ubuntu-latest
