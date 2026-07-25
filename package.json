@@ -25,12 +25,12 @@
     "test:scheduler-run": "tsx scripts/test-scheduler-run-item.ts",
     "test:codex-auth-state": "node scripts/test-codex-auth-state.mjs",
     "test:gateway-auth-state": "node scripts/test-gateway-auth-state.mjs",
-    "test:codex-provider": "node scripts/test-codex-provider.mjs status",
-    "test:claude-provider": "node scripts/test-claude-provider.mjs status",
+    "test:codex-provider": "node scripts/smoke-codex-145.mjs",
+    "test:claude-provider": "node scripts/smoke-claude-sdk.mjs",
     "test:model-catalog": "node scripts/test-model-catalog.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.197",
+    "@anthropic-ai/claude-agent-sdk": "0.3.220",
     "@anthropic-ai/sdk": "0.97.1",
     "@grammyjs/runner": "2.0.3",
     "@grammyjs/transformer-throttler": "1.2.1",

@@ -245,7 +245,7 @@ const RESOLVED_CWD = process.env.DORABOT_ELECTRON ? join(homedir(), 'Desktop') :
 
 const DEFAULT_CONFIG: Config = {
   provider: { name: 'claude' },
-  model: 'claude-sonnet-4-6',
+  model: 'claude-sonnet-5',
   permissionMode: 'default',
   skills: {
     enabled: [],

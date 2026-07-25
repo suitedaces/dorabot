@@ -662,7 +662,7 @@ export class ClaudeProvider implements Provider {
       const stream = query({
         prompt: "Reply with only the word 'ok'",
         options: {
-          model: 'claude-sonnet-4-6',
+          model: 'claude-sonnet-5',
           maxTurns: 1,
           allowedTools: [],
           abortController,
@@ -834,7 +834,14 @@ export class ClaudeProvider implements Provider {
           });
         }
       },
-      async interrupt() { await queryRef?.interrupt(); },
+      async interrupt() {
+        // 0.3.220+: interrupt resolves to a receipt with still_queued uuids of
+        // async messages that will still run unless cancelled (older CLIs: undefined)
+        const receipt = await queryRef?.interrupt() as { still_queued?: string[] } | undefined;
+        if (receipt?.still_queued?.length) {
+          console.warn(`[claude] interrupt: ${receipt.still_queued.length} queued message(s) survive and will still run`);
+        }
+      },
       async setModel(model: string) { await queryRef?.setModel(model); },
       async setPermissionMode(mode: string) { await queryRef?.setPermissionMode(mode as any); },
       async stopTask(taskId: string) { await (queryRef as any)?.stopTask?.(taskId); },

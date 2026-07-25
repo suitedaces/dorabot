@@ -19,7 +19,7 @@ export type ReasoningEffortOption = {
   description?: string | null;
 };
 
-export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6';
+export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5';
 export const DEFAULT_CODEX_MODEL = 'gpt-5.6-terra';
 
 export const CLAUDE_AGENT_SDK_REASONING_EFFORTS: ReasoningEffortOption[] = [
@@ -40,10 +40,10 @@ const CODEX_FALLBACK_REASONING_EFFORTS: ReasoningEffortOption[] = [
 const CODEX_APP_SERVER_REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
 export const CLAUDE_MODELS: ModelOption[] = [
-  { value: 'claude-fable-5', label: 'Fable 5' },
-  { value: 'claude-opus-4-8', label: 'Opus 4.8' },
+  { value: 'claude-fable-5', label: 'Fable 5', description: 'Frontier model. Adaptive thinking always on. Requires usage credits on some plans.' },
+  { value: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Latest Opus. Deep reasoning for hard, long-horizon tasks.' },
   { value: 'claude-opus-4-7', label: 'Opus 4.7' },
-  { value: 'claude-sonnet-5', label: 'Sonnet 5' },
+  { value: 'claude-sonnet-5', label: 'Sonnet 5', description: 'Latest Sonnet, balanced speed/capability. Default.' },
   { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
   { value: 'claude-haiku-4-5', label: 'Haiku 4.5' },
   { value: 'claude-opus-4-6', label: 'Opus 4.6 (legacy)' },
