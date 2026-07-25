@@ -33,12 +33,22 @@ jobs:
           echo "Synced desktop/package.json to $ROOT_VERSION"
         working-directory: desktop
 
-      - name: Delete existing release if any
+      - name: Reset release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          RELEASE_IDS=$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --paginate \
+            --jq ".[] | select(.tag_name == \"$TAG\") | .id")
+          for RELEASE_ID in $RELEASE_IDS; do
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"
+          done
+          gh release create "$TAG" \
+            --draft \
+            --title "${TAG#v}" \
+            --verify-tag \
+            --repo "$GITHUB_REPOSITORY"
 
       - name: Build & Package
         env:
@@ -62,7 +72,7 @@ jobs:
             exit 1
           fi
           echo "Verifying: $APP"
-          codesign --verify --strict --verbose=2 "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
           SIG_INFO=$(codesign -d --verbose=2 "$APP" 2>&1)
           if echo "$SIG_INFO" | grep -q "Signature=adhoc"; then
             echo "::error::App is ad-hoc signed (no certificate). This will break auto-updates."
@@ -77,6 +87,31 @@ jobs:
           TEAM=$(echo "$SIG_INFO" | grep "TeamIdentifier=" | head -1)
           AUTHORITY=$(echo "$SIG_INFO" | grep "Authority=Developer ID Application" | head -1)
           echo "Signature OK: $AUTHORITY ($TEAM)"
+
+      - name: Verify updater archive
+        run: |
+          ZIP=$(find desktop/release -maxdepth 1 -name '*.zip' -type f | head -1)
+          if [ -z "$ZIP" ]; then
+            echo "::error::No updater ZIP found"
+            exit 1
+          fi
+
+          EXPECTED_SHA512=$(awk '/- url: .*\.zip$/ { getline; sub(/^[[:space:]]*sha512: /, ""); print; exit }' desktop/release/latest-mac.yml)
+          ACTUAL_SHA512=$(openssl dgst -sha512 -binary "$ZIP" | openssl base64 -A)
+          if [ "$ACTUAL_SHA512" != "$EXPECTED_SHA512" ]; then
+            echo "::error::Updater ZIP checksum does not match latest-mac.yml"
+            exit 1
+          fi
+
+          EXTRACT_DIR=$(mktemp -d)
+          trap 'rm -rf "$EXTRACT_DIR"' EXIT
+          ditto -x -k "$ZIP" "$EXTRACT_DIR"
+          ARCHIVED_APP=$(find "$EXTRACT_DIR" -maxdepth 2 -name 'dorabot.app' -type d | head -1)
+          if [ -z "$ARCHIVED_APP" ]; then
+            echo "::error::Updater ZIP does not contain dorabot.app"
+            exit 1
+          fi
+          codesign --verify --deep --strict --verbose=2 "$ARCHIVED_APP"
 
       - name: Reconcile GitHub release assets
         env:
@@ -103,34 +138,28 @@ jobs:
           else
             NOTES=$(git log --oneline --no-merges -20)
           fi
-          gh release edit "$TAG" --notes "$NOTES" --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          gh release edit "$TAG" --notes "$NOTES" --repo "$GITHUB_REPOSITORY"
 
-      - name: Verify updater release assets
+      - name: Verify draft release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           MANIFEST="desktop/release/latest-mac.yml"
+          RELEASE_COUNT=$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --paginate \
+            --jq ".[] | select(.tag_name == \"$TAG\") | .id" \
+            | awk 'NF { count++ } END { print count + 0 }')
+          if [ "$RELEASE_COUNT" -ne 1 ]; then
+            echo "::error::Expected one release for $TAG, found $RELEASE_COUNT"
+            exit 1
+          fi
+
           RELEASE_ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name' --repo "$GITHUB_REPOSITORY")
 
           for ASSET in latest-mac.yml $(sed -n 's/^[[:space:]]*- url: //p' "$MANIFEST"); do
             if ! grep -Fxq "$ASSET" <<< "$RELEASE_ASSETS"; then
               echo "::error::Release asset is missing: $ASSET"
-              exit 1
-            fi
-
-            URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ASSET}"
-            READY=false
-            for ATTEMPT in 1 2 3 4 5; do
-              if curl --fail --silent --show-error --head --location "$URL" >/dev/null; then
-                READY=true
-                break
-              fi
-              sleep 3
-            done
-
-            if [ "$READY" != "true" ]; then
-              echo "::error::Release asset is not downloadable: $ASSET"
               exit 1
             fi
           done
@@ -148,3 +177,32 @@ jobs:
           name: dorabot-zip
           path: desktop/release/*.zip
           if-no-files-found: error
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          gh release edit "$TAG" --draft=false --latest --repo "$GITHUB_REPOSITORY"
+
+      - name: Verify public updater release
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          MANIFEST="desktop/release/latest-mac.yml"
+
+          for ASSET in latest-mac.yml $(sed -n 's/^[[:space:]]*- url: //p' "$MANIFEST"); do
+            URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ASSET}"
+            READY=false
+            for ATTEMPT in 1 2 3 4 5; do
+              if curl --fail --silent --show-error --head --location "$URL" >/dev/null; then
+                READY=true
+                break
+              fi
+              sleep 3
+            done
+
+            if [ "$READY" != "true" ]; then
+              echo "::error::Release asset is not downloadable: $ASSET"
+              exit 1
+            fi
+          done
