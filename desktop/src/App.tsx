@@ -34,7 +34,7 @@ import { ToastContainer } from './components/ToastContainer';
 
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
 type UpdateState = {
-  status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'error';
+  status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
   version?: string;
   percent?: number;
   message?: string;
@@ -334,6 +334,9 @@ export default function App() {
           break;
         case 'downloaded':
           setUpdateState({ status: 'downloaded', version: status.version });
+          break;
+        case 'installing':
+          setUpdateState(prev => ({ ...prev, status: 'installing' }));
           break;
         case 'error':
           setUpdateState({ status: 'error', message: status.message });
@@ -1249,6 +1252,12 @@ export default function App() {
           >
             Later
           </button>
+        </div>
+      )}
+      {updateState.status === 'installing' && (
+        <div className="shrink-0 px-4 py-1.5 bg-success/10 border-b border-success/20 flex items-center gap-2 text-xs">
+          <Loader2 className="w-3 h-3 animate-spin text-success" />
+          <span className="text-success">Restarting to install update...</span>
         </div>
       )}
       {updateState.status === 'error' && (

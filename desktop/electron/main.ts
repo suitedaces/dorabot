@@ -24,6 +24,7 @@ let isQuitting = false;
 let gatewayManager: GatewayManager | null = null;
 let gatewayBridge: GatewayBridge | null = null;
 let updateCheckInterval: ReturnType<typeof setInterval> | null = null;
+let updateInstallStarted = false;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
@@ -82,6 +83,10 @@ function setupAutoUpdater(): void {
   });
 
   autoUpdater.on('error', (err) => {
+    if (updateInstallStarted) {
+      updateInstallStarted = false;
+      isQuitting = false;
+    }
     ulog(`Error: ${err.message}\n${err.stack ?? ''}`);
     sendUpdateStatus('error', { message: err.message });
   });
@@ -102,16 +107,15 @@ function setupAutoUpdater(): void {
   });
 
   ipcMain.on('update-install', () => {
+    if (updateInstallStarted) {
+      ulog('Install already in progress, ignoring duplicate request');
+      return;
+    }
+    updateInstallStarted = true;
     ulog('Install requested, calling quitAndInstall...');
     isQuitting = true;
+    sendUpdateStatus('installing');
     autoUpdater.quitAndInstall();
-    // Safety net: if quitAndInstall didn't trigger quit within 5s
-    // (e.g. Squirrel deadlock), force restart the app
-    setTimeout(() => {
-      ulog('quitAndInstall did not quit within 5s, forcing restart');
-      app.relaunch();
-      app.exit(0);
-    }, 5000);
   });
 
   // Check for updates 10s after launch, then every 30 minutes
