@@ -113,6 +113,7 @@ Focus on clarity and completeness. Flag any ambiguities.`,
 
 const MODEL_MAP: Record<string, 'sonnet' | 'opus' | 'haiku' | 'inherit'> = {
   'claude-fable-5': 'opus',
+  'claude-opus-5': 'opus',
   'claude-opus-4-8': 'opus',
   'claude-opus-4-7': 'opus',
   'claude-sonnet-5': 'sonnet',
@@ -173,8 +174,11 @@ function loadCCAgentsFromDir(dir: string): Record<string, AgentDefinition> {
       }
 
       const model = data.model ? (MODEL_MAP[data.model] || 'inherit') : undefined;
+      const observer = typeof data.observer === 'string' ? data.observer : undefined;
+      const observerMessage = typeof (data['observer-message'] ?? data.observerMessage) === 'string'
+        ? (data['observer-message'] ?? data.observerMessage) : undefined;
 
-      agents[name] = { description, prompt, tools: tools.length > 0 ? tools : undefined, model };
+      agents[name] = { description, prompt, tools: tools.length > 0 ? tools : undefined, model, observer, observerMessage };
     } catch {
       // skip malformed agent files
     }

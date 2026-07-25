@@ -41,7 +41,8 @@ const CODEX_APP_SERVER_REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'm
 
 export const CLAUDE_MODELS: ModelOption[] = [
   { value: 'claude-fable-5', label: 'Fable 5', description: 'Frontier model. Adaptive thinking always on. Requires usage credits on some plans.' },
-  { value: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Latest Opus. Deep reasoning for hard, long-horizon tasks.' },
+  { value: 'claude-opus-5', label: 'Opus 5', description: 'Near-frontier intelligence at half of Fable 5 price. 1M context, thinking on by default.' },
+  { value: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Deep reasoning for hard, long-horizon tasks.' },
   { value: 'claude-opus-4-7', label: 'Opus 4.7' },
   { value: 'claude-sonnet-5', label: 'Sonnet 5', description: 'Latest Sonnet, balanced speed/capability. Default.' },
   { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },

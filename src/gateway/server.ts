@@ -2065,12 +2065,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     timeout: NodeJS.Timeout | null;
   }>();
 
-  async function waitForApproval(requestId: string, toolName: string, input: Record<string, unknown>, timeoutMs?: number, sessionKey?: string): Promise<{ approved: boolean; reason?: string; modifiedInput?: Record<string, unknown> }> {
+  async function waitForApproval(requestId: string, toolName: string, input: Record<string, unknown>, timeoutMs?: number, sessionKey?: string, signal?: AbortSignal): Promise<{ approved: boolean; reason?: string; modifiedInput?: Record<string, unknown> }> {
     // persist to snapshot
     if (sessionKey) {
       const snap = sessionSnapshots.get(sessionKey);
       if (snap) { snap.pendingApproval = { requestId, toolName, input, timestamp: Date.now() }; snap.updatedAt = Date.now(); }
     }
+    let onAbort: (() => void) | null = null;
     return new Promise((resolve) => {
       const timer = timeoutMs ? setTimeout(() => {
         pendingApprovals.delete(requestId);
@@ -2079,7 +2080,27 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       }, timeoutMs) : null;
 
       pendingApprovals.set(requestId, { resolve, toolName, input, timeout: timer });
+
+      // 0.3.220: SDK aborts the permission request (interrupt/turn end) — clean up so the card doesn't go stale
+      if (signal) {
+        if (signal.aborted) {
+          pendingApprovals.delete(requestId);
+          if (timer) clearTimeout(timer);
+          broadcast({ event: 'agent.tool_approval_resolved', data: { requestId, approved: false, timestamp: Date.now() } });
+          resolve({ approved: false, reason: 'request aborted' });
+        } else {
+          onAbort = () => {
+            if (!pendingApprovals.has(requestId)) return;
+            pendingApprovals.delete(requestId);
+            if (timer) clearTimeout(timer);
+            broadcast({ event: 'agent.tool_approval_resolved', data: { requestId, approved: false, timestamp: Date.now() } });
+            resolve({ approved: false, reason: 'request aborted' });
+          };
+          signal.addEventListener('abort', onAbort, { once: true });
+        }
+      }
     }).then((decision) => {
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
       if (sessionKey) { const snap = sessionSnapshots.get(sessionKey); if (snap) snap.pendingApproval = null; }
       return decision;
     }) as Promise<{ approved: boolean; reason?: string; modifiedInput?: Record<string, unknown> }>;
@@ -2183,17 +2204,52 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     return { allowedPaths: ch.allowedPaths, deniedPaths: ch.deniedPaths };
   }
 
-  function makeCanUseTool(runChannel?: string, runChatId?: string, runSessionKey?: string) {
-    return async (toolName: string, input: Record<string, unknown>) => {
-      return canUseToolImpl(toolName, input, runChannel, runChatId, runSessionKey);
+  // SDK 0.3.220 canUseTool options: requestId, matchedAskRule, decisionReason, title, etc.
+  type SdkPermissionContext = {
+    signal?: AbortSignal;
+    decisionReason?: string;
+    title?: string;
+    displayName?: string;
+    description?: string;
+    toolUseID?: string;
+    agentID?: string;
+    requestId?: string;
+    blockedPath?: string;
+    matchedAskRule?: { source: string; toolName: string; ruleContent?: string };
+  };
+
+  // decision_reason / matchedAskRule may carry ANSI escapes — sanitize before rendering
+  const stripAnsi = (s: unknown): string | undefined =>
+    typeof s === 'string' ? s.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '') : undefined;
+
+  function approvalMeta(sdkCtx?: SdkPermissionContext) {
+    if (!sdkCtx) return {};
+    return {
+      title: stripAnsi(sdkCtx.title),
+      decisionReason: stripAnsi(sdkCtx.decisionReason),
+      blockedPath: sdkCtx.blockedPath,
+      agentId: sdkCtx.agentID,
+      toolUseId: sdkCtx.toolUseID,
+      sdkRequestId: sdkCtx.requestId,
+      matchedAskRule: sdkCtx.matchedAskRule ? {
+        source: sdkCtx.matchedAskRule.source,
+        toolName: sdkCtx.matchedAskRule.toolName,
+        ruleContent: stripAnsi(sdkCtx.matchedAskRule.ruleContent),
+      } : undefined,
     };
   }
 
-  const canUseTool = async (toolName: string, input: Record<string, unknown>) => {
-    return canUseToolImpl(toolName, input, undefined, undefined, undefined);
+  function makeCanUseTool(runChannel?: string, runChatId?: string, runSessionKey?: string) {
+    return async (toolName: string, input: Record<string, unknown>, options?: unknown) => {
+      return canUseToolImpl(toolName, input, runChannel, runChatId, runSessionKey, options as SdkPermissionContext | undefined);
+    };
+  }
+
+  const canUseTool = async (toolName: string, input: Record<string, unknown>, options?: unknown) => {
+    return canUseToolImpl(toolName, input, undefined, undefined, undefined, options as SdkPermissionContext | undefined);
   };
 
-  const canUseToolImpl = async (toolName: string, input: Record<string, unknown>, runChannel?: string, runChatId?: string, runSessionKey?: string) => {
+  const canUseToolImpl = async (toolName: string, input: Record<string, unknown>, runChannel?: string, runChatId?: string, runSessionKey?: string, sdkCtx?: SdkPermissionContext) => {
     // AskUserQuestion — route to channel or desktop
     if (toolName === 'AskUserQuestion') {
       const questions = input.questions as unknown[];
@@ -2360,10 +2416,10 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       const requestId = randomUUID();
       broadcast({
         event: 'agent.tool_approval',
-        data: { requestId, toolName: cleanName, input, tier: 'require-approval', timestamp: Date.now() },
+        data: { requestId, toolName: cleanName, input, tier: 'require-approval', sessionKey: runSessionKey, ...approvalMeta(sdkCtx), timestamp: Date.now() },
       });
       channelManager.sendApprovalRequest({ requestId, toolName: cleanName, input, chatId: runChatId }, runChannel).catch(() => {});
-      const decision = await waitForApproval(requestId, cleanName, input, undefined, runSessionKey);
+      const decision = await waitForApproval(requestId, cleanName, input, undefined, runSessionKey, sdkCtx?.signal);
       if (decision.approved) {
         return { behavior: 'allow' as const, updatedInput: decision.modifiedInput || input };
       }
@@ -2383,11 +2439,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       const requestId = randomUUID();
       broadcast({
         event: 'agent.tool_approval',
-        data: { requestId, toolName: cleanName, input, tier, timestamp: Date.now() },
+        data: { requestId, toolName: cleanName, input, tier, sessionKey: runSessionKey, ...approvalMeta(sdkCtx), timestamp: Date.now() },
       });
       channelManager.sendApprovalRequest({ requestId, toolName: cleanName, input, chatId: runChatId }, runChannel).catch(() => {});
 
-      const decision = await waitForApproval(requestId, cleanName, input, undefined, runSessionKey);
+      const decision = await waitForApproval(requestId, cleanName, input, undefined, runSessionKey, sdkCtx?.signal);
 
       if (decision.approved) {
         return { behavior: 'allow' as const, updatedInput: decision.modifiedInput || input };
@@ -2503,6 +2559,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         pendingQuestionUpdatedAt: null,
         taskProgress: {},
         activeWorktrees: [],
+        backgroundTasks: [],
+        capabilities: [],
         pendingElicitation: null,
         updatedAt: Date.now(),
       });
@@ -2640,6 +2698,32 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             agentSessionId = m.session_id as string;
             sessionRegistry.setSdkSessionId(sessionKey, agentSessionId);
             fileSessionManager.setMetadata(session?.sessionId || '', { sdkSessionId: agentSessionId });
+            // 0.3.220: capabilities on init (e.g. interrupt_receipt_v1) — store + broadcast for feature detection
+            if (Array.isArray(m.capabilities)) {
+              const snap = sessionSnapshots.get(sessionKey);
+              if (snap) { snap.capabilities = m.capabilities as string[]; snap.updatedAt = Date.now(); }
+              broadcast({ event: 'agent.capabilities', data: { sessionKey, capabilities: m.capabilities, timestamp: Date.now() } });
+            }
+          }
+
+          // ── 0.3.220: background tasks (replace semantics, reset on CLI restart) ──
+          if (m.type === 'system' && m.subtype === 'background_tasks_changed') {
+            const tasks = (Array.isArray(m.tasks) ? m.tasks as Record<string, unknown>[] : []).map(t => ({
+              taskId: String(t.task_id || ''),
+              taskType: String(t.task_type || ''),
+              description: String(t.description || ''),
+            }));
+            const snap = sessionSnapshots.get(sessionKey);
+            if (snap) { snap.backgroundTasks = tasks; snap.updatedAt = Date.now(); }
+            broadcast({ event: 'agent.background_tasks', data: { sessionKey, tasks, timestamp: Date.now() } });
+          }
+
+          // ── 0.3.220: conversation reset (e.g. /clear inside session) ──
+          if (m.type === 'conversation_reset') {
+            broadcast({
+              event: 'agent.conversation_reset',
+              data: { sessionKey, newConversationId: m.new_conversation_id, timestamp: Date.now() },
+            });
           }
 
           // ── SDK task system messages (subagent progress) ──────────────
@@ -6370,6 +6454,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           pendingApprovals.delete(requestId);
           if (pending.timeout) clearTimeout(pending.timeout);
           pending.resolve({ approved: true, modifiedInput: params?.modifiedInput as Record<string, unknown> });
+          broadcast({ event: 'agent.tool_approval_resolved', data: { requestId, approved: true, timestamp: Date.now() } });
           return { id, result: { approved: true } };
         }
 
@@ -6381,6 +6466,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           pendingApprovals.delete(requestId);
           if (pending.timeout) clearTimeout(pending.timeout);
           pending.resolve({ approved: false, reason: (params?.reason as string) || 'user denied' });
+          broadcast({ event: 'agent.tool_approval_resolved', data: { requestId, approved: false, timestamp: Date.now() } });
           return { id, result: { denied: true } };
         }
 

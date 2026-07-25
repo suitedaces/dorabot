@@ -177,6 +177,12 @@ export type GatewayEventName =
   | 'agent.status'
   | 'agent.stream_batch'
   | 'agent.compacting'
+  | 'agent.capabilities'
+  | 'agent.background_tasks'
+  | 'agent.conversation_reset'
+  | 'agent.tool_approval'
+  | 'agent.tool_approval_resolved'
+  | 'agent.tool_notify'
   | 'session.snapshot'
   | 'gateway.telemetry';
 
@@ -212,6 +218,10 @@ export type SessionSnapshot = {
   taskProgress: Record<string, TaskProgress>;
   /** Active worktrees created by the agent */
   activeWorktrees: { path: string; branch: string }[];
+  /** SDK background tasks (0.3.220 background_tasks_changed, replace semantics) */
+  backgroundTasks: { taskId: string; taskType: string; description: string }[];
+  /** SDK feature capabilities from system/init (e.g. interrupt_receipt_v1) */
+  capabilities: string[];
   /** Pending elicitation (structured question) from agent */
   pendingElicitation: {
     elicitationId: string;

@@ -35,6 +35,13 @@ export type SandboxSettings = {
     enabled?: boolean;
     allowLocalBinding?: boolean;
     allowUnixSockets?: string[];
+    allowedDomains?: string[];
+    deniedDomains?: string[];
+    strictAllowlist?: boolean;
+  };
+  credentials?: {
+    envVars?: { name: string; mode: 'deny' | 'mask'; injectHosts?: string[] }[];
+    allowPlaintextInject?: boolean;
   };
 };
 
@@ -49,6 +56,9 @@ export type AgentDefinition = {
   skills?: string[];
   prompt: string;
   model?: 'sonnet' | 'opus' | 'haiku' | 'inherit';
+  /** agent type auto-spawned as read-only background observer when this agent runs */
+  observer?: string;
+  observerMessage?: string;
 };
 
 export type CronConfig = {

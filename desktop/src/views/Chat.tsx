@@ -2080,6 +2080,22 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
       {/* progress */}
       {progress.length > 0 && <ChatProgress items={progress} />}
 
+      {/* sdk background tasks */}
+      {sessionKey && (gateway.backgroundTasks[sessionKey]?.length ?? 0) > 0 && (
+        <div className="px-4 pt-1 shrink-0 flex flex-wrap gap-1.5">
+          {gateway.backgroundTasks[sessionKey].map(t => (
+            <span
+              key={t.taskId}
+              className="inline-flex items-center gap-1 rounded-full border border-border/40 bg-muted/30 px-2 py-0.5 text-[10px] font-mono text-muted-foreground"
+              title={t.description}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              {t.taskType}: {t.description.slice(0, 48)}{t.description.length > 48 ? '…' : ''}
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* input area */}
       <div className="px-4 py-3 shrink-0 min-w-0">
         <Card className="relative rounded-2xl chat-input-area" onDrop={handleDrop} onDragOver={handleDragOver}>

@@ -180,6 +180,19 @@ export type ToolApproval = {
   tier: string;
   sessionKey?: string;
   timestamp: number;
+  title?: string;
+  decisionReason?: string;
+  blockedPath?: string;
+  agentId?: string;
+  toolUseId?: string;
+  sdkRequestId?: string;
+  matchedAskRule?: { source?: string; toolName?: string; ruleContent?: string };
+};
+
+export type SdkBackgroundTask = {
+  taskId: string;
+  taskType: string;
+  description: string;
 };
 
 export type ToolNotification = {
@@ -611,6 +624,10 @@ export function useGateway() {
   const [configData, setConfigData] = useState<Record<string, unknown> | null>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<ToolApproval[]>([]);
+  // sdk background tasks per session (0.3.220 background_tasks_changed, replace semantics)
+  const [backgroundTasks, setBackgroundTasks] = useState<Record<string, SdkBackgroundTask[]>>({});
+  // sdk feature capabilities per session (from system/init)
+  const [sessionCapabilities, setSessionCapabilities] = useState<Record<string, string[]>>({});
   const [notifications, setNotifications] = useState<ToolNotification[]>([]);
   const [whatsappQr, setWhatsappQr] = useState<string | null>(null);
   const [whatsappLoginStatus, setWhatsappLoginStatus] = useState<string>('unknown');
@@ -1218,6 +1235,8 @@ export function useGateway() {
           pendingQuestion: { requestId: string; questions: any[] } | null;
           pendingQuestionStatus?: 'pending' | 'answered' | 'timeout' | 'cancelled' | null;
           pendingQuestionUpdatedAt?: number | null;
+          backgroundTasks?: SdkBackgroundTask[];
+          capabilities?: string[];
           updatedAt: number;
         };
         const sk = snap.sessionKey;
@@ -1259,6 +1278,8 @@ export function useGateway() {
             },
           };
         });
+        if (snap.backgroundTasks) setBackgroundTasks(prev => ({ ...prev, [sk]: snap.backgroundTasks! }));
+        if (snap.capabilities) setSessionCapabilities(prev => ({ ...prev, [sk]: snap.capabilities! }));
         setPendingApprovals(prev => {
           const withoutSession = prev.filter(a => a.sessionKey !== sk);
           if (!snap.pendingApproval) return withoutSession;
@@ -1563,6 +1584,32 @@ export function useGateway() {
         const d = data as ToolApproval;
         setPendingApprovals(prev => [...prev, d]);
         onNotifiableEventRef.current?.({ type: 'tool_approval', toolName: cleanToolName(d.toolName) });
+        break;
+      }
+
+      case 'agent.tool_approval_resolved': {
+        const d = data as { requestId: string };
+        setPendingApprovals(prev => prev.filter(a => a.requestId !== d.requestId));
+        break;
+      }
+
+      case 'agent.background_tasks': {
+        const d = data as { sessionKey: string; tasks: SdkBackgroundTask[] };
+        if (!d.sessionKey) break;
+        setBackgroundTasks(prev => ({ ...prev, [d.sessionKey]: d.tasks || [] }));
+        break;
+      }
+
+      case 'agent.capabilities': {
+        const d = data as { sessionKey: string; capabilities: string[] };
+        if (!d.sessionKey) break;
+        setSessionCapabilities(prev => ({ ...prev, [d.sessionKey]: d.capabilities || [] }));
+        break;
+      }
+
+      case 'agent.conversation_reset': {
+        const d = data as { sessionKey: string };
+        if (d.sessionKey) setBackgroundTasks(prev => ({ ...prev, [d.sessionKey]: [] }));
         break;
       }
 
@@ -2353,6 +2400,8 @@ export function useGateway() {
     answerQuestion,
     dismissQuestion,
     pendingApprovals,
+    backgroundTasks,
+    sessionCapabilities,
     notifications,
     approveToolUse,
     denyToolUse,

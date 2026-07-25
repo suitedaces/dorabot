@@ -79,6 +79,10 @@ type Approval = {
   toolName: string
   input: Record<string, unknown>
   timestamp: number
+  title?: string
+  decisionReason?: string
+  blockedPath?: string
+  matchedAskRule?: { source?: string; toolName?: string; ruleContent?: string }
 }
 
 function ApprovalRow({
@@ -99,7 +103,7 @@ function ApprovalRow({
 
   const Form = FORM_MAP[approval.toolName] || DefaultApproval
   const Icon = TOOL_ICON[approval.toolName] || Wrench
-  const text = summary(approval.toolName, approval.input)
+  const text = approval.title || summary(approval.toolName, approval.input)
 
   return (
     <div>
@@ -139,6 +143,24 @@ function ApprovalRow({
       </div>
       {expanded && (
         <div className="px-3 pb-2 pl-[52px]">
+          {(approval.decisionReason || approval.blockedPath || approval.matchedAskRule) && (
+            <div className="mb-1.5 space-y-0.5">
+              {approval.decisionReason && (
+                <div className="text-[10px] text-muted-foreground">{approval.decisionReason}</div>
+              )}
+              {approval.blockedPath && (
+                <div className="text-[10px] text-warning font-mono truncate">blocked path: {approval.blockedPath}</div>
+              )}
+              {approval.matchedAskRule && (
+                <div className="text-[9px] font-mono text-muted-foreground/80">
+                  <span className="rounded bg-muted/60 px-1 py-px">
+                    ask rule{approval.matchedAskRule.source ? ` · ${approval.matchedAskRule.source}` : ''}
+                    {approval.matchedAskRule.ruleContent ? ` · ${approval.matchedAskRule.ruleContent}` : ''}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
           <div className="rounded-md border border-border/40 bg-muted/20 p-2">
             <Form
               toolName={approval.toolName}

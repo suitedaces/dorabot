@@ -62,6 +62,19 @@ export function SettingsView({ gateway }: Props) {
   const sandboxScope = cfg?.sandbox?.scope || 'session';
   const sandboxWorkspaceAccess = cfg?.sandbox?.workspaceAccess || 'rw';
   const sandboxNetworkEnabled = cfg?.sandbox?.network?.enabled ?? true;
+  const sandboxStrictAllowlist = cfg?.sandbox?.network?.strictAllowlist ?? false;
+  const sandboxAllowedDomains: string[] = cfg?.sandbox?.network?.allowedDomains || [];
+  const sandboxDeniedDomains: string[] = cfg?.sandbox?.network?.deniedDomains || [];
+  const sandboxCredEnvVars: { name: string; mode: 'deny' | 'mask' }[] = cfg?.sandbox?.credentials?.envVars || [];
+  const sandboxMaskedVars = sandboxCredEnvVars.filter(v => v.mode === 'mask').map(v => v.name);
+  const sandboxDeniedVars = sandboxCredEnvVars.filter(v => v.mode === 'deny').map(v => v.name);
+  const setCredEnvVars = (masked: string[], denied: string[]) => {
+    const envVars = [
+      ...masked.map(name => ({ name, mode: 'mask' as const })),
+      ...denied.map(name => ({ name, mode: 'deny' as const })),
+    ];
+    set('sandbox.credentials.envVars', envVars);
+  };
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -225,6 +238,55 @@ export function SettingsView({ gateway }: Props) {
                         size="sm"
                         checked={sandboxNetworkEnabled}
                         onCheckedChange={v => set('sandbox.network.enabled', v)}
+                        disabled={disabled}
+                      />
+                    </SettingRow>
+
+                    {sandboxNetworkEnabled && (
+                      <>
+                        <SettingRow label="allowed domains" description="domains sandboxed commands may reach (comma-separated, empty = all)">
+                          <ListInput
+                            value={sandboxAllowedDomains}
+                            onCommit={items => set('sandbox.network.allowedDomains', items)}
+                            placeholder="api.github.com, registry.npmjs.org"
+                            disabled={disabled}
+                          />
+                        </SettingRow>
+
+                        <SettingRow label="denied domains" description="domains always blocked from the sandbox">
+                          <ListInput
+                            value={sandboxDeniedDomains}
+                            onCommit={items => set('sandbox.network.deniedDomains', items)}
+                            placeholder="example.com"
+                            disabled={disabled}
+                          />
+                        </SettingRow>
+
+                        <SettingRow label="strict allowlist" description="deterministically deny any host not on the allowed list">
+                          <Switch
+                            size="sm"
+                            checked={sandboxStrictAllowlist}
+                            onCheckedChange={v => set('sandbox.network.strictAllowlist', v)}
+                            disabled={disabled}
+                          />
+                        </SettingRow>
+                      </>
+                    )}
+
+                    <SettingRow label="masked env vars" description="secrets hidden from the model but injected into real requests (comma-separated names)">
+                      <ListInput
+                        value={sandboxMaskedVars}
+                        onCommit={items => setCredEnvVars(items, sandboxDeniedVars)}
+                        placeholder="OPENROUTER_API_KEY"
+                        disabled={disabled}
+                      />
+                    </SettingRow>
+
+                    <SettingRow label="denied env vars" description="env vars stripped entirely from the sandbox">
+                      <ListInput
+                        value={sandboxDeniedVars}
+                        onCommit={items => setCredEnvVars(sandboxMaskedVars, items)}
+                        placeholder="AWS_SECRET_ACCESS_KEY"
                         disabled={disabled}
                       />
                     </SettingRow>
@@ -1298,6 +1360,32 @@ function SettingRow({ label, description, children }: { label: string; descripti
       </div>
       <div className="shrink-0">{children}</div>
     </div>
+  );
+}
+
+// comma-separated list input, commits on blur/enter
+function ListInput({ value, onCommit, placeholder, disabled }: {
+  value: string[];
+  onCommit: (items: string[]) => void;
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  const [draft, setDraft] = useState(value.join(', '));
+  useEffect(() => { setDraft(value.join(', ')); }, [value.join(',')]);
+  const commit = () => {
+    const items = draft.split(',').map(s => s.trim()).filter(Boolean);
+    if (items.join(',') !== value.join(',')) onCommit(items);
+  };
+  return (
+    <Input
+      className="h-7 w-56 text-[11px] font-mono"
+      value={draft}
+      placeholder={placeholder}
+      disabled={disabled}
+      onChange={e => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => { if (e.key === 'Enter') commit(); }}
+    />
   );
 }
 
