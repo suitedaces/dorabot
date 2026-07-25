@@ -78,6 +78,20 @@ jobs:
           AUTHORITY=$(echo "$SIG_INFO" | grep "Authority=Developer ID Application" | head -1)
           echo "Signature OK: $AUTHORITY ($TEAM)"
 
+      - name: Reconcile GitHub release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          gh release upload "$TAG" \
+            desktop/release/*.zip \
+            desktop/release/*.zip.blockmap \
+            desktop/release/*.dmg \
+            desktop/release/*.dmg.blockmap \
+            desktop/release/latest-mac.yml \
+            --clobber \
+            --repo "$GITHUB_REPOSITORY"
+
       - name: Add release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -91,14 +105,46 @@ jobs:
           fi
           gh release edit "$TAG" --notes "$NOTES" --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
 
+      - name: Verify updater release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          MANIFEST="desktop/release/latest-mac.yml"
+          RELEASE_ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name' --repo "$GITHUB_REPOSITORY")
+
+          for ASSET in latest-mac.yml $(sed -n 's/^[[:space:]]*- url: //p' "$MANIFEST"); do
+            if ! grep -Fxq "$ASSET" <<< "$RELEASE_ASSETS"; then
+              echo "::error::Release asset is missing: $ASSET"
+              exit 1
+            fi
+
+            URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ASSET}"
+            READY=false
+            for ATTEMPT in 1 2 3 4 5; do
+              if curl --fail --silent --show-error --head --location "$URL" >/dev/null; then
+                READY=true
+                break
+              fi
+              sleep 3
+            done
+
+            if [ "$READY" != "true" ]; then
+              echo "::error::Release asset is not downloadable: $ASSET"
+              exit 1
+            fi
+          done
+
       - name: Upload DMG
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dorabot-dmg
           path: desktop/release/*.dmg
+          if-no-files-found: error
 
       - name: Upload ZIP
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dorabot-zip
           path: desktop/release/*.zip
+          if-no-files-found: error
