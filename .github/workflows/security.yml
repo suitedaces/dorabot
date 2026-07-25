@@ -61,9 +61,14 @@ jobs:
             }
           fi
 
-          # Final check: fail if vulns remain after fix
-          npm audit --audit-level=high
-          cd desktop && npm audit --audit-level=high
+          # Final check: fail if high/critical vulns remain after fix.
+          # Allowlist (remove when upstream ships per-major backports):
+          # - GHSA-mh99-v99m-4gvg: brace-expansion DoS, published 2026-07-24. Only patched
+          #   version (5.0.8) is ESM-only and breaks CJS minimatch@3 consumers inside
+          #   electron-builder's packaging chain (verified locally). Nested copies are on
+          #   1.1.16/2.1.2 which are patched for every other brace-expansion advisory.
+          node scripts/audit-gate.mjs --dir=.
+          node scripts/audit-gate.mjs --dir=desktop --allow=GHSA-mh99-v99m-4gvg
 
   pin-check:
     runs-on: ubuntu-latest
