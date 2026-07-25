@@ -118,9 +118,9 @@ export type SecurityConfig = {
   autoApprove?: string[];
 };
 
-export type ProviderName = 'claude' | 'codex' | 'minimax';
+export type ProviderName = 'claude' | 'codex' | 'minimax' | 'openrouter';
 
-export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh';
+export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh' | 'ultra';
 
 export type ThinkingDisplay = 'summarized' | 'omitted';
 
@@ -131,6 +131,11 @@ export type CodexApprovalPolicy = 'never' | 'on-request' | 'on-failure' | 'untru
 export type CodexWebSearchMode = 'disabled' | 'cached' | 'live';
 export type CodexMcpOauthCredentialsStore = 'auto' | 'file' | 'keyring';
 export type CodexCliConfigValue = string | number | boolean | CodexCliConfigValue[] | { [key: string]: CodexCliConfigValue };
+/** Codex 0.145+: tone of the model's replies */
+export type CodexPersonality = 'none' | 'friendly' | 'pragmatic';
+/** Codex 0.145+: who reviews tool approvals. auto_review = codex subagent risk-assesses instead of asking the user */
+export type CodexApprovalsReviewer = 'user' | 'auto_review' | 'guardian_subagent';
+export type CodexReasoningSummary = 'auto' | 'none' | 'concise' | 'detailed';
 
 export type CodexProviderConfig = {
   authMethod?: 'oauth' | 'api_key';
@@ -143,12 +148,40 @@ export type CodexProviderConfig = {
   mcpOauthCredentialsStore?: CodexMcpOauthCredentialsStore;
   skipGitRepoCheck?: boolean;
   additionalDirectories?: string[];
+  /** reply tone (codex 0.145+). default: none */
+  personality?: CodexPersonality;
+  /** route approvals to a codex subagent instead of the user. default: user */
+  approvalsReviewer?: CodexApprovalsReviewer;
+  /** don't persist thread to ~/.codex/sessions (good for cron/one-shot runs). default: false */
+  ephemeral?: boolean;
+  /** service tier, e.g. 'priority' (1.5x speed on 5.6 models). default: standard */
+  serviceTier?: string;
+  /** reasoning summary verbosity. default: auto */
+  reasoningSummary?: CodexReasoningSummary;
+  /** on context-window overflow: compact the thread and retry the turn once. default: true */
+  autoCompact?: boolean;
+  /** stream file-change patches as they're written (replaces removed outputDelta event). default: true */
+  patchStreamingEvents?: boolean;
+  /** surface codex's running plan/todo list as tool events. default: true */
+  planUpdates?: boolean;
+  /** stream the turn's aggregated diff as tool output. default: false */
+  turnDiffs?: boolean;
   config?: Record<string, CodexCliConfigValue>;
+};
+
+export type OpenRouterProviderConfig = {
+  baseUrl?: string;
+  model?: string;
+  referer?: string;
+  title?: string;
+  temperature?: number;
+  maxTokens?: number;
 };
 
 export type ProviderConfig = {
   name: ProviderName;
   codex?: CodexProviderConfig;
+  openrouter?: OpenRouterProviderConfig;
 };
 
 export type McpServerEntry = {

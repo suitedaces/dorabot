@@ -7,6 +7,13 @@ export type ImageAttachment = {
   mediaType: string;
 };
 
+export type AudioAttachment = {
+  /** base64-encoded audio data */
+  data: string;
+  /** MIME type, e.g. 'audio/mpeg', 'audio/ogg', 'audio/wav' */
+  mediaType: string;
+};
+
 export type ProviderInputItem =
   | { type: 'skill'; name: string; path: string }
   | { type: 'mention'; name: string; path: string };
@@ -37,6 +44,8 @@ export type RunHandle = {
 export type ProviderRunOptions = {
   prompt: string;
   images?: ImageAttachment[];
+  /** voice notes etc. — codex 0.145+ accepts audio input on models with audio modality */
+  audio?: AudioAttachment[];
   inputItems?: ProviderInputItem[];
   systemPrompt: string;
   model: string;

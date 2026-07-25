@@ -659,6 +659,13 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
   const memoriesEnabled = Boolean(codexCliConfig.features && typeof codexCliConfig.features === 'object' && codexCliConfig.features.memories === true);
   const rawReasoningEnabled = codexCliConfig.show_raw_agent_reasoning === true;
   const skipGitRepoCheck = cfg?.provider?.codex?.skipGitRepoCheck ?? true;
+  const codexPersonality = cfg?.provider?.codex?.personality || 'none';
+  const approvalsReviewer = cfg?.provider?.codex?.approvalsReviewer || 'user';
+  const codexEphemeral = cfg?.provider?.codex?.ephemeral ?? false;
+  const codexAutoCompact = cfg?.provider?.codex?.autoCompact ?? true;
+  const patchStreamingEvents = cfg?.provider?.codex?.patchStreamingEvents ?? true;
+  const codexPlanUpdates = cfg?.provider?.codex?.planUpdates ?? true;
+  const codexTurnDiffs = cfg?.provider?.codex?.turnDiffs ?? false;
   const baseUrl = cfg?.provider?.codex?.baseUrl || '';
   const additionalDirectories = Array.isArray(cfg?.provider?.codex?.additionalDirectories)
     ? cfg.provider.codex.additionalDirectories.join(', ')
@@ -1027,10 +1034,81 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
               <SelectContent>
                 <SelectItem value="never" className="text-[11px]">never (auto)</SelectItem>
                 <SelectItem value="on-request" className="text-[11px]">on request</SelectItem>
-                <SelectItem value="on-failure" className="text-[11px]">on failure</SelectItem>
+                <SelectItem value="on-failure" className="text-[11px]">on failure (legacy, runs as on-request)</SelectItem>
                 <SelectItem value="untrusted" className="text-[11px]">untrusted</SelectItem>
               </SelectContent>
             </Select>
+          </SettingRow>
+
+          <SettingRow label="approvals reviewer" description="who reviews approvals: you, a codex risk-assessing subagent (auto review), or guardian">
+            <Select value={approvalsReviewer} onValueChange={v => set('provider.codex.approvalsReviewer', v === 'user' ? null : v)} disabled={disabled}>
+              <SelectTrigger className="h-7 w-40 text-[11px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="user" className="text-[11px]">user (you)</SelectItem>
+                <SelectItem value="auto_review" className="text-[11px]">auto review (subagent)</SelectItem>
+                <SelectItem value="guardian_subagent" className="text-[11px]">guardian subagent</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingRow>
+
+          <SettingRow label="personality" description="tone of Codex replies (0.145+)">
+            <Select value={codexPersonality} onValueChange={v => set('provider.codex.personality', v === 'none' ? null : v)} disabled={disabled}>
+              <SelectTrigger className="h-7 w-40 text-[11px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none" className="text-[11px]">none (default)</SelectItem>
+                <SelectItem value="friendly" className="text-[11px]">friendly</SelectItem>
+                <SelectItem value="pragmatic" className="text-[11px]">pragmatic</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingRow>
+
+          <SettingRow label="auto compact" description="on context overflow: compact the thread and retry the turn instead of failing">
+            <Switch
+              size="sm"
+              checked={codexAutoCompact}
+              onCheckedChange={v => set('provider.codex.autoCompact', v ? null : false)}
+              disabled={disabled}
+            />
+          </SettingRow>
+
+          <SettingRow label="ephemeral threads" description="don't persist threads to ~/.codex/sessions (scheduled/one-shot runs won't be resumable)">
+            <Switch
+              size="sm"
+              checked={codexEphemeral}
+              onCheckedChange={v => set('provider.codex.ephemeral', v ? true : null)}
+              disabled={disabled}
+            />
+          </SettingRow>
+
+          <SettingRow label="patch streaming" description="stream file edits as patches land (0.145 replaced the old file-change stream with this)">
+            <Switch
+              size="sm"
+              checked={patchStreamingEvents}
+              onCheckedChange={v => set('provider.codex.patchStreamingEvents', v ? null : false)}
+              disabled={disabled}
+            />
+          </SettingRow>
+
+          <SettingRow label="plan updates" description="show Codex's running plan/todo checklist in chat as it works">
+            <Switch
+              size="sm"
+              checked={codexPlanUpdates}
+              onCheckedChange={v => set('provider.codex.planUpdates', v ? null : false)}
+              disabled={disabled}
+            />
+          </SettingRow>
+
+          <SettingRow label="turn diffs" description="stream the aggregated diff of each turn into chat (noisy on big changes)">
+            <Switch
+              size="sm"
+              checked={codexTurnDiffs}
+              onCheckedChange={v => set('provider.codex.turnDiffs', v ? true : null)}
+              disabled={disabled}
+            />
           </SettingRow>
 
           <SettingRow label="network" description="allow network access from Codex">
@@ -1063,8 +1141,9 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="auto" className="text-[11px]">auto</SelectItem>
-                <SelectItem value="flex" className="text-[11px]">flex</SelectItem>
-                <SelectItem value="fast" className="text-[11px]">fast</SelectItem>
+                <SelectItem value="priority" className="text-[11px]">priority (1.5x speed, more usage — 5.6 models)</SelectItem>
+                <SelectItem value="flex" className="text-[11px]">flex (legacy)</SelectItem>
+                <SelectItem value="fast" className="text-[11px]">fast (legacy)</SelectItem>
               </SelectContent>
             </Select>
           </SettingRow>

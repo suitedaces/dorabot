@@ -20,7 +20,7 @@ export type ReasoningEffortOption = {
 };
 
 export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6';
-export const DEFAULT_CODEX_MODEL = 'gpt-5.5';
+export const DEFAULT_CODEX_MODEL = 'gpt-5.6-terra';
 
 export const CLAUDE_AGENT_SDK_REASONING_EFFORTS: ReasoningEffortOption[] = [
   { value: 'low', label: 'low' },
@@ -37,7 +37,7 @@ const CODEX_FALLBACK_REASONING_EFFORTS: ReasoningEffortOption[] = [
   { value: 'xhigh', label: 'xhigh' },
 ];
 
-const CODEX_APP_SERVER_REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+const CODEX_APP_SERVER_REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
 export const CLAUDE_MODELS: ModelOption[] = [
   { value: 'claude-fable-5', label: 'Fable 5' },
@@ -52,10 +52,29 @@ export const CLAUDE_MODELS: ModelOption[] = [
 ];
 
 export const CODEX_MODELS: ModelOption[] = [
+  {
+    value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol',
+    description: 'Latest frontier agentic coding model. Supports max + ultra reasoning (ultra = automatic multi-agent delegation).',
+    defaultReasoningEffort: 'low',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  },
+  {
+    value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra',
+    description: 'Balanced agentic coding model for everyday work.',
+    defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    isDefault: true,
+  },
+  {
+    value: 'gpt-5.6-luna', label: 'GPT-5.6 Luna',
+    description: 'Fast and affordable agentic coding model.',
+    defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
   { value: 'gpt-5.5', label: 'GPT-5.5', description: 'Frontier Codex model for complex coding, research, and real-world work.' },
   { value: 'gpt-5.4', label: 'GPT-5.4', description: 'Strong Codex model for everyday coding.' },
   { value: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', description: 'Small, fast, cost-efficient Codex model for simpler coding tasks.' },
-  { value: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', description: 'Coding-optimized Codex model.' },
+  { value: 'gpt-5.3-codex', label: 'GPT-5.3 Codex (removed in 0.145)', deprecated: true, description: 'No longer bundled with the Codex CLI.' },
   { value: 'gpt-5.3-codex-spark', label: 'GPT-5.3 Codex Spark', description: 'Ultra-fast Codex research preview model.', researchPreview: true },
   { value: 'gpt-5.2', label: 'GPT-5.2', description: 'Optimized for professional work and long-running agents.' },
   { value: 'gpt-5-codex', label: 'GPT-5 Codex (deprecated)', deprecated: true },

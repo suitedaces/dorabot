@@ -101,11 +101,12 @@ export type CodexAppServerSnapshot = CodexModelCatalog & {
   configRequirements: unknown | null;
 };
 
-type CodexAppReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+type CodexAppReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 type AppServerUserInput =
   | { type: 'text'; text: string; text_elements: unknown[] }
   | { type: 'localImage'; path: string }
+  | { type: 'localAudio'; path: string }
   | { type: 'skill'; name: string; path: string }
   | { type: 'mention'; name: string; path: string };
 
@@ -310,23 +311,45 @@ function stripDataUri(data: string): string {
   return data.includes(',') ? data.split(',')[1] : data;
 }
 
+function audioExtensionForMediaType(mediaType: string): string {
+  switch (mediaType.toLowerCase().split(';')[0]) {
+    case 'audio/mpeg':
+    case 'audio/mp3':
+      return 'mp3';
+    case 'audio/ogg':
+      return 'ogg';
+    case 'audio/wav':
+    case 'audio/x-wav':
+      return 'wav';
+    case 'audio/mp4':
+    case 'audio/m4a':
+    case 'audio/x-m4a':
+      return 'm4a';
+    case 'audio/webm':
+      return 'webm';
+    default:
+      return 'bin';
+  }
+}
+
 async function prepareCodexInput(
   prompt: string,
   images?: ProviderRunOptions['images'],
   extraItems: ProviderInputItem[] = [],
+  audio?: ProviderRunOptions['audio'],
 ): Promise<{ input: AppServerUserInput[]; cleanup: () => void }> {
-  if (!images?.length) {
+  if (!images?.length && !audio?.length) {
     return { input: [{ type: 'text', text: prompt, text_elements: [] }, ...extraItems], cleanup: () => {} };
   }
 
   mkdirSync(TMP_DIR, { recursive: true });
 
-  const { valid, warnings } = await guardImages(images);
+  const { valid, warnings } = images?.length ? await guardImages(images) : { valid: [], warnings: [] };
   const promptText = warnings.length
     ? `${prompt}\n\n[Image warning: ${warnings.join('; ')}]`
     : prompt;
 
-  if (!valid.length) {
+  if (!valid.length && !audio?.length) {
     return { input: [{ type: 'text', text: promptText, text_elements: [] }, ...extraItems], cleanup: () => {} };
   }
 
@@ -340,6 +363,13 @@ async function prepareCodexInput(
       writeFileSync(path, Buffer.from(stripDataUri(image.data), 'base64'));
       tempPaths.push(path);
       input.push({ type: 'localImage', path });
+    }
+    for (const clip of audio || []) {
+      const ext = audioExtensionForMediaType(clip.mediaType);
+      const path = join(TMP_DIR, `codex-audio-${Date.now()}-${randomBytes(6).toString('hex')}.${ext}`);
+      writeFileSync(path, Buffer.from(stripDataUri(clip.data), 'base64'));
+      tempPaths.push(path);
+      input.push({ type: 'localAudio', path });
     }
   } catch (err) {
     for (const path of tempPaths) {
@@ -1419,13 +1449,16 @@ export function hasCodexAuth(): boolean {
 
 // ── Reasoning effort mapping ────────────────────────────────────────
 
+// codex 0.145: 'minimal' dropped from all bundled models, 'max'/'ultra' added (5.6 family).
+// ultra = max reasoning + automatic multi-agent task delegation.
 const EFFORT_MAP: Record<ReasoningEffort, CodexAppReasoningEffort> = {
   minimal: 'low',
   low: 'low',
   medium: 'medium',
   high: 'high',
-  max: 'xhigh',
+  max: 'max',
   xhigh: 'xhigh',
+  ultra: 'ultra',
 };
 
 function appServerConfigForRun(
@@ -1441,6 +1474,19 @@ function appServerConfigForRun(
   config.mcp_oauth_credentials_store = mcpOauthCredentialsStore;
   if (mergedMcpServers) config.mcp_servers = mergedMcpServers as CodexCliConfigValue;
 
+  // first-class options win over raw cli config passthrough
+  if (codexConfig?.serviceTier) config.service_tier = codexConfig.serviceTier;
+  if (codexConfig?.reasoningSummary) config.model_reasoning_summary = codexConfig.reasoningSummary;
+
+  // 0.145: item/fileChange/outputDelta is no longer emitted; patch streaming replaces it
+  if (codexConfig?.patchStreamingEvents !== false) {
+    const features = (config.features && typeof config.features === 'object' && !Array.isArray(config.features))
+      ? config.features as Record<string, CodexCliConfigValue>
+      : {};
+    features.apply_patch_streaming_events = true;
+    config.features = features;
+  }
+
   const additionalDirectories = normalizeStringArray(codexConfig?.additionalDirectories);
   if ((codexConfig?.sandboxMode || 'danger-full-access') === 'workspace-write' || additionalDirectories?.length) {
     config.sandbox_workspace_write = {
@@ -1453,8 +1499,22 @@ function appServerConfigForRun(
   return config;
 }
 
-function serviceTierFromConfig(config: Record<string, CodexCliConfigValue>): 'fast' | 'flex' | undefined {
-  return config.service_tier === 'fast' || config.service_tier === 'flex' ? config.service_tier : undefined;
+function serviceTierFromConfig(config: Record<string, CodexCliConfigValue>): string | undefined {
+  // 0.145 tiers are model-defined ids (e.g. 'priority'); legacy 'fast'/'flex' still pass through
+  return typeof config.service_tier === 'string' && config.service_tier && config.service_tier !== 'auto'
+    ? config.service_tier
+    : undefined;
+}
+
+function isContextOverflowError(message: string, code: unknown): boolean {
+  if (typeof code === 'string' && /contextwindow/i.test(code)) return true;
+  return /context window|context length|context_length|maximum context/i.test(message);
+}
+
+function sanitizeApprovalPolicy(policy: string | undefined): string {
+  // 'on-failure' was removed from codex core in 0.14x; coerce to closest surviving policy
+  if (policy === 'on-failure') return 'on-request';
+  return policy || 'never';
 }
 
 function reasoningSummaryFromConfig(config: Record<string, CodexCliConfigValue>): 'auto' | 'none' | 'concise' | 'detailed' | undefined {
@@ -1725,7 +1785,7 @@ export class CodexProvider implements Provider {
 
   async *query(opts: ProviderRunOptions): AsyncGenerator<ProviderMessage, ProviderQueryResult, unknown> {
     const codexConfig = opts.config.provider?.codex;
-    const model = codexConfig?.model || 'gpt-5.5';
+    const model = codexConfig?.model || 'gpt-5.6-terra';
     const reasoningEffort = opts.config.reasoningEffort;
     const mcpOauthCredentialsStore = (codexConfig?.mcpOauthCredentialsStore || 'file') as CodexMcpOauthCredentialsStore;
 
@@ -1771,15 +1831,19 @@ export class CodexProvider implements Provider {
     const networkAccess = codexConfig?.networkAccess ?? true;
     const sandboxPolicy = sandboxPolicyForRun(sandboxMode, opts.cwd, additionalDirectories, networkAccess);
 
+    const approvalPolicy = sanitizeApprovalPolicy(codexConfig?.approvalPolicy);
     const threadParams = {
       model,
       cwd: opts.cwd,
-      approvalPolicy: (codexConfig?.approvalPolicy as any) || 'never',
+      approvalPolicy: approvalPolicy as any,
       sandbox: sandboxMode,
       config: appServerConfig,
       serviceName: 'dorabot',
       developerInstructions: opts.systemPrompt,
       ...(serviceTier ? { serviceTier } : {}),
+      ...(codexConfig?.personality ? { personality: codexConfig.personality } : {}),
+      ...(codexConfig?.approvalsReviewer ? { approvalsReviewer: codexConfig.approvalsReviewer } : {}),
+      ...(codexConfig?.ephemeral && !opts.resumeId ? { ephemeral: true } : {}),
     };
 
     const abort = opts.abortController || new AbortController();
@@ -1793,6 +1857,9 @@ export class CodexProvider implements Provider {
     let active = true;
     let emittedInit = false;
     let turnDone = false;
+    let contextOverflow = false;
+    let compactRetried = codexConfig?.autoCompact === false; // disabled = pretend we already retried
+    let sawRawUsage = false;
     let client: CodexAppServerClient | null = null;
     const pendingInputCleanups = new Set<() => void>();
 
@@ -2020,6 +2087,7 @@ export class CodexProvider implements Provider {
       }
 
       if (message.method === 'thread/tokenUsage/updated') {
+        if (sawRawUsage) return; // rawResponse/completed is exact; don't overwrite
         const tokenUsage = params.tokenUsage as Record<string, any> | undefined;
         const last = tokenUsage?.last || tokenUsage?.total;
         if (last) {
@@ -2033,6 +2101,11 @@ export class CodexProvider implements Provider {
         const turn = params.turn as Record<string, any> | undefined;
         if (turn?.status === 'failed') {
           const errMsg = turn.error?.message || 'Turn failed';
+          if (isContextOverflowError(errMsg, turn.error?.code) && !compactRetried) {
+            contextOverflow = true;
+            turnDone = true;
+            return;
+          }
           result = lastAgentMessage || `Codex error: ${errMsg}`;
           yield { type: 'result', subtype: 'error_max_turns', result, session_id: sessionId } as ProviderMessage;
         } else {
@@ -2052,9 +2125,72 @@ export class CodexProvider implements Provider {
       if (message.method === 'error') {
         const error = params.error as Record<string, unknown> | undefined;
         const errMsg = String(error?.message || params.message || 'Codex app-server error');
+        if (isContextOverflowError(errMsg, error?.code) && !compactRetried) {
+          contextOverflow = true;
+          turnDone = true;
+          return;
+        }
         result = lastAgentMessage || `Codex error: ${errMsg}`;
         yield { type: 'result', subtype: 'error_max_turns', result, session_id: sessionId } as ProviderMessage;
         turnDone = true;
+        return;
+      }
+
+      // exact per-response usage (0.144+), incl. cache-write tokens — more precise than tokenUsage/updated
+      if (message.method === 'rawResponse/completed') {
+        const raw = (params.response && typeof params.response === 'object' ? params.response : params) as Record<string, any>;
+        const u = raw.usage && typeof raw.usage === 'object' ? raw.usage as Record<string, any> : undefined;
+        if (u) {
+          const num = (a: unknown, b: unknown) => Number(a ?? b ?? 0);
+          if (!sawRawUsage) { sawRawUsage = true; usage.inputTokens = 0; usage.outputTokens = 0; }
+          usage.inputTokens += num(u.input_tokens, u.inputTokens);
+          usage.outputTokens += num(u.output_tokens, u.outputTokens);
+          const cached = num(u.cached_input_tokens, u.cachedInputTokens);
+          const cacheWrite = num(u.cache_write_input_tokens, u.cacheWriteInputTokens);
+          if (cached || cacheWrite) console.log(`[codex] usage: cached=${cached} cacheWrite=${cacheWrite}`);
+        }
+        return;
+      }
+
+      // codex's running plan/todo list → surfaced as a single tool block with checklist updates
+      if (message.method === 'turn/plan/updated' && codexConfig?.planUpdates !== false) {
+        const rawItems = [params.plan, params.items, params.todos].find(Array.isArray) as Array<Record<string, unknown>> | undefined;
+        if (rawItems?.length) {
+          const rendered = rawItems.map((entry) => {
+            const text = String(entry.step || entry.text || entry.content || '');
+            const status = String(entry.status || '');
+            const mark = status === 'completed' ? 'x' : status === 'inProgress' || status === 'in_progress' ? '~' : ' ';
+            return `[${mark}] ${text}`;
+          }).join('\n');
+          yield* emitToolUse('turn-plan', 'CodexPlan', {});
+          yield* emitToolOutputDelta('turn-plan', `${rendered}\n\n`);
+        }
+        return;
+      }
+
+      // aggregated diff for the turn (opt-in: codexConfig.turnDiffs)
+      if (message.method === 'turn/diff/updated' && codexConfig?.turnDiffs) {
+        const diff = typeof params.diff === 'string' ? params.diff : typeof params.unifiedDiff === 'string' ? params.unifiedDiff : '';
+        if (diff) {
+          yield* emitToolUse('turn-diff', 'CodexTurnDiff', {});
+          yield* emitToolOutputDelta('turn-diff', `${diff}\n`);
+        }
+        return;
+      }
+
+      if (message.method === 'model/rerouted') {
+        console.log(`[codex] model rerouted: ${JSON.stringify(params)}`);
+        return;
+      }
+
+      if (message.method === 'model/safetyBuffering/updated') {
+        console.log(`[codex] safety buffering: ${JSON.stringify(params)}`);
+        return;
+      }
+
+      if (message.method === 'account/rateLimits/updated') {
+        console.log(`[codex] rate limits updated: ${JSON.stringify(params).slice(0, 500)}`);
+        return;
       }
     };
 
@@ -2064,7 +2200,7 @@ export class CodexProvider implements Provider {
         requestHandler: (message) => handleCodexServerRequest(message, opts),
       });
       const structuredInputItems = await resolveCodexStructuredInputItems(client, opts.prompt, opts.cwd, opts.inputItems);
-      const { input, cleanup } = await prepareCodexInput(opts.prompt, opts.images, structuredInputItems);
+      const { input, cleanup } = await prepareCodexInput(opts.prompt, opts.images, structuredInputItems, opts.audio);
       pendingInputCleanups.add(cleanup);
 
       const threadResult = opts.resumeId
@@ -2077,21 +2213,23 @@ export class CodexProvider implements Provider {
         yield { type: 'system', subtype: 'init', session_id: sessionId, model } as ProviderMessage;
       }
 
-      const turnResult = await client.request('turn/start', {
-        threadId: sessionId,
-        input,
-        cwd: opts.cwd,
-        approvalPolicy: (codexConfig?.approvalPolicy as any) || 'never',
-        sandboxPolicy,
-        model,
-        ...(serviceTier ? { serviceTier } : {}),
-        ...(modelReasoningEffort ? { effort: modelReasoningEffort } : {}),
-        ...(reasoningSummary ? { summary: reasoningSummary } : {}),
-        ...(opts.outputSchema ? { outputSchema: opts.outputSchema } : {}),
-      }) as Record<string, any>;
-      cleanup();
-      pendingInputCleanups.delete(cleanup);
-      currentTurnId = String(turnResult.turn?.id || currentTurnId);
+      const startTurn = async () => {
+        const turnResult = await client!.request('turn/start', {
+          threadId: sessionId,
+          input,
+          cwd: opts.cwd,
+          approvalPolicy: approvalPolicy as any,
+          sandboxPolicy,
+          model,
+          ...(serviceTier ? { serviceTier } : {}),
+          ...(codexConfig?.personality ? { personality: codexConfig.personality } : {}),
+          ...(modelReasoningEffort ? { effort: modelReasoningEffort } : {}),
+          ...(reasoningSummary ? { summary: reasoningSummary } : {}),
+          ...(opts.outputSchema ? { outputSchema: opts.outputSchema } : {}),
+        }) as Record<string, any>;
+        currentTurnId = String(turnResult.turn?.id || currentTurnId);
+      };
+      await startTurn();
 
       opts.onRunReady?.({
         get active() { return active; },
@@ -2136,7 +2274,26 @@ export class CodexProvider implements Provider {
         for (const providerMessage of handleNotification(notification)) {
           yield providerMessage;
         }
-        if (turnDone) break;
+        if (turnDone) {
+          // context overflow + autoCompact: compact the thread and retry the turn once
+          if (contextOverflow && !compactRetried) {
+            compactRetried = true;
+            contextOverflow = false;
+            turnDone = false;
+            try {
+              console.log('[codex] context window exceeded — compacting thread and retrying turn');
+              await client.request('thread/compact/start', { threadId: sessionId });
+              await startTurn();
+              continue;
+            } catch (err) {
+              console.error('[codex] compact/retry failed:', err);
+              result = lastAgentMessage || 'Codex error: context window exceeded (compact retry failed)';
+              yield { type: 'result', subtype: 'error_max_turns', result, session_id: sessionId } as ProviderMessage;
+              break;
+            }
+          }
+          break;
+        }
       }
     } catch (err: any) {
       if (err?.name === 'AbortError') {

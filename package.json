@@ -35,7 +35,7 @@
     "@grammyjs/runner": "2.0.3",
     "@grammyjs/transformer-throttler": "1.2.1",
     "@modelcontextprotocol/sdk": "1.29.0",
-    "@openai/codex": "0.128.0",
+    "@openai/codex": "0.145.0",
     "@types/luxon": "3.7.1",
     "@whiskeysockets/baileys": "6.7.23",
     "better-sqlite3": "12.6.2",
