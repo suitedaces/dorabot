@@ -1839,7 +1839,9 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
 
   // ── Copy / paste / duplicate / drag ───────────────────────────────
   const DRAG_MIME = 'application/x-dorabot-paths';
-  const [clipboard, setClipboard] = useState<string[]>([]);
+  // 'cut' pastes as a move. Finder has no cmd+X for files (it uses
+  // cmd+opt+V to move a copied set), VS Code does. Both are supported.
+  const [clipboard, setClipboard] = useState<{ paths: string[]; mode: 'copy' | 'cut' }>({ paths: [], mode: 'copy' });
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const draggingPathsRef = useRef<string[]>([]);
   // drop events don't reliably carry modifier state, so remember it from the
@@ -1877,17 +1879,21 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
     if (failures.length) toast(failures.join('\n'), 'error');
   }, [rpc, loadDir]);
 
-  const copySelection = useCallback(() => {
+  const copySelection = useCallback((mode: 'copy' | 'cut' = 'copy') => {
     const targets = actionTargets();
     if (!targets.length) return;
-    setClipboard(targets);
-    toast(`Copied ${targets.length} item${targets.length > 1 ? 's' : ''}`, 'success');
+    setClipboard({ paths: targets, mode });
+    const verb = mode === 'cut' ? 'Cut' : 'Copied';
+    toast(`${verb} ${targets.length} item${targets.length > 1 ? 's' : ''}`, 'success');
   }, [actionTargets]);
 
   // Paste into the selected folder, or into the folder holding the cursor.
-  const pasteClipboard = useCallback(async () => {
-    if (!clipboard.length) return;
-    await transfer(clipboard, getCreationParentPath(), 'copy');
+  const pasteClipboard = useCallback(async (forceMove = false) => {
+    if (!clipboard.paths.length) return;
+    const mode = (forceMove || clipboard.mode === 'cut') ? 'move' : 'copy';
+    await transfer(clipboard.paths, getCreationParentPath(), mode);
+    // a cut is spent once pasted; a copy can be pasted repeatedly
+    if (mode === 'move') setClipboard({ paths: [], mode: 'copy' });
   }, [clipboard, transfer, getCreationParentPath]);
 
   const duplicateSelection = useCallback(async () => {
@@ -1977,11 +1983,17 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
 
     const mod = e.metaKey || e.ctrlKey;
 
-    if (mod && e.key.toLowerCase() === 'c') { e.preventDefault(); copySelection(); return; }
-    if (mod && e.key.toLowerCase() === 'v') { e.preventDefault(); void pasteClipboard(); return; }
-    if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); void duplicateSelection(); return; }
+    if (mod && e.key.toLowerCase() === 'c') { e.preventDefault();
+      e.stopPropagation(); copySelection('copy'); return; }
+    if (mod && e.key.toLowerCase() === 'x') { e.preventDefault();
+      e.stopPropagation(); copySelection('cut'); return; }
+    if (mod && e.key.toLowerCase() === 'v') { e.preventDefault();
+      e.stopPropagation(); void pasteClipboard(e.altKey); return; }
+    if (mod && e.key.toLowerCase() === 'd') { e.preventDefault();
+      e.stopPropagation(); void duplicateSelection(); return; }
     if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
+      e.stopPropagation();
       const targets = actionTargets();
       if (targets.length) setConfirmDelete(targets);
       return;
@@ -1989,6 +2001,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
 
     if (mod && e.key.toLowerCase() === 'n') {
       e.preventDefault();
+      e.stopPropagation();
       if (e.shiftKey) createFolder();
       else createFile();
       return;
@@ -1997,6 +2010,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
     // Cmd+Right: navigate into selected folder, Cmd+Left: navigate up
     if (mod && e.key === 'ArrowRight') {
       e.preventDefault();
+      e.stopPropagation();
       if (selectedPath) {
         const visible = getVisiblePaths();
         const item = visible.find(v => v.path === selectedPath);
@@ -2006,6 +2020,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
     }
     if (mod && e.key === 'ArrowLeft') {
       e.preventDefault();
+      e.stopPropagation();
       const parentDir = viewRoot.substring(0, viewRoot.lastIndexOf('/'));
       if (parentDir) navigateTo(parentDir);
       return;
@@ -2020,6 +2035,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
       case 'ArrowDown':
       case 'j': {
         e.preventDefault();
+      e.stopPropagation();
         const nextIdx = currentIdx < visible.length - 1 ? currentIdx + 1 : 0;
         if (e.shiftKey) extendTo(visible[nextIdx].path);
         else selectOnly(visible[nextIdx].path);
@@ -2029,6 +2045,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
       case 'ArrowUp':
       case 'k': {
         e.preventDefault();
+      e.stopPropagation();
         const prevIdx = currentIdx > 0 ? currentIdx - 1 : visible.length - 1;
         if (e.shiftKey) extendTo(visible[prevIdx].path);
         else selectOnly(visible[prevIdx].path);
@@ -2038,6 +2055,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
       case 'ArrowRight':
       case 'l': {
         e.preventDefault();
+      e.stopPropagation();
         if (currentIdx < 0) break;
         const item = visible[currentIdx];
         if (item.isDir) {
@@ -2060,6 +2078,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
       case 'ArrowLeft':
       case 'h': {
         e.preventDefault();
+      e.stopPropagation();
         if (currentIdx < 0) break;
         const item = visible[currentIdx];
         if (item.isDir && expanded.has(item.path)) {
@@ -2081,6 +2100,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
       }
       case 'Enter': {
         e.preventDefault();
+      e.stopPropagation();
         if (currentIdx < 0) break;
         const item = visible[currentIdx];
         if (item.isDir) {
@@ -2236,6 +2256,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
           className={cn(
             'flex items-center gap-1.5 py-0.5 px-1 rounded-sm text-[11px] cursor-pointer group transition-colors min-w-0',
             isDot && 'opacity-50',
+            clipboard.mode === 'cut' && clipboard.paths.includes(fullPath) && 'opacity-40 italic',
             selection.has(fullPath) ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground',
             // the cursor row is outlined so it stays visible inside a range
             selectedPath === fullPath && selection.size > 1 && 'ring-1 ring-inset ring-primary/40',
@@ -2429,6 +2450,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
             dropTarget === '__root__' && 'bg-primary/10 ring-1 ring-inset ring-primary/50',
           )}
           tabIndex={0}
+          data-file-tree
           onKeyDown={handleTreeKeyDown}
           onContextMenu={handleBlankAreaContextMenu}
           onMouseDown={() => focusTree()}
@@ -2534,13 +2556,17 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
               <div className="bg-border -mx-0 my-1 h-px" />
               <button
                 className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
-                onClick={() => { copySelection(); setContextMenu(null); }}
+                onClick={() => { copySelection('copy'); setContextMenu(null); }}
               >Copy{selection.size > 1 ? ` (${selection.size})` : ''}</button>
               <button
+                className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
+                onClick={() => { copySelection('cut'); setContextMenu(null); }}
+              >Cut{selection.size > 1 ? ` (${selection.size})` : ''}</button>
+              <button
                 className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-40"
-                disabled={clipboard.length === 0}
+                disabled={clipboard.paths.length === 0}
                 onClick={() => { void pasteClipboard(); setContextMenu(null); }}
-              >Paste{clipboard.length > 1 ? ` (${clipboard.length})` : ''}</button>
+              >{clipboard.mode === 'cut' ? 'Move Here' : 'Paste'}{clipboard.paths.length > 1 ? ` (${clipboard.paths.length})` : ''}</button>
               <button
                 className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
                 onClick={() => { void duplicateSelection(); setContextMenu(null); }}
@@ -2589,13 +2615,17 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
               <div className="bg-border -mx-0 my-1 h-px" />
               <button
                 className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
-                onClick={() => { copySelection(); setContextMenu(null); }}
+                onClick={() => { copySelection('copy'); setContextMenu(null); }}
               >Copy{selection.size > 1 ? ` (${selection.size})` : ''}</button>
               <button
+                className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
+                onClick={() => { copySelection('cut'); setContextMenu(null); }}
+              >Cut{selection.size > 1 ? ` (${selection.size})` : ''}</button>
+              <button
                 className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-40"
-                disabled={clipboard.length === 0}
+                disabled={clipboard.paths.length === 0}
                 onClick={() => { void pasteClipboard(); setContextMenu(null); }}
-              >Paste{clipboard.length > 1 ? ` (${clipboard.length})` : ''}</button>
+              >{clipboard.mode === 'cut' ? 'Move Here' : 'Paste'}{clipboard.paths.length > 1 ? ` (${clipboard.paths.length})` : ''}</button>
               <button
                 className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
                 onClick={() => { void duplicateSelection(); setContextMenu(null); }}

@@ -52,6 +52,9 @@ export function useKeyboardShortcuts(actions: ShortcutActions, options: Shortcut
 
       const tag = (e.target as HTMLElement)?.tagName;
       const inInput = tag === 'INPUT' || tag === 'TEXTAREA';
+      // The file tree owns cmd+D for duplicate. Without this the tree
+      // duplicates and the pane splits on the same keystroke.
+      const inFileTree = !!(e.target as HTMLElement)?.closest?.('[data-file-tree]');
 
       // Cmd+T — new tab (not from text inputs)
       if (e.key === 't' && !e.shiftKey && !inInput) {
@@ -146,6 +149,7 @@ export function useKeyboardShortcuts(actions: ShortcutActions, options: Shortcut
 
       // Cmd+D — add column (side by side)
       if (e.key.toLowerCase() === 'd' && !e.shiftKey) {
+        if (inFileTree) return; // tree duplicates instead
         e.preventDefault();
         actions.splitHorizontal();
         return;

@@ -278,4 +278,60 @@ describe('file explorer selection + file ops', () => {
     console.log('  after plain down:', selectedNames());
     expect(selectedNames().length).toBe(1);
   });
+  it('18. cmd+X then cmd+V moves instead of copying', async () => {
+    const { calls } = await setup();
+    fireEvent.click(row('a.ts'));
+    fireEvent.keyDown(row('a.ts'), { key: 'x', metaKey: true });
+    fireEvent.click(row('src'));
+    fireEvent.keyDown(row('src'), { key: 'v', metaKey: true });
+    await waitFor(() => expect(mutating(calls).length).toBe(1));
+    const c = mutating(calls)[0];
+    console.log('  cut+paste:', c.method, '->', c.params.newPath);
+    expect(c.method).toBe('fs.rename');
+    expect(c.params.newPath).toBe('/repo/src/a.ts');
+  });
+
+  it('19. a cut is spent after one paste, a copy is not', async () => {
+    const { calls } = await setup();
+    fireEvent.click(row('a.ts'));
+    fireEvent.keyDown(row('a.ts'), { key: 'x', metaKey: true });
+    fireEvent.click(row('src'));
+    fireEvent.keyDown(row('src'), { key: 'v', metaKey: true });
+    await waitFor(() => expect(mutating(calls).length).toBe(1));
+    fireEvent.keyDown(row('src'), { key: 'v', metaKey: true });
+    await new Promise(r => setTimeout(r, 30));
+    console.log('  mutations after second paste:', mutating(calls).length);
+    expect(mutating(calls).length).toBe(1);
+  });
+
+  it('20. cmd+opt+V moves a copied selection, Finder style', async () => {
+    const { calls } = await setup();
+    fireEvent.click(row('a.ts'));
+    fireEvent.keyDown(row('a.ts'), { key: 'c', metaKey: true });
+    fireEvent.click(row('src'));
+    fireEvent.keyDown(row('src'), { key: 'v', metaKey: true, altKey: true });
+    await waitFor(() => expect(mutating(calls).length).toBe(1));
+    console.log('  cmd+opt+V method:', mutating(calls)[0].method);
+    expect(mutating(calls)[0].method).toBe('fs.rename');
+  });
+
+  // The bug the isolated simulations could not see: global shortcuts live on
+  // window, so a key the tree handles must never reach them.
+  it('21. keys the tree owns do not reach window-level shortcuts', async () => {
+    await setup();
+    const seen: string[] = [];
+    const spy = (e: KeyboardEvent) => seen.push(e.key.toLowerCase());
+    window.addEventListener('keydown', spy);
+    try {
+      fireEvent.click(row('a.ts'));
+      for (const key of ['d', 'c', 'x', 'v']) {
+        fireEvent.keyDown(row('a.ts'), { key, metaKey: true });
+      }
+      fireEvent.keyDown(row('a.ts'), { key: 'Backspace' });
+      console.log('  keys that escaped to window:', seen);
+      expect(seen).toEqual([]);
+    } finally {
+      window.removeEventListener('keydown', spy);
+    }
+  });
 });
