@@ -34,7 +34,7 @@ import { ToastContainer } from './components/ToastContainer';
 
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
 type UpdateState = {
-  status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'error';
+  status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
   version?: string;
   percent?: number;
   message?: string;
@@ -221,6 +221,15 @@ export default function App() {
   const [showFiles, setShowFiles] = useState(() => localStorage.getItem('dorabot:showFiles') === 'true');
   const [sidebarView, setSidebarView] = useState<'files' | 'git' | 'history'>(() => (localStorage.getItem('dorabot:sidebarView') as 'files' | 'git' | 'history') || 'files');
   const filesPanelSize = useRef(localStorage.getItem('dorabot:filesPanelSize') || '30%');
+  // defaultSize must be constant. filesPanelSize is mutated by onResize, so
+  // reading it every render fed a slightly different percentage back into the
+  // panel, which nudged it, which fired onResize again: the sidebar drifted on
+  // its own on any unrelated re-render. Freeze the mount-time value.
+  const filesPanelDefault = useRef(
+    (localStorage.getItem('dorabot:showFiles') === 'true')
+      ? (localStorage.getItem('dorabot:filesPanelSize') || '30%')
+      : '0%',
+  );
   const filesPanelRef = useRef<PanelImperativeHandle | null>(null);
   const fileExplorerStateRef = useRef<{ viewRoot: string; expanded: string[]; selectedPath: string | null }>(
     (() => {
@@ -334,6 +343,9 @@ export default function App() {
           break;
         case 'downloaded':
           setUpdateState({ status: 'downloaded', version: status.version });
+          break;
+        case 'installing':
+          setUpdateState(prev => ({ ...prev, status: 'installing' }));
           break;
         case 'error':
           setUpdateState({ status: 'error', message: status.message });
@@ -1251,6 +1263,12 @@ export default function App() {
           </button>
         </div>
       )}
+      {updateState.status === 'installing' && (
+        <div className="shrink-0 px-4 py-1.5 bg-success/10 border-b border-success/20 flex items-center gap-2 text-xs">
+          <Loader2 className="w-3 h-3 animate-spin text-success" />
+          <span className="text-success">Restarting to install update...</span>
+        </div>
+      )}
       {updateState.status === 'error' && (
         <div className="shrink-0 px-4 py-1.5 bg-destructive/10 border-b border-destructive/20 flex items-center gap-2 text-xs">
           <span className="text-destructive">Update failed: {updateState.message}</span>
@@ -1503,7 +1521,7 @@ export default function App() {
           panelRef={filesPanelRef}
           collapsible
           collapsedSize="0%"
-          defaultSize={showFiles ? filesPanelSize.current : "0%"}
+          defaultSize={filesPanelDefault.current}
           minSize="15%"
           maxSize="45%"
           className="overflow-hidden flex flex-col"

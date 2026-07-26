@@ -1,6 +1,6 @@
 {
   "name": "dorabot-desktop",
-  "version": "0.2.96",
+  "version": "0.2.97",
   "description": "Desktop control center for dorabot",
   "main": "out/main/main.js",
   "scripts": {
@@ -14,7 +14,8 @@
     "verify-sig": "APP=$(find release -maxdepth 2 -name 'dorabot.app' -type d | head -1) && SIG=$(codesign -d --verbose=2 \"$APP\" 2>&1) && if echo \"$SIG\" | grep -q 'Signature=adhoc'; then echo '\\033[33m⚠ WARNING: Ad-hoc signed (no certificate). Auto-updates will NOT work.\\033[0m' && echo 'Set CSC_LINK and CSC_KEY_PASSWORD to sign properly.' && echo 'Or install from GitHub release: gh release download --pattern *.dmg'; fi && codesign --verify --deep --strict \"$APP\" && echo 'Signature verified.'",
     "make-dmg": "APP=$(find release -maxdepth 2 -name 'dorabot.app' -type d | head -1) && VER=$(node -p \"require('./package.json').version\") && DMG=\"release/dorabot-${VER}-arm64.dmg\" && rm -f \"$DMG\" && hdiutil create -volname dorabot -srcfolder \"$APP\" -ov -format UDZO \"$DMG\" && echo \"Created $DMG\"",
     "install-app": "APP=$(find release -maxdepth 2 -name 'dorabot.app' -type d | head -1) && rm -rf /Applications/dorabot.app && cp -R \"$APP\" /Applications/ && echo \"Installed $APP to /Applications/\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@dnd-kit/core": "6.3.1",
@@ -62,6 +63,7 @@
     "@electron-toolkit/utils": "4.0.0",
     "@electron/notarize": "3.1.1",
     "@tailwindcss/vite": "4.1.18",
+    "@testing-library/react": "16.3.2",
     "@types/canvas-confetti": "1.9.0",
     "@types/react": "19.2.13",
     "@types/react-dom": "19.2.3",
@@ -72,10 +74,12 @@
     "electron": "40.8.5",
     "electron-builder": "26.15.3",
     "electron-vite": "5.0.0",
+    "jsdom": "25.0.1",
     "tailwind-merge": "3.4.0",
     "tailwindcss": "4.1.18",
     "typescript": "5.9.3",
-    "vite": "6.4.3"
+    "vite": "6.4.3",
+    "vitest": "3.2.7"
   },
   "overrides": {
     "dompurify": "3.3.2",

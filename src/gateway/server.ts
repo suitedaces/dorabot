@@ -20,6 +20,7 @@ const resolve = (p: string, base?: string) => {
   const expanded = p.startsWith('~') ? p.replace('~', homedir()) : p;
   return pathResolve(base || process.cwd(), expanded);
 };
+import { moveToTrash, copyPath, movePath, isInside } from './fs-ops.js';
 import type { Config } from '../config.js';
 import { isPathAllowed, saveConfig, ALWAYS_DENIED, type SecurityConfig, type ToolPolicyConfig } from '../config.js';
 import type { WsMessage, WsResponse, WsEvent, GatewayContext } from './types.js';
@@ -79,6 +80,7 @@ import {
 function macNotify(_title: string, _body: string) {
   // no-op: desktop picks up broadcast events and shows toasts/native notifications
 }
+
 
 const MARKETPLACE_REPO = 'openai/skills';
 const MARKETPLACE_PATH = 'skills/.curated';
@@ -5433,8 +5435,34 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             return { id, error: `path not allowed: ${resolved}` };
           }
           try {
-            rmSync(resolved, { recursive: true, force: true });
-            return { id, result: { deleted: resolved } };
+            // Recoverable by default. Callers that really want it gone pass
+            // permanent, otherwise this goes to the Trash with Put Back intact.
+            if (params?.permanent === true) {
+              rmSync(resolved, { recursive: true, force: true });
+              return { id, result: { deleted: resolved, permanent: true } };
+            }
+            await moveToTrash(resolved);
+            return { id, result: { deleted: resolved, trashed: true } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'fs.copy': {
+          const sourcePath = params?.sourcePath as string;
+          const destPath = params?.destPath as string;
+          if (!sourcePath || !destPath) return { id, error: 'sourcePath and destPath required' };
+          const resolvedSrc = resolve(sourcePath, config.cwd || homedir());
+          const resolvedDest = resolve(destPath, config.cwd || homedir());
+          if (!isPathAllowed(resolvedSrc, config) || !isPathAllowed(resolvedDest, config)) {
+            return { id, error: 'path not allowed' };
+          }
+          if (isInside(resolvedSrc, resolvedDest)) {
+            return { id, error: 'cannot copy a directory into itself' };
+          }
+          try {
+            const final = copyPath(resolvedSrc, resolvedDest, params?.overwrite === true);
+            return { id, result: { sourcePath: resolvedSrc, destPath: final } };
           } catch (err) {
             return { id, error: err instanceof Error ? err.message : String(err) };
           }
@@ -5450,8 +5478,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             return { id, error: `path not allowed` };
           }
           try {
-            renameSync(resolvedOld, resolvedNew);
-            return { id, result: { oldPath: resolvedOld, newPath: resolvedNew } };
+            const target = movePath(
+              resolvedOld,
+              resolvedNew,
+              (params?.onCollision as 'fail' | 'rename' | 'overwrite') || 'fail',
+            );
+            return { id, result: { oldPath: resolvedOld, newPath: target } };
           } catch (err) {
             return { id, error: err instanceof Error ? err.message : String(err) };
           }

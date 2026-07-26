@@ -24,6 +24,8 @@ let isQuitting = false;
 let gatewayManager: GatewayManager | null = null;
 let gatewayBridge: GatewayBridge | null = null;
 let updateCheckInterval: ReturnType<typeof setInterval> | null = null;
+let updateInstallStarted = false;
+let updateReadyToInstall = false;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
@@ -62,11 +64,13 @@ function setupAutoUpdater(): void {
   });
 
   autoUpdater.on('update-available', (info) => {
+    updateReadyToInstall = false;
     ulog(`Update available: ${info.version}`);
     sendUpdateStatus('available', { version: info.version, releaseNotes: info.releaseNotes });
   });
 
   autoUpdater.on('update-not-available', (info) => {
+    updateReadyToInstall = false;
     ulog(`Up to date (${info.version})`);
     sendUpdateStatus('not-available');
   });
@@ -77,11 +81,17 @@ function setupAutoUpdater(): void {
   });
 
   autoUpdater.on('update-downloaded', (info) => {
+    updateReadyToInstall = true;
     ulog(`Update downloaded: ${info.version}`);
     sendUpdateStatus('downloaded', { version: info.version });
   });
 
   autoUpdater.on('error', (err) => {
+    updateReadyToInstall = false;
+    if (updateInstallStarted) {
+      updateInstallStarted = false;
+      isQuitting = false;
+    }
     ulog(`Error: ${err.message}\n${err.stack ?? ''}`);
     sendUpdateStatus('error', { message: err.message });
   });
@@ -102,16 +112,20 @@ function setupAutoUpdater(): void {
   });
 
   ipcMain.on('update-install', () => {
+    if (updateInstallStarted) {
+      ulog('Install already in progress, ignoring duplicate request');
+      return;
+    }
+    if (!updateReadyToInstall) {
+      ulog('Install requested before update-downloaded, ignoring request');
+      return;
+    }
+    updateInstallStarted = true;
+    updateReadyToInstall = false;
     ulog('Install requested, calling quitAndInstall...');
     isQuitting = true;
+    sendUpdateStatus('installing');
     autoUpdater.quitAndInstall();
-    // Safety net: if quitAndInstall didn't trigger quit within 5s
-    // (e.g. Squirrel deadlock), force restart the app
-    setTimeout(() => {
-      ulog('quitAndInstall did not quit within 5s, forcing restart');
-      app.relaunch();
-      app.exit(0);
-    }, 5000);
   });
 
   // Check for updates 10s after launch, then every 30 minutes

@@ -214,7 +214,12 @@ export function MonacoEditor({ content, filePath, readOnly = false, onSave, onDi
       }
     });
 
-    editor.focus();
+    // Never take focus off the file tree. Clicking a row there opens the file
+    // here, and grabbing focus sent cmd+C/X/D to the editor instead of the
+    // explorer, silently cutting lines out of the file being viewed.
+    // Opening from anywhere else (cmd+P, tab click) still focuses normally.
+    const treeHasFocus = !!document.activeElement?.closest?.('[data-file-tree]');
+    if (!treeHasFocus) editor.focus();
   }, []);
 
   const language = getMonacoLanguage(filePath);
