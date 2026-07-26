@@ -1516,6 +1516,8 @@ function GitPanel({ rpc, gitState, onFileClick, onOpenDiff, onOpenPr, onRefresh,
 
 export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr, onFileChange, onOpenTerminal, mode = 'files', initialViewRoot, initialExpanded, initialSelectedPath, onStateChange }: Props) {
   const [homeCwd, setHomeCwd] = useState('');
+  const homeCwdRef = useRef('');
+  homeCwdRef.current = homeCwd;
   const [viewRoot, setViewRoot] = useState(initialViewRoot || '');
   const [dirs, setDirs] = useState<Map<string, DirState>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set(initialExpanded || []));
@@ -1635,6 +1637,14 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
       const msg = String(err);
       // Suppress transient disconnection errors (bridge auto-reconnects)
       const isDisconnect = msg.includes('connection_lost') || msg.includes('Connection closed') || msg.includes('Not connected') || msg.includes('ws_close');
+      // A root saved from an older session may now be outside allowedPaths.
+      // Fall back to the configured root instead of showing a dead tree.
+      if (msg.includes('path not allowed') && homeCwdRef.current && path !== homeCwdRef.current) {
+        setViewRoot(homeCwdRef.current);
+        setExpanded(new Set());
+        loadDir(homeCwdRef.current);
+        return;
+      }
       setDirs(prev => {
         const next = new Map(prev);
         next.set(path, { entries: prev.get(path)?.entries || [], loading: false, ...(isDisconnect ? {} : { error: msg }) });
@@ -1922,19 +1932,20 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
     e.dataTransfer.setData('text/plain', paths.join('\n'));
   }, [selection, selectOnly]);
 
-  const handleDragOver = useCallback((e: React.DragEvent, path: string, isDir: boolean) => {
+  // path === null is the tree background, i.e. drop at the root
+  const handleDragOver = useCallback((e: React.DragEvent, path: string | null, isDir = false) => {
     const internal = e.dataTransfer.types.includes(DRAG_MIME);
     const external = e.dataTransfer.types.includes('Files');
     if (!internal && !external) return;
-    const destDir = isDir ? path : parentOf(path);
+    const destDir = path === null ? viewRoot : (isDir ? path : parentOf(path));
     // no drop indicator on a row being dragged, or into its own subtree
     if (internal && draggingPathsRef.current.some(p => p === destDir || wouldNest(p, destDir))) return;
     e.preventDefault();
     e.stopPropagation();
     copyDragRef.current = e.altKey;
     e.dataTransfer.dropEffect = external ? 'copy' : (e.altKey ? 'copy' : 'move');
-    setDropTarget(isDir ? path : null);
-  }, []);
+    setDropTarget(path === null ? '__root__' : (isDir ? path : null));
+  }, [viewRoot]);
 
   const handleDrop = useCallback(async (e: React.DragEvent, destDir: string) => {
     e.preventDefault();
@@ -2127,6 +2138,31 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
       document.removeEventListener('keydown', handleKey);
     };
   }, [contextMenu]);
+
+  // Rendered in both the folder and file context menus
+  const menuItem = 'flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors';
+  const count = (n: number) => (n > 1 ? ` (${n})` : '');
+  const clipboardMenuItems = (
+    <>
+      <div className="bg-border -mx-0 my-1 h-px" />
+      <button className={menuItem} onClick={() => { copySelection('copy'); setContextMenu(null); }}>
+        Copy{count(selection.size)}
+      </button>
+      <button className={menuItem} onClick={() => { copySelection('cut'); setContextMenu(null); }}>
+        Cut{count(selection.size)}
+      </button>
+      <button
+        className={cn(menuItem, 'disabled:opacity-40')}
+        disabled={clipboard.paths.length === 0}
+        onClick={() => { void pasteClipboard(); setContextMenu(null); }}
+      >
+        {clipboard.mode === 'cut' ? 'Move Here' : 'Paste'}{count(clipboard.paths.length)}
+      </button>
+      <button className={menuItem} onClick={() => { void duplicateSelection(); setContextMenu(null); }}>
+        Duplicate
+      </button>
+    </>
+  );
 
   const handleContextMenu = useCallback((e: React.MouseEvent, path: string, isDir: boolean) => {
     e.preventDefault();
@@ -2388,7 +2424,11 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
   const crumbs = viewRoot ? buildCrumbs(homeCwd, viewRoot) : [];
 
   return (
-    <div className="flex flex-col h-full min-h-0 border border-transparent focus-within:border-primary/60 focus-within:ring-1 focus-within:ring-primary/35" onMouseDown={(e) => {
+    <div className={cn(
+      'flex flex-col h-full min-h-0 border border-transparent focus-within:border-primary/60 focus-within:ring-1 focus-within:ring-primary/35',
+      // highlight the whole panel, not just the rows, so blank space reads as a drop target too
+      dropTarget === '__root__' && 'bg-primary/10 border-primary/60',
+    )} onMouseDown={(e) => {
       const tag = (e.target as HTMLElement).tagName;
       if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'BUTTON') focusTree();
     }}>
@@ -2439,33 +2479,25 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
           </button>
         )}
       </div>
-      <ScrollArea className="flex-1 min-h-0">
+      {/* Handlers sit on the ScrollArea, not the inner div: Radix forces its
+          wrapper to display:block with auto height, so the inner div only
+          covers its own rows and empty space below it never reaches them. */}
+      <ScrollArea className="flex-1 min-h-0"
+        onMouseDown={() => focusTree()}
+        onContextMenu={handleBlankAreaContextMenu}
+        onDragOver={(e) => handleDragOver(e, null)}
+        onDragLeave={(e) => { if (e.currentTarget === e.target) setDropTarget(null); }}
+        onDrop={(e) => { void handleDrop(e, viewRoot); }}
+      >
         <div
           ref={(node) => {
             treeRef.current = node;
             scrollContainerRef.current = node;
           }}
-          className={cn(
-            'py-1 min-h-full outline-none',
-            dropTarget === '__root__' && 'bg-primary/10 ring-1 ring-inset ring-primary/50',
-          )}
+          className="py-1 min-h-full outline-none"
           tabIndex={0}
           data-file-tree
           onKeyDown={handleTreeKeyDown}
-          onContextMenu={handleBlankAreaContextMenu}
-          onMouseDown={() => focusTree()}
-          onDragOver={(e) => {
-            const internal = e.dataTransfer.types.includes(DRAG_MIME);
-            const external = e.dataTransfer.types.includes('Files');
-            if (!internal && !external) return;
-            e.preventDefault();
-            e.dataTransfer.dropEffect = external ? 'copy' : (e.altKey ? 'copy' : 'move');
-            setDropTarget('__root__');
-          }}
-          onDragLeave={(e) => {
-            if (e.currentTarget === e.target) setDropTarget(null);
-          }}
-          onDrop={(e) => { void handleDrop(e, viewRoot); }}
         >
           {viewRoot ? renderEntries(viewRoot, 0) : <div className="text-[11px] text-muted-foreground p-3">loading...</div>}
         </div>
@@ -2553,24 +2585,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
                 className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
                 onClick={() => ctxCopyRelativePath(contextMenu.path)}
               >Copy Relative Path</button>
-              <div className="bg-border -mx-0 my-1 h-px" />
-              <button
-                className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
-                onClick={() => { copySelection('copy'); setContextMenu(null); }}
-              >Copy{selection.size > 1 ? ` (${selection.size})` : ''}</button>
-              <button
-                className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
-                onClick={() => { copySelection('cut'); setContextMenu(null); }}
-              >Cut{selection.size > 1 ? ` (${selection.size})` : ''}</button>
-              <button
-                className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-40"
-                disabled={clipboard.paths.length === 0}
-                onClick={() => { void pasteClipboard(); setContextMenu(null); }}
-              >{clipboard.mode === 'cut' ? 'Move Here' : 'Paste'}{clipboard.paths.length > 1 ? ` (${clipboard.paths.length})` : ''}</button>
-              <button
-                className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
-                onClick={() => { void duplicateSelection(); setContextMenu(null); }}
-              >Duplicate</button>
+              {clipboardMenuItems}
               <div className="bg-border -mx-0 my-1 h-px" />
               <button
                 className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
@@ -2612,24 +2627,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
                 className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
                 onClick={() => ctxCopyRelativePath(contextMenu.path)}
               >Copy Relative Path</button>
-              <div className="bg-border -mx-0 my-1 h-px" />
-              <button
-                className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
-                onClick={() => { copySelection('copy'); setContextMenu(null); }}
-              >Copy{selection.size > 1 ? ` (${selection.size})` : ''}</button>
-              <button
-                className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
-                onClick={() => { copySelection('cut'); setContextMenu(null); }}
-              >Cut{selection.size > 1 ? ` (${selection.size})` : ''}</button>
-              <button
-                className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-40"
-                disabled={clipboard.paths.length === 0}
-                onClick={() => { void pasteClipboard(); setContextMenu(null); }}
-              >{clipboard.mode === 'cut' ? 'Move Here' : 'Paste'}{clipboard.paths.length > 1 ? ` (${clipboard.paths.length})` : ''}</button>
-              <button
-                className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
-                onClick={() => { void duplicateSelection(); setContextMenu(null); }}
-              >Duplicate</button>
+              {clipboardMenuItems}
               <div className="bg-border -mx-0 my-1 h-px" />
               <button
                 className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"

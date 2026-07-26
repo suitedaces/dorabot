@@ -342,4 +342,25 @@ describe('file explorer selection + file ops', () => {
     console.log('  activeElement is tree:', document.activeElement === tree);
     expect(document.activeElement).toBe(tree);
   });
+
+  it('23. clicking empty space below the rows focuses the tree', async () => {
+    await setup();
+    const tree = document.querySelector('[data-file-tree]') as HTMLElement;
+    (document.activeElement as HTMLElement)?.blur();
+    // the scroll region, i.e. the area that includes empty space under the rows
+    const region = tree.closest('[data-slot="scroll-area"]') || tree.parentElement!.parentElement!;
+    fireEvent.mouseDown(region);
+    console.log('  focused after clicking empty region:', document.activeElement === tree);
+    expect(document.activeElement).toBe(tree);
+  });
+
+  it('24. arrows work straight after clicking empty space', async () => {
+    await setup();
+    const tree = document.querySelector('[data-file-tree]') as HTMLElement;
+    const region = tree.closest('[data-slot="scroll-area"]') || tree.parentElement!.parentElement!;
+    fireEvent.mouseDown(region);
+    fireEvent.keyDown(tree, { key: 'ArrowDown' });
+    console.log('  selection after ArrowDown:', selectedNames());
+    expect(selectedNames().length).toBe(1);
+  });
 });

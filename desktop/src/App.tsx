@@ -221,6 +221,15 @@ export default function App() {
   const [showFiles, setShowFiles] = useState(() => localStorage.getItem('dorabot:showFiles') === 'true');
   const [sidebarView, setSidebarView] = useState<'files' | 'git' | 'history'>(() => (localStorage.getItem('dorabot:sidebarView') as 'files' | 'git' | 'history') || 'files');
   const filesPanelSize = useRef(localStorage.getItem('dorabot:filesPanelSize') || '30%');
+  // defaultSize must be constant. filesPanelSize is mutated by onResize, so
+  // reading it every render fed a slightly different percentage back into the
+  // panel, which nudged it, which fired onResize again: the sidebar drifted on
+  // its own on any unrelated re-render. Freeze the mount-time value.
+  const filesPanelDefault = useRef(
+    (localStorage.getItem('dorabot:showFiles') === 'true')
+      ? (localStorage.getItem('dorabot:filesPanelSize') || '30%')
+      : '0%',
+  );
   const filesPanelRef = useRef<PanelImperativeHandle | null>(null);
   const fileExplorerStateRef = useRef<{ viewRoot: string; expanded: string[]; selectedPath: string | null }>(
     (() => {
@@ -1512,7 +1521,7 @@ export default function App() {
           panelRef={filesPanelRef}
           collapsible
           collapsedSize="0%"
-          defaultSize={showFiles ? filesPanelSize.current : "0%"}
+          defaultSize={filesPanelDefault.current}
           minSize="15%"
           maxSize="45%"
           className="overflow-hidden flex flex-col"
