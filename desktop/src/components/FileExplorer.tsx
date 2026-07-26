@@ -1519,11 +1519,38 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
   const [viewRoot, setViewRoot] = useState(initialViewRoot || '');
   const [dirs, setDirs] = useState<Map<string, DirState>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set(initialExpanded || []));
+  // selectedPath is the cursor: the row the keyboard acts on and the anchor a
+  // shift-click ranges from. selection is everything highlighted. Invariant:
+  // when selectedPath is set it is also in selection.
   const [selectedPath, setSelectedPath] = useState<string | null>(initialSelectedPath ?? null);
+  const [selection, setSelection] = useState<Set<string>>(
+    () => new Set(initialSelectedPath ? [initialSelectedPath] : []),
+  );
+  // The row a shift-extension ranges from. Stays put while the cursor moves,
+  // otherwise shift+arrow would drag the anchor along and shrink the range.
+  const anchorRef = useRef<string | null>(initialSelectedPath ?? null);
+
+  // Collapse to a single row. Used by plain clicks and unshifted arrows.
+  const selectOnly = useCallback((path: string | null) => {
+    setSelectedPath(path);
+    anchorRef.current = path;
+    setSelection(path ? new Set([path]) : new Set());
+  }, []);
+
+  const toggleSelect = useCallback((path: string) => {
+    setSelection(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+    setSelectedPath(path);
+    anchorRef.current = path;
+  }, []);
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
   const [inlineInput, setInlineInput] = useState<InlineInputState>(null);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string[] | null>(null);
   const [fileFilter, setFileFilter] = useState('');
 
   const [gitState, setGitState] = useState<GitState | null>(null);
@@ -1725,21 +1752,31 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
     focusTree();
   }, [focusTree, inlineInput, rpc, loadDir, selectedPath]);
 
+  // Deleting a row that is part of a multi-selection deletes the whole
+  // selection, the way Finder does. Right-clicking an unselected row acts on
+  // that row alone.
   const deleteItem = useCallback((path: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setConfirmDelete(path);
-  }, []);
+    setConfirmDelete(selection.has(path) ? Array.from(selection) : [path]);
+  }, [selection]);
 
   const confirmDeleteItem = useCallback(async () => {
-    if (!confirmDelete) return;
-    try {
-      await rpc('fs.delete', { path: confirmDelete });
-      const parentPath = confirmDelete.substring(0, confirmDelete.lastIndexOf('/'));
-      loadDir(parentPath);
-      if (selectedPath === confirmDelete) setSelectedPath(null);
-    } catch (err) {
-      toast(String(err), 'error');
+    if (!confirmDelete || confirmDelete.length === 0) return;
+    const parents = new Set<string>();
+    const failures: string[] = [];
+    for (const path of confirmDelete) {
+      try {
+        await rpc('fs.delete', { path });
+        parents.add(path.substring(0, path.lastIndexOf('/')));
+      } catch (err) {
+        failures.push(`${path.substring(path.lastIndexOf('/') + 1)}: ${String(err)}`);
+      }
     }
+    parents.forEach(p => loadDir(p));
+    const gone = new Set(confirmDelete);
+    setSelection(prev => new Set(Array.from(prev).filter(p => !gone.has(p))));
+    if (selectedPath && gone.has(selectedPath)) setSelectedPath(null);
+    if (failures.length) toast(failures.join('\n'), 'error');
     setConfirmDelete(null);
   }, [confirmDelete, rpc, loadDir, selectedPath]);
 
@@ -1751,9 +1788,9 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
   }, []);
 
   const handleFileClick = useCallback((path: string) => {
-    setSelectedPath(path);
+    selectOnly(path);
     onFileClick?.(path);
-  }, [onFileClick]);
+  }, [onFileClick, selectOnly]);
 
   // ── Keyboard navigation (yazi / VS Code style) ────────────────────
   // Build flat list of visible entries for arrow key navigation
@@ -1775,6 +1812,152 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
     return result;
   }, [dirs, expanded, viewRoot]);
 
+  // Shift-click / shift-arrow: select every visible row between the cursor and
+  // target inclusive. Ranges follow display order, not insertion order.
+  const extendTo = useCallback((path: string) => {
+    const visible = getVisiblePaths();
+    const anchor = anchorRef.current ?? selectedPath;
+    const anchorIdx = anchor ? visible.findIndex(v => v.path === anchor) : -1;
+    const targetIdx = visible.findIndex(v => v.path === path);
+    if (targetIdx < 0) return;
+    if (anchorIdx < 0) {
+      selectOnly(path);
+      return;
+    }
+    const [lo, hi] = anchorIdx <= targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
+    setSelection(new Set(visible.slice(lo, hi + 1).map(v => v.path)));
+    // cursor moves, anchor deliberately does not
+    setSelectedPath(path);
+  }, [getVisiblePaths, selectedPath, selectOnly]);
+
+  // Everything acted on by delete/copy/drag. Falls back to the cursor so
+  // actions still work before anything has been explicitly multi-selected.
+  const actionTargets = useCallback((): string[] => {
+    if (selection.size > 0) return Array.from(selection);
+    return selectedPath ? [selectedPath] : [];
+  }, [selection, selectedPath]);
+
+  // ── Copy / paste / duplicate / drag ───────────────────────────────
+  const DRAG_MIME = 'application/x-dorabot-paths';
+  const [clipboard, setClipboard] = useState<string[]>([]);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const draggingPathsRef = useRef<string[]>([]);
+  // drop events don't reliably carry modifier state, so remember it from the
+  // last dragover, which fires continuously while hovering
+  const copyDragRef = useRef(false);
+
+  const baseName = (p: string) => p.substring(p.lastIndexOf('/') + 1);
+  const parentOf = (p: string) => p.substring(0, p.lastIndexOf('/'));
+
+  // Refuse a move/copy that would put a directory inside itself. The gateway
+  // rejects it too, this just avoids a pointless round trip and a red toast.
+  const wouldNest = (src: string, destDir: string) => destDir === src || destDir.startsWith(src + '/');
+
+  const transfer = useCallback(async (paths: string[], destDir: string, mode: 'move' | 'copy') => {
+    const touched = new Set<string>([destDir]);
+    const failures: string[] = [];
+    for (const src of paths) {
+      if (wouldNest(src, destDir)) {
+        failures.push(`${baseName(src)}: cannot go inside itself`);
+        continue;
+      }
+      if (mode === 'move' && parentOf(src) === destDir) continue; // already there
+      try {
+        if (mode === 'move') {
+          await rpc('fs.rename', { oldPath: src, newPath: destDir + '/' + baseName(src), onCollision: 'rename' });
+          touched.add(parentOf(src));
+        } else {
+          await rpc('fs.copy', { sourcePath: src, destPath: destDir + '/' + baseName(src) });
+        }
+      } catch (err) {
+        failures.push(`${baseName(src)}: ${String(err)}`);
+      }
+    }
+    touched.forEach(d => loadDir(d));
+    if (failures.length) toast(failures.join('\n'), 'error');
+  }, [rpc, loadDir]);
+
+  const copySelection = useCallback(() => {
+    const targets = actionTargets();
+    if (!targets.length) return;
+    setClipboard(targets);
+    toast(`Copied ${targets.length} item${targets.length > 1 ? 's' : ''}`, 'success');
+  }, [actionTargets]);
+
+  // Paste into the selected folder, or into the folder holding the cursor.
+  const pasteClipboard = useCallback(async () => {
+    if (!clipboard.length) return;
+    await transfer(clipboard, getCreationParentPath(), 'copy');
+  }, [clipboard, transfer, getCreationParentPath]);
+
+  const duplicateSelection = useCallback(async () => {
+    const targets = actionTargets();
+    if (!targets.length) return;
+    const failures: string[] = [];
+    for (const src of targets) {
+      try {
+        // same destination as source: the gateway appends " copy"
+        await rpc('fs.copy', { sourcePath: src, destPath: src });
+      } catch (err) {
+        failures.push(`${baseName(src)}: ${String(err)}`);
+      }
+    }
+    new Set(targets.map(parentOf)).forEach(d => loadDir(d));
+    if (failures.length) toast(failures.join('\n'), 'error');
+  }, [actionTargets, rpc, loadDir]);
+
+  const handleDragStart = useCallback((e: React.DragEvent, path: string) => {
+    // Dragging an unselected row acts on that row alone, like Finder.
+    const paths = selection.has(path) ? Array.from(selection) : [path];
+    if (!selection.has(path)) selectOnly(path);
+    draggingPathsRef.current = paths;
+    e.dataTransfer.effectAllowed = 'copyMove';
+    e.dataTransfer.setData(DRAG_MIME, JSON.stringify(paths));
+    e.dataTransfer.setData('text/plain', paths.join('\n'));
+  }, [selection, selectOnly]);
+
+  const handleDragOver = useCallback((e: React.DragEvent, path: string, isDir: boolean) => {
+    const internal = e.dataTransfer.types.includes(DRAG_MIME);
+    const external = e.dataTransfer.types.includes('Files');
+    if (!internal && !external) return;
+    const destDir = isDir ? path : parentOf(path);
+    // no drop indicator on a row being dragged, or into its own subtree
+    if (internal && draggingPathsRef.current.some(p => p === destDir || wouldNest(p, destDir))) return;
+    e.preventDefault();
+    e.stopPropagation();
+    copyDragRef.current = e.altKey;
+    e.dataTransfer.dropEffect = external ? 'copy' : (e.altKey ? 'copy' : 'move');
+    setDropTarget(isDir ? path : null);
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent, destDir: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDropTarget(null);
+
+    // From Finder: copy the files in.
+    if (e.dataTransfer.files?.length) {
+      const api = (window as unknown as { electronAPI?: { getPathForFile?: (f: File) => string } }).electronAPI;
+      const paths = Array.from(e.dataTransfer.files)
+        .map(f => api?.getPathForFile?.(f) || '')
+        .filter(Boolean);
+      if (!paths.length) {
+        toast('Could not resolve dropped file paths', 'error');
+        return;
+      }
+      await transfer(paths, destDir, 'copy');
+      return;
+    }
+
+    const raw = e.dataTransfer.getData(DRAG_MIME);
+    if (!raw) return;
+    let paths: string[] = [];
+    try { paths = JSON.parse(raw) as string[]; } catch { return; }
+    draggingPathsRef.current = [];
+    if (!paths.length) return;
+    await transfer(paths, destDir, (e.altKey || copyDragRef.current) ? 'copy' : 'move');
+  }, [transfer]);
+
   // Scroll a path's element into view (uses data-path attribute lookup via iteration, not CSS selectors)
   const scrollPathIntoView = useCallback((path: string) => {
     const container = scrollContainerRef.current;
@@ -1793,6 +1976,17 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
     if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA') return;
 
     const mod = e.metaKey || e.ctrlKey;
+
+    if (mod && e.key.toLowerCase() === 'c') { e.preventDefault(); copySelection(); return; }
+    if (mod && e.key.toLowerCase() === 'v') { e.preventDefault(); void pasteClipboard(); return; }
+    if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); void duplicateSelection(); return; }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault();
+      const targets = actionTargets();
+      if (targets.length) setConfirmDelete(targets);
+      return;
+    }
+
     if (mod && e.key.toLowerCase() === 'n') {
       e.preventDefault();
       if (e.shiftKey) createFolder();
@@ -1827,7 +2021,8 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
       case 'j': {
         e.preventDefault();
         const nextIdx = currentIdx < visible.length - 1 ? currentIdx + 1 : 0;
-        setSelectedPath(visible[nextIdx].path);
+        if (e.shiftKey) extendTo(visible[nextIdx].path);
+        else selectOnly(visible[nextIdx].path);
         scrollPathIntoView(visible[nextIdx].path);
         break;
       }
@@ -1835,7 +2030,8 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
       case 'k': {
         e.preventDefault();
         const prevIdx = currentIdx > 0 ? currentIdx - 1 : visible.length - 1;
-        setSelectedPath(visible[prevIdx].path);
+        if (e.shiftKey) extendTo(visible[prevIdx].path);
+        else selectOnly(visible[prevIdx].path);
         scrollPathIntoView(visible[prevIdx].path);
         break;
       }
@@ -1915,16 +2111,19 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
   const handleContextMenu = useCallback((e: React.MouseEvent, path: string, isDir: boolean) => {
     e.preventDefault();
     e.stopPropagation();
-    setSelectedPath(path);
+    // right-clicking inside a multi-selection keeps it; outside collapses to
+    // the clicked row
+    if (selection.has(path)) setSelectedPath(path);
+    else selectOnly(path);
     focusTree();
     setContextMenu({ x: e.clientX, y: e.clientY, path, isDir });
-  }, [focusTree]);
+  }, [focusTree, selection, selectOnly]);
 
   const handleBlankAreaContextMenu = useCallback((e: React.MouseEvent) => {
     // Only fire if the click target is the container itself (blank area)
     if (e.target === e.currentTarget || (e.target as HTMLElement).closest('[data-file-entry]') === null) {
       e.preventDefault();
-      setSelectedPath(null);
+      selectOnly(null);
       focusTree();
       setContextMenu({ x: e.clientX, y: e.clientY, path: viewRoot, isDir: true });
     }
@@ -2032,15 +2231,36 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
           key={fullPath}
           data-file-entry
           data-path={fullPath}
+          role="treeitem"
+          aria-selected={selection.has(fullPath)}
           className={cn(
             'flex items-center gap-1.5 py-0.5 px-1 rounded-sm text-[11px] cursor-pointer group transition-colors min-w-0',
             isDot && 'opacity-50',
-            selectedPath === fullPath ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'
+            selection.has(fullPath) ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground',
+            // the cursor row is outlined so it stays visible inside a range
+            selectedPath === fullPath && selection.size > 1 && 'ring-1 ring-inset ring-primary/40',
+            dropTarget === fullPath && 'bg-primary/20 ring-1 ring-inset ring-primary',
           )}
           style={{ paddingLeft: Math.min(depth * 16, 128) + 12 }}
-          onClick={() => {
-            setSelectedPath(fullPath);
+          draggable
+          onDragStart={(e) => handleDragStart(e, fullPath)}
+          onDragOver={(e) => handleDragOver(e, fullPath, isDir)}
+          onDragLeave={() => setDropTarget(prev => (prev === fullPath ? null : prev))}
+          onDrop={(e) => handleDrop(e, isDir ? fullPath : parentPath)}
+          onDragEnd={() => { setDropTarget(null); draggingPathsRef.current = []; copyDragRef.current = false; }}
+          onClick={(e) => {
             focusTree();
+            if (e.shiftKey) {
+              e.preventDefault();
+              extendTo(fullPath);
+              return;
+            }
+            if (e.metaKey || e.ctrlKey) {
+              e.preventDefault();
+              toggleSelect(fullPath);
+              return;
+            }
+            selectOnly(fullPath);
             if (!isDir) handleFileClick(fullPath);
           }}
           onDoubleClick={isDir ? () => navigateTo(fullPath) : undefined}
@@ -2051,7 +2271,7 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
               className="shrink-0 rounded-sm hover:bg-secondary/60"
               onClick={(e) => {
                 e.stopPropagation();
-                setSelectedPath(fullPath);
+                selectOnly(fullPath);
                 focusTree();
                 toggleDir(fullPath);
               }}
@@ -2204,11 +2424,26 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
             treeRef.current = node;
             scrollContainerRef.current = node;
           }}
-          className="py-1 min-h-full outline-none"
+          className={cn(
+            'py-1 min-h-full outline-none',
+            dropTarget === '__root__' && 'bg-primary/10 ring-1 ring-inset ring-primary/50',
+          )}
           tabIndex={0}
           onKeyDown={handleTreeKeyDown}
           onContextMenu={handleBlankAreaContextMenu}
           onMouseDown={() => focusTree()}
+          onDragOver={(e) => {
+            const internal = e.dataTransfer.types.includes(DRAG_MIME);
+            const external = e.dataTransfer.types.includes('Files');
+            if (!internal && !external) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = external ? 'copy' : (e.altKey ? 'copy' : 'move');
+            setDropTarget('__root__');
+          }}
+          onDragLeave={(e) => {
+            if (e.currentTarget === e.target) setDropTarget(null);
+          }}
+          onDrop={(e) => { void handleDrop(e, viewRoot); }}
         >
           {viewRoot ? renderEntries(viewRoot, 0) : <div className="text-[11px] text-muted-foreground p-3">loading...</div>}
         </div>
@@ -2218,8 +2453,16 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
       {confirmDelete && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setConfirmDelete(null)}>
           <div className="bg-popover border rounded-lg shadow-lg p-4 max-w-sm" onClick={e => e.stopPropagation()}>
-            <p className="text-sm mb-1">Delete this item?</p>
-            <p className="text-xs text-muted-foreground mb-3 break-all">{confirmDelete.substring(confirmDelete.lastIndexOf('/') + 1)}</p>
+            <p className="text-sm mb-1">
+              {confirmDelete.length === 1 ? 'Delete this item?' : `Delete ${confirmDelete.length} items?`}
+            </p>
+            <p className="text-xs text-muted-foreground mb-1 break-all">
+              {confirmDelete.length === 1
+                ? confirmDelete[0].substring(confirmDelete[0].lastIndexOf('/') + 1)
+                : confirmDelete.slice(0, 5).map(p => p.substring(p.lastIndexOf('/') + 1)).join(', ')
+                  + (confirmDelete.length > 5 ? ` and ${confirmDelete.length - 5} more` : '')}
+            </p>
+            <p className="text-[10px] text-muted-foreground mb-3">Moves to Trash.</p>
             <div className="flex gap-2 justify-end">
               <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setConfirmDelete(null)}>Cancel</Button>
               <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={confirmDeleteItem}>Delete</Button>
@@ -2291,6 +2534,20 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
               <div className="bg-border -mx-0 my-1 h-px" />
               <button
                 className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
+                onClick={() => { copySelection(); setContextMenu(null); }}
+              >Copy{selection.size > 1 ? ` (${selection.size})` : ''}</button>
+              <button
+                className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-40"
+                disabled={clipboard.length === 0}
+                onClick={() => { void pasteClipboard(); setContextMenu(null); }}
+              >Paste{clipboard.length > 1 ? ` (${clipboard.length})` : ''}</button>
+              <button
+                className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
+                onClick={() => { void duplicateSelection(); setContextMenu(null); }}
+              >Duplicate</button>
+              <div className="bg-border -mx-0 my-1 h-px" />
+              <button
+                className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
                 onClick={(e) => { renameItem(contextMenu.path, e); setContextMenu(null); }}
               >Rename</button>
               <button
@@ -2329,6 +2586,20 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
                 className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
                 onClick={() => ctxCopyRelativePath(contextMenu.path)}
               >Copy Relative Path</button>
+              <div className="bg-border -mx-0 my-1 h-px" />
+              <button
+                className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
+                onClick={() => { copySelection(); setContextMenu(null); }}
+              >Copy{selection.size > 1 ? ` (${selection.size})` : ''}</button>
+              <button
+                className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-40"
+                disabled={clipboard.length === 0}
+                onClick={() => { void pasteClipboard(); setContextMenu(null); }}
+              >Paste{clipboard.length > 1 ? ` (${clipboard.length})` : ''}</button>
+              <button
+                className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
+                onClick={() => { void duplicateSelection(); setContextMenu(null); }}
+              >Duplicate</button>
               <div className="bg-border -mx-0 my-1 h-px" />
               <button
                 className="flex w-full items-center px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"

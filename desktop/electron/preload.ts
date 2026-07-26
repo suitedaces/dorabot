@@ -1,4 +1,4 @@
-import { contextBridge, shell, ipcRenderer } from 'electron';
+import { contextBridge, shell, ipcRenderer, webUtils } from 'electron';
 
 // Listen for gateway errors from main process (gateway failed to start)
 ipcRenderer.on('gateway-error', (_event, payload: { error: string; logs: string }) => {
@@ -7,6 +7,11 @@ ipcRenderer.on('gateway-error', (_event, payload: { error: string; logs: string 
 
 const electronAPI = {
   platform: process.platform,
+  // Electron 32+ removed File.path, so a file dropped from Finder can only be
+  // resolved to a real path through webUtils.
+  getPathForFile: (file: File): string => {
+    try { return webUtils.getPathForFile(file); } catch { return ''; }
+  },
   appVersion: (() => { try { return require('electron').app?.getVersion?.() || process.env.npm_package_version || '0.0.0'; } catch { return '0.0.0'; } })(),
   openExternal: (url: string) => shell.openExternal(url),
   dockBounce: (type: 'critical' | 'informational') => ipcRenderer.send('dock-bounce', type),
