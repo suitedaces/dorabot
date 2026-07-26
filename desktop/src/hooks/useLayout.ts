@@ -14,10 +14,16 @@ export type Column = {
   sizes: number[];  // heights, sum to 100
 };
 
+// which pane a kind of tab belongs in. chat tabs never share a pane with
+// files/diffs/terminals unless the user drags them together on purpose.
+export type PaneRole = 'chat' | 'workspace';
+
 export type LayoutState = {
   columns: Column[];
   sizes: number[];  // widths, sum to 100
   activePaneId: string;
+  // optional so layouts saved before roles existed still load as-is
+  roles?: Partial<Record<PaneRole, string>>;
 };
 
 // Backwards compat: callers that used GroupId now use string
@@ -235,6 +241,40 @@ export function useLayout() {
       col.sizes = equalSizes(col.panes.length);
       const columns = prev.columns.map(c => c.id === col.id ? col : c);
       return { ...prev, columns, activePaneId: newPane.id };
+    });
+    return newPane.id;
+  }, []);
+
+  // --- Pane roles ---
+  // storage only. the policy for which role a tab wants lives in useTabs,
+  // because that's where tab types are known.
+
+  const setPaneRole = useCallback((role: PaneRole, paneId: string) => {
+    setState(prev => {
+      if (prev.roles?.[role] === paneId) return prev;
+      return { ...prev, roles: { ...(prev.roles || {}), [role]: paneId } };
+    });
+  }, []);
+
+  // creates a pane next to anchor and tags it with role. returns the new id
+  // synchronously so the caller can drop a tab into it in the same tick.
+  const createPaneForRole = useCallback((role: PaneRole, anchorPaneId: string, side: 'left' | 'right'): string => {
+    const newPane = makePane();
+    const newCol = makeColumn([newPane]);
+    setState(prev => {
+      const loc = findPaneColumn(prev, anchorPaneId);
+      const cols = [...prev.columns];
+      const insertIdx = loc
+        ? (side === 'right' ? loc.colIdx + 1 : loc.colIdx)
+        : (side === 'right' ? cols.length : 0);
+      cols.splice(insertIdx, 0, newCol);
+      return {
+        ...prev,
+        columns: cols,
+        sizes: equalSizes(cols.length),
+        activePaneId: newPane.id,
+        roles: { ...(prev.roles || {}), [role]: newPane.id },
+      };
     });
     return newPane.id;
   }, []);
@@ -511,6 +551,7 @@ export function useLayout() {
     activeGroupId,
     visibleGroups,
     isMultiPane,
+    roles: state.roles,
     // Compat (old mode-based API still works for callers that check it)
     mode: (visibleGroups.length === 1 ? 'single' : 'multi') as string,
     // Actions
@@ -519,6 +560,8 @@ export function useLayout() {
     addRow,
     addColumnAt,
     addRowAt,
+    setPaneRole,
+    createPaneForRole,
     splitHorizontal,
     splitVertical,
     splitGrid,

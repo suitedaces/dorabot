@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { useGateway } from './useGateway';
-import type { useLayout, GroupId } from './useLayout';
+import type { useLayout, GroupId, PaneRole } from './useLayout';
 
 export type TabType = 'chat' | 'channels' | 'goals' | 'automation' | 'extensions' | 'agents' | 'memory' | 'research' | 'settings' | 'file' | 'diff' | 'terminal' | 'task' | 'pr';
 
@@ -171,6 +171,69 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
       return next;
     });
   }, []);
+
+  // Which pane a newly opened tab belongs in. Without this, everything falls
+  // back to activePaneId and a file click covers whatever chat you were in.
+  // Roles are stored in layout; the policy lives here because only this hook
+  // knows which tabs are chats.
+  const resolveTarget = useCallback((kind: PaneRole, explicitPaneId?: GroupId): GroupId | undefined => {
+    if (explicitPaneId) return explicitPaneId;
+
+    const panes = layout.visibleGroups;
+    if (panes.length === 0) return undefined;
+
+    const roles = layout.roles || {};
+    const alive = (id?: string) => !!id && panes.some(p => p.id === id);
+
+    const chatTabIds = new Set(tabs.filter(isChatTab).map(t => t.id));
+    const holdsChat = (p: typeof panes[number]) => p.tabIds.some(id => chatTabIds.has(id));
+    const holdsOther = (p: typeof panes[number]) => p.tabIds.some(id => !chatTabIds.has(id));
+
+    // Find where chat lives. Seed it from existing chat tabs the first time,
+    // so an initial file click can't claim the pane showing a conversation.
+    let chatId = alive(roles.chat) ? roles.chat : undefined;
+    if (!chatId) {
+      const seed = panes.find(holdsChat);
+      if (seed) {
+        chatId = seed.id;
+        layout.setPaneRole('chat', seed.id);
+      }
+    }
+
+    const wsId = alive(roles.workspace) ? roles.workspace : undefined;
+
+    if (kind === 'chat') {
+      // Chat is sticky: a new conversation never opens into an editor pane
+      // just because that's where focus happens to be.
+      if (chatId) return chatId;
+      const free = panes.find(p => p.id !== wsId && !holdsOther(p));
+      if (free) {
+        layout.setPaneRole('chat', free.id);
+        return free.id;
+      }
+      // Every pane is holding files: give chat its own rather than stacking a
+      // conversation on top of the editor.
+      return layout.createPaneForRole('chat', wsId || layout.activeGroupId, 'left');
+    }
+
+    // Workspace follows focus, so manual splits (cmd+d, cmd+g) still receive
+    // files. The only pane it refuses is the one holding chat.
+    const active = panes.find(p => p.id === layout.activeGroupId);
+    if (active && active.id !== chatId) {
+      layout.setPaneRole('workspace', active.id);
+      return active.id;
+    }
+
+    if (wsId) return wsId;
+
+    const spare = panes.find(p => p.id !== chatId);
+    if (spare) {
+      layout.setPaneRole('workspace', spare.id);
+      return spare.id;
+    }
+
+    return layout.createPaneForRole('workspace', chatId || layout.activeGroupId, 'right');
+  }, [layout, tabs]);
 
   // Migrate: if layout groups are empty but we have tabs, put them all in g0
   useEffect(() => {
@@ -398,7 +461,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
       return [...prev, tab];
     });
     setActiveTabId(tab.id);
-    layout.addTabToGroup(tab.id, groupId);
+    layout.addTabToGroup(tab.id, resolveTarget(isChatTab(tab) ? 'chat' : 'workspace', groupId));
 
     if (isChatTab(tab)) {
       gw.trackSession(tab.sessionKey);
@@ -573,8 +636,8 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
 
     setTabs(prev => [...prev, tab]);
     setActiveTabId(id);
-    layout.addTabToGroup(id, groupId);
-  }, [tabs, focusTab, layout]);
+    layout.addTabToGroup(id, resolveTarget('workspace', groupId));
+  }, [tabs, focusTab, layout, resolveTarget]);
 
   const openFileTab = useCallback((filePath: string, groupId?: GroupId) => {
     const id = `file:${filePath}`;
@@ -595,8 +658,8 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
 
     setTabs(prev => [...prev, tab]);
     setActiveTabId(id);
-    layout.addTabToGroup(id, groupId);
-  }, [tabs, focusTab, layout]);
+    layout.addTabToGroup(id, resolveTarget('workspace', groupId));
+  }, [tabs, focusTab, layout, resolveTarget]);
 
   const openDiffTab = useCallback((opts: {
     filePath: string;
@@ -620,8 +683,8 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
 
     setTabs(prev => [...prev, tab]);
     setActiveTabId(id);
-    layout.addTabToGroup(id, groupId);
-  }, [layout]);
+    layout.addTabToGroup(id, resolveTarget('workspace', groupId));
+  }, [layout, resolveTarget]);
 
   const openTerminalTab = useCallback((cwd?: string, groupId?: GroupId) => {
     const shellId = crypto.randomUUID();
@@ -636,8 +699,8 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     };
     setTabs(prev => [...prev, tab]);
     setActiveTabId(id);
-    layout.addTabToGroup(id, groupId);
-  }, [layout]);
+    layout.addTabToGroup(id, resolveTarget('workspace', groupId));
+  }, [layout, resolveTarget]);
 
   const openSessionTab = useCallback((tab: ChatTab, groupId?: GroupId) => {
     // Dedup inside updater to avoid stale-closure race on rapid double-click
@@ -658,7 +721,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     }
     gw.trackSession(tab.sessionKey);
     setActiveTabId(tab.id);
-    layout.addTabToGroup(tab.id, groupId);
+    layout.addTabToGroup(tab.id, resolveTarget('chat', groupId));
     gw.setActiveSession(tab.sessionKey, tab.chatId);
     // Load session history from server
     if (tab.sessionId) {
@@ -682,8 +745,8 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     };
     setTabs(prev => [...prev, tab]);
     setActiveTabId(id);
-    layout.addTabToGroup(id, groupId);
-  }, [tabs, focusTab, layout]);
+    layout.addTabToGroup(id, resolveTarget('workspace', groupId));
+  }, [tabs, focusTab, layout, resolveTarget]);
 
   const openPrTab = useCallback((repoRoot: string, prNumber: number, title: string, groupId?: GroupId) => {
     const id = `pr:${repoRoot}#${prNumber}`;
@@ -703,8 +766,8 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     };
     setTabs(prev => [...prev, tab]);
     setActiveTabId(id);
-    layout.addTabToGroup(id, groupId);
-  }, [tabs, focusTab, layout]);
+    layout.addTabToGroup(id, resolveTarget('workspace', groupId));
+  }, [tabs, focusTab, layout, resolveTarget]);
 
   const newChatTab = useCallback((groupId?: GroupId): { tabId: string; sessionKey: string; chatId: string } => {
     const { sessionKey, chatId } = gw.newSession();
@@ -720,9 +783,9 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     setTabs(prev => [...prev, tab]);
     setActiveTabId(tab.id);
     gw.trackSession(tab.sessionKey);
-    layout.addTabToGroup(tab.id, groupId);
+    layout.addTabToGroup(tab.id, resolveTarget('chat', groupId));
     return { tabId: tab.id, sessionKey, chatId };
-  }, [gw, layout]);
+  }, [gw, resolveTarget]);
 
   const closeOtherTabs = useCallback((tabId: string, groupId?: GroupId) => {
     const gid = groupId || layout.activeGroupId;
