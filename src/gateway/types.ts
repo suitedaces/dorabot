@@ -131,6 +131,7 @@ export type RpcMethod =
   | 'fs.mkdir'
   | 'fs.delete'
   | 'fs.rename'
+  | 'fs.copy'
   | 'fs.watch.start'
   | 'fs.watch.stop'
   | 'agent.run_background'
