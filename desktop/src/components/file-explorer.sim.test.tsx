@@ -334,4 +334,12 @@ describe('file explorer selection + file ops', () => {
       window.removeEventListener('keydown', spy);
     }
   });
+
+  it('22. clicking a file keeps focus in the tree', async () => {
+    await setup();
+    const tree = document.querySelector('[data-file-tree]') as HTMLElement;
+    fireEvent.click(row('a.ts'));
+    console.log('  activeElement is tree:', document.activeElement === tree);
+    expect(document.activeElement).toBe(tree);
+  });
 });

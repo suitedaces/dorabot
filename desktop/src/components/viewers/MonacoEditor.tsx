@@ -55,6 +55,9 @@ export function MonacoEditor({ content, filePath, readOnly = false, onSave, onDi
   const editorRef = useRef<monacoEditor.IStandaloneCodeEditor | null>(null);
   const [monacoTheme, setMonacoTheme] = useState(theme === 'dark' ? 'vs-dark' : 'vs');
   const originalContentRef = useRef(content);
+  // Read in handleMount, which is created once
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
   const onSaveRef = useRef(onSave);
   const onDirtyChangeRef = useRef(onDirtyChange);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -214,7 +217,10 @@ export function MonacoEditor({ content, filePath, readOnly = false, onSave, onDi
       }
     });
 
-    editor.focus();
+    // Only take focus when the file is actually editable. Clicking a file in
+    // the tree opens it read-only, and stealing focus there sent cmd+C/X/D to
+    // the editor instead of the explorer, which silently edited the file.
+    if (!readOnlyRef.current) editor.focus();
   }, []);
 
   const language = getMonacoLanguage(filePath);
