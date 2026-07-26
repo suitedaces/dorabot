@@ -33,22 +33,49 @@ jobs:
           echo "Synced desktop/package.json to $ROOT_VERSION"
         working-directory: desktop
 
-      - name: Reset release
+      - name: Ensure draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          RELEASE_IDS=$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+          RELEASES=$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
             --paginate \
-            --jq ".[] | select(.tag_name == \"$TAG\") | .id")
-          for RELEASE_ID in $RELEASE_IDS; do
-            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"
-          done
-          gh release create "$TAG" \
-            --draft \
-            --title "${TAG#v}" \
-            --verify-tag \
-            --repo "$GITHUB_REPOSITORY"
+            --jq ".[] | select(.tag_name == \"$TAG\") | [.id, .draft] | @tsv")
+          RELEASE_COUNT=$(printf '%s\n' "$RELEASES" | awk 'NF { count++ } END { print count + 0 }')
+
+          if [ "$RELEASE_COUNT" -gt 1 ]; then
+            PUBLISHED_COUNT=$(printf '%s\n' "$RELEASES" | awk 'NF && $2 != "true" { count++ } END { print count + 0 }')
+            if [ "$PUBLISHED_COUNT" -gt 0 ]; then
+              echo "::error::Multiple releases exist for $TAG and at least one is published"
+              exit 1
+            fi
+
+            KEEP_ID=$(printf '%s\n' "$RELEASES" | awk 'NF { print $1 }' | sort -n | head -1)
+            for RELEASE_ID in $(printf '%s\n' "$RELEASES" | awk 'NF { print $1 }'); do
+              if [ "$RELEASE_ID" != "$KEEP_ID" ]; then
+                echo "Deleting duplicate draft release $RELEASE_ID for $TAG"
+                gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"
+              fi
+            done
+            RELEASES="$KEEP_ID	true"
+            RELEASE_COUNT=1
+          fi
+
+          if [ "$RELEASE_COUNT" -eq 1 ]; then
+            RELEASE_ID=$(printf '%s\n' "$RELEASES" | awk 'NF { print $1; exit }')
+            RELEASE_DRAFT=$(printf '%s\n' "$RELEASES" | awk 'NF { print $2; exit }')
+            if [ "$RELEASE_DRAFT" != "true" ]; then
+              echo "::error::Published release $RELEASE_ID already exists for $TAG"
+              exit 1
+            fi
+            echo "Reusing draft release $RELEASE_ID for $TAG"
+          else
+            gh release create "$TAG" \
+              --draft \
+              --title "${TAG#v}" \
+              --verify-tag \
+              --repo "$GITHUB_REPOSITORY"
+          fi
 
       - name: Build & Package
         env:
