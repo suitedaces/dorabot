@@ -257,53 +257,78 @@ export function backfillFtsIndex(): void {
   const currentVersion = versionRow ? parseInt(versionRow.value, 10) : 0;
   const needsRebuild = currentVersion < FTS_VERSION;
 
-  const sample = d.prepare("SELECT text_content FROM messages_fts LIMIT 1").get() as { text_content: string | null } | undefined;
+  // messages_fts is a contentless FTS5 table (content=''), so SQLite does not store the
+  // column values and reading one back always yields NULL no matter how many rows are
+  // indexed. Probing the column therefore reported "empty" on every start, forced a full
+  // rebuild each time and left the fts_version check above unreachable. Count rows.
+  const sample = d.prepare('SELECT COUNT(*) AS n FROM messages_fts').get() as { n: number } | undefined;
 
-  if (needsRebuild || !sample?.text_content) {
+  if (needsRebuild || !sample?.n) {
     // drop and recreate for clean rebuild
     d.exec('DROP TABLE IF EXISTS messages_fts');
     d.exec("CREATE VIRTUAL TABLE messages_fts USING fts5(text_content, content='', tokenize='porter unicode61')");
 
     console.error(`[db] rebuilding FTS index (v${FTS_VERSION})...`);
-    const rows = d.prepare('SELECT id, content, type FROM messages WHERE type IN (\'user\', \'assistant\') ORDER BY id').all() as { id: number; content: string; type: string }[];
-
-    const insert = d.prepare('INSERT INTO messages_fts(rowid, text_content) VALUES (?, ?)');
-    const tx = d.transaction(() => {
-      let indexed = 0;
-      for (const row of rows) {
-        const text = extractMessageText(row.content);
-        if (!text || text.length < 5) continue;
-        insert.run(row.id, text);
-        indexed++;
-      }
-      d.prepare("INSERT OR REPLACE INTO db_meta (key, value) VALUES ('fts_version', ?)").run(String(FTS_VERSION));
-      console.error(`[db] FTS rebuild complete (v${FTS_VERSION}): ${indexed}/${rows.length} messages indexed`);
-    });
-    tx();
+    const total = indexMessagesInPages(
+      "SELECT id, content FROM messages WHERE type IN ('user', 'assistant') AND id > ? ORDER BY id LIMIT ?"
+    );
+    d.prepare("INSERT OR REPLACE INTO db_meta (key, value) VALUES ('fts_version', ?)").run(String(FTS_VERSION));
+    console.error(`[db] FTS rebuild complete (v${FTS_VERSION}): ${total} messages indexed`);
     return;
   }
 
   // incremental: index any messages missing from FTS (only user + assistant, skip result)
-  const missing = d.prepare(`
-    SELECT m.id, m.content, m.type FROM messages m
-    WHERE m.type IN ('user', 'assistant')
-      AND m.id NOT IN (SELECT rowid FROM messages_fts)
-    ORDER BY m.id
-  `).all() as { id: number; content: string; type: string }[];
+  const indexed = indexMessagesInPages(
+    `SELECT m.id, m.content FROM messages m
+     WHERE m.type IN ('user', 'assistant')
+       AND m.id > ?
+       AND m.id NOT IN (SELECT rowid FROM messages_fts)
+     ORDER BY m.id
+     LIMIT ?`
+  );
 
-  if (missing.length === 0) return;
+  if (indexed > 0) {
+    console.error(`[db] incremental FTS backfill complete: ${indexed} messages indexed`);
+  }
+}
 
-  console.error(`[db] incremental FTS backfill: ${missing.length} messages to index...`);
+/**
+ * Index messages into messages_fts one bounded page at a time.
+ *
+ * pageSql must select id and content, take a keyset cursor as its first parameter and a
+ * page size as its second, and order by id. Paging keeps peak memory flat regardless of
+ * history size. The previous code materialised every user and assistant message in one
+ * .all(), which on a large database exhausted the V8 heap and crash-looped the gateway.
+ *
+ * This pages rather than streaming with .iterate() on purpose: better-sqlite3 refuses to
+ * run a write while an iterator is open on the same connection, throwing "This database
+ * connection is busy executing a query", so an open iterator plus batched inserts is not
+ * an option here.
+ */
+function indexMessagesInPages(pageSql: string, pageSize = 2000): number {
+  const d = getDb();
+  const page = d.prepare(pageSql);
   const insert = d.prepare('INSERT INTO messages_fts(rowid, text_content) VALUES (?, ?)');
-  const tx = d.transaction(() => {
-    let indexed = 0;
-    for (const row of missing) {
+
+  const writePage = d.transaction((rows: { id: number; content: string }[]): number => {
+    let n = 0;
+    for (const row of rows) {
       const text = extractMessageText(row.content);
       if (!text || text.length < 5) continue;
       insert.run(row.id, text);
-      indexed++;
+      n++;
     }
-    console.error(`[db] incremental FTS backfill complete: ${indexed}/${missing.length} messages indexed`);
+    return n;
   });
-  tx();
+
+  let cursor = 0;
+  let indexed = 0;
+  for (;;) {
+    const rows = page.all(cursor, pageSize) as { id: number; content: string }[];
+    if (rows.length === 0) break;
+    indexed += writePage(rows);
+    cursor = rows[rows.length - 1].id;
+    if (rows.length < pageSize) break;
+  }
+  return indexed;
 }
