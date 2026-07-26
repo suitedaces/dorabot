@@ -145,6 +145,10 @@ type OAuthTokens = {
 let nextRefreshAt: number | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectRequired = false;
+// Consecutive refresh failures. Drives the retry backoff; reset on any success.
+let refreshFailureStreak = 0;
+const REFRESH_RETRY_BASE_MS = 30_000;
+const REFRESH_RETRY_MAX_MS = 10 * 60 * 1000;
 let lastAuthRequiredEmit = 0;
 const AUTH_REQUIRED_COOLDOWN_MS = 60_000;
 const authRequiredListeners = new Set<(reason: string) => void>();
@@ -268,13 +272,38 @@ async function refreshAccessToken(refreshToken: string): Promise<OAuthTokens | n
   }
 }
 
-function scheduleTokenRefresh(tokens: OAuthTokens): void {
+// Single-flight refresh. The token endpoint rotates the refresh_token, so a
+// second concurrent POST carrying the same one is rejected with 400. Without
+// this, a chat turn and a subagent turn starting together race and one of them
+// permanently poisons the stored credential.
+let inflightRefresh: Promise<OAuthTokens | null> | null = null;
+
+function refreshAccessTokenShared(refreshToken: string): Promise<OAuthTokens | null> {
+  if (inflightRefresh) return inflightRefresh;
+  inflightRefresh = refreshAccessToken(refreshToken).finally(() => {
+    inflightRefresh = null;
+  });
+  return inflightRefresh;
+}
+
+/**
+ * Arm the next token refresh.
+ *
+ * Pass `retryDelayMs` to re-arm after a failure instead of scheduling off the
+ * token's expiry. A refresh failure must never leave the process with no timer
+ * armed: the common causes are transient (DNS is not up yet on wake from sleep,
+ * captive portal, brief offline) and recovering from them used to require the
+ * user to quit and relaunch the app.
+ */
+function scheduleTokenRefresh(tokens: OAuthTokens, retryDelayMs?: number): void {
   if (refreshTimer) {
     clearTimeout(refreshTimer);
     refreshTimer = null;
   }
 
-  const runAt = Math.max(Date.now() + 1_000, tokens.expires_at - REFRESH_LEAD_MS);
+  const runAt = retryDelayMs !== undefined
+    ? Date.now() + retryDelayMs
+    : Math.max(Date.now() + 1_000, tokens.expires_at - REFRESH_LEAD_MS);
   nextRefreshAt = runAt;
   const delay = runAt - Date.now();
   refreshTimer = setTimeout(async () => {
@@ -285,23 +314,32 @@ function scheduleTokenRefresh(tokens: OAuthTokens): void {
       nextRefreshAt = null;
       return;
     }
-    // Retry refresh up to 3 times with exponential backoff
-    let refreshed: OAuthTokens | null = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      refreshed = await refreshAccessToken(latest.refresh_token);
-      if (refreshed) break;
-      if (attempt < 2) {
-        const backoff = (attempt + 1) * 5_000; // 5s, 10s
-        console.log(`[claude] token refresh attempt ${attempt + 1} failed, retrying in ${backoff / 1000}s...`);
-        await new Promise(r => setTimeout(r, backoff));
-      }
-    }
-    if (!refreshed) {
-      emitAuthRequired('OAuth refresh failed after retries');
-      nextRefreshAt = null;
+    // ensureOAuthToken() may have refreshed while this timer was pending.
+    if (tokenHealth(latest) === 'valid') {
+      refreshFailureStreak = 0;
+      scheduleTokenRefresh(latest);
       return;
     }
-    scheduleTokenRefresh(refreshed);
+    const refreshed = await refreshAccessTokenShared(latest.refresh_token);
+    if (refreshed) {
+      refreshFailureStreak = 0;
+      scheduleTokenRefresh(refreshed);
+      return;
+    }
+    // Keep trying. The refresh token outlives the access token, so a failure
+    // here is almost always the network rather than a dead credential.
+    refreshFailureStreak++;
+    const backoff = Math.min(
+      REFRESH_RETRY_BASE_MS * 2 ** (refreshFailureStreak - 1),
+      REFRESH_RETRY_MAX_MS,
+    );
+    console.log(
+      `[claude] token refresh failed (attempt ${refreshFailureStreak}), retrying in ${Math.round(backoff / 1000)}s`,
+    );
+    if (refreshFailureStreak >= 3) {
+      emitAuthRequired('OAuth refresh failing, still retrying in background');
+    }
+    scheduleTokenRefresh(latest, backoff);
   }, delay);
   refreshTimer.unref?.();
 }
@@ -313,11 +351,15 @@ async function ensureOAuthToken(): Promise<string | null> {
 
   if (Date.now() > tokens.expires_at - 300_000) {
     console.log('[claude] access token expired or expiring, refreshing...');
-    const refreshed = await refreshAccessToken(tokens.refresh_token);
+    const refreshed = await refreshAccessTokenShared(tokens.refresh_token);
     if (!refreshed) {
       emitAuthRequired('OAuth token expired');
+      // Arm a background retry so recovery does not require an app restart.
+      refreshFailureStreak++;
+      scheduleTokenRefresh(tokens, REFRESH_RETRY_BASE_MS);
       return null;
     }
+    refreshFailureStreak = 0;
     scheduleTokenRefresh(refreshed);
     process.env.CLAUDE_CODE_OAUTH_TOKEN = refreshed.access_token;
     return refreshed.access_token;
