@@ -22,7 +22,7 @@ const resolve = (p: string, base?: string) => {
 };
 import { moveToTrash, copyPath, movePath, isInside } from './fs-ops.js';
 import type { Config } from '../config.js';
-import { isPathAllowed, saveConfig, ALWAYS_DENIED, type SecurityConfig, type ToolPolicyConfig } from '../config.js';
+import { isPathAllowed, saveConfig, ALWAYS_DENIED, PROVIDER_NAMES, type SecurityConfig, type ToolPolicyConfig } from '../config.js';
 import type { WsMessage, WsResponse, WsEvent, GatewayContext } from './types.js';
 import { SessionRegistry } from './session-registry.js';
 import { ChannelManager } from './channel-manager.js';
@@ -5054,8 +5054,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
           // provider config keys
           if (key === 'provider.name' && typeof value === 'string') {
-            if (!['claude', 'codex', 'minimax'].includes(value)) {
-              return { id, error: 'provider.name must be "claude", "codex", or "minimax"' };
+            if (!(PROVIDER_NAMES as readonly string[]).includes(value)) {
+              return { id, error: `provider.name must be one of: ${PROVIDER_NAMES.join(', ')}` };
             }
             config.provider.name = value as ProviderName;
             saveConfig(config);
