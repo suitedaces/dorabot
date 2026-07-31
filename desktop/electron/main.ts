@@ -306,6 +306,12 @@ app.on('ready', async () => {
       // Gateway is listening, now connect the bridge
       gatewayBridge?.connect();
     },
+    onSlowStart: () => {
+      // First launch after an upgrade can spend a while on one-off work before the
+      // gateway listens. Say so instead of leaving a silent window.
+      console.log('[main] Gateway slow to start, still waiting');
+      updateTrayTitle('starting (this can take a minute)...');
+    },
     onError: (error) => {
       console.error('[main] Gateway error:', error);
       updateTrayTitle('offline');
