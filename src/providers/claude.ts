@@ -6,6 +6,7 @@ import { dirname } from 'node:path';
 import type { Provider, ProviderRunOptions, ProviderMessage, ProviderAuthStatus, ProviderQueryResult, RunHandle } from './types.js';
 import { guardImages } from './image-guard.js';
 import { DORABOT_DIR, CLAUDE_KEY_PATH, CLAUDE_OAUTH_PATH } from '../workspace.js';
+import { cleanEnvForSdk } from '../sdk-env.js';
 import { getSecretStorageBackend, keychainDelete, keychainLoad, keychainStore, type SecretStorageBackend } from '../auth/keychain.js';
 
 // ── Node binary resolution ──────────────────────────────────────────
@@ -362,6 +363,44 @@ function scheduleTokenRefresh(tokens: OAuthTokens, retryDelayMs?: number): void 
     scheduleTokenRefresh(latest, backoff);
   }, delay);
   refreshTimer.unref?.();
+}
+
+/**
+ * Write the credential for `method` into an env object destined for an SDK
+ * subprocess, clearing the competing one so behaviour does not depend on a
+ * precedence order that lives in the CLI binary rather than the SDK.
+ *
+ * Shared by query() and verifyAuth() on purpose. verifyAuth() used to call the
+ * SDK with no env at all, so it inherited process.env while real runs received
+ * the cached login-shell snapshot. It could therefore pass against a credential
+ * that no real session would ever see, and report healthy while every chat
+ * failed. A health check has to exercise the same path as the thing it checks.
+ */
+function applyAuthEnv(env: Record<string, string>, method: AuthMethod, freshToken?: string | null): void {
+  if (method === 'api_key') {
+    const key = getApiKey();
+    if (key) env.ANTHROPIC_API_KEY = key;
+    delete env.CLAUDE_CODE_OAUTH_TOKEN;
+    return;
+  }
+  if (method === 'dorabot_oauth') {
+    // Prefer the freshly ensured token, but fall back to whatever is stored rather than
+    // unsetting: a refresh that failed on a network blip does not invalidate an access
+    // token that still has time left on it.
+    const token = freshToken || loadOAuthTokens()?.access_token;
+    if (token) env.CLAUDE_CODE_OAUTH_TOKEN = token;
+    else delete env.CLAUDE_CODE_OAUTH_TOKEN;
+    delete env.ANTHROPIC_API_KEY;
+    return;
+  }
+  if (method === 'cli_keychain') {
+    // The CLI owns and refreshes this credential. Deliberately do not override it with
+    // dorabot's token: they can be different accounts, and silently switching which one
+    // is billed is worse than the expiry it would fix. Only clear the snapshot's token,
+    // which was captured at startup and is stale by definition, so it cannot shadow the
+    // keychain.
+    delete env.CLAUDE_CODE_OAUTH_TOKEN;
+  }
 }
 
 /** Ensure we have a valid access token, refreshing if needed. Sets CLAUDE_CODE_OAUTH_TOKEN env. */
@@ -727,6 +766,14 @@ export class ClaudeProvider implements Provider {
         await ensureOAuthToken();
       }
 
+      // Build the env exactly as a real run does, then apply the same credential
+      // selection. Calling the SDK bare here meant this check ran against a different
+      // environment than every actual session, which is how it could pass while chats
+      // were failing.
+      const verifyEnv = cleanEnvForSdk();
+      if (method === 'dorabot_oauth') await ensureOAuthToken();
+      applyAuthEnv(verifyEnv, method);
+
       const stream = query({
         prompt: "Reply with only the word 'ok'",
         options: {
@@ -734,6 +781,7 @@ export class ClaudeProvider implements Provider {
           maxTurns: 1,
           allowedTools: [],
           abortController,
+          env: verifyEnv,
         },
       });
 
@@ -828,29 +876,7 @@ export class ClaudeProvider implements Provider {
     //
     // opts.env is rebuilt per run (mergeSkillEnv returns a fresh object), so mutating it
     // here cannot leak into the cached snapshot or into another run.
-    if (opts.env) {
-      if (method === 'api_key') {
-        const key = getApiKey();
-        if (key) opts.env.ANTHROPIC_API_KEY = key;
-        // A stale OAuth token in the snapshot must not compete with the chosen key.
-        delete opts.env.CLAUDE_CODE_OAUTH_TOKEN;
-      } else if (method === 'dorabot_oauth') {
-        // Prefer the freshly ensured token, but fall back to whatever is stored rather
-        // than unsetting: a refresh that failed on a network blip does not invalidate an
-        // access token that still has time left on it.
-        const token = freshOAuthToken || loadOAuthTokens()?.access_token;
-        if (token) opts.env.CLAUDE_CODE_OAUTH_TOKEN = token;
-        else delete opts.env.CLAUDE_CODE_OAUTH_TOKEN;
-        delete opts.env.ANTHROPIC_API_KEY;
-      } else if (method === 'cli_keychain') {
-        // The CLI has its own credential and refreshes it itself. Deliberately do not
-        // override it with dorabot's token: the two can be different accounts, and
-        // silently switching which one is billed is worse than the expiry it would fix.
-        // Always clear the snapshot's token so it cannot shadow the keychain: whatever
-        // it holds was captured at startup and is stale by definition.
-        delete opts.env.CLAUDE_CODE_OAUTH_TOKEN;
-      }
-    }
+    if (opts.env) applyAuthEnv(opts.env, method, freshOAuthToken);
 
     // ── Async generator message feed (buffett pattern) ──────────────
     // Instead of passing a string prompt to query(), we create an async
