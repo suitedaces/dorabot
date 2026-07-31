@@ -883,7 +883,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     }
 
     try {
-      const watcher = watch(resolved, { recursive: false }, (eventType, filename) => {
+      // Recursive: the explorer renders an expandable tree, so a change anywhere
+      // under the open root is visible to the user. Watching only the top level
+      // meant edits, creations and deletions inside any subdirectory produced no
+      // event at all and the tree silently went stale. On macOS this is backed by
+      // FSEvents, and events are debounced below, so the cost is a coalesced
+      // notification rather than one per file.
+      const watcher = watch(resolved, { recursive: true }, (eventType, filename) => {
         const entry = fileWatchers.get(resolved);
         if (!entry) return;
         const filenameStr = filename ? String(filename) : null;

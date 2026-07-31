@@ -1697,7 +1697,14 @@ export function useGateway() {
 
       case 'fs.change': {
         const d = data as { path: string; eventType: string; filename: string | null };
-        fsChangeListenersRef.current.forEach(listener => listener(d.path));
+        // The watch is recursive, so filename is a path relative to the watch
+        // root and may sit several levels down. Report the directory that
+        // actually changed rather than always the root, so a listener can
+        // refresh the level the user is looking at instead of only the top.
+        const rel = d.filename ? d.filename.replace(/\\/g, '/') : '';
+        const lastSlash = rel.lastIndexOf('/');
+        const changedDir = lastSlash > 0 ? `${d.path}/${rel.slice(0, lastSlash)}` : d.path;
+        fsChangeListenersRef.current.forEach(listener => listener(changedDir));
         break;
       }
 
