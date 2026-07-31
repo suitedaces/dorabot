@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { MonacoEditor } from './viewers/MonacoEditor';
 import { MarkdownViewer } from './viewers/MarkdownViewer';
+import { HtmlViewer } from './viewers/HtmlViewer';
+import { JsonViewer } from './viewers/JsonViewer';
 const PDFViewer = lazy(() => import('./viewers/PDFViewer').then(m => ({ default: m.PDFViewer })));
 import { ExcelViewer } from './viewers/ExcelViewer';
 import { ImageViewer } from './viewers/ImageViewer';
@@ -9,8 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { X, Pencil, Eye } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-const MARKDOWN_PREVIEW_EVENT = 'dorabot:markdown-preview';
+import { FILE_PREVIEW_EVENT, supportsFilePreview } from '@/lib/file-preview';
 
 type Props = {
   filePath: string;
@@ -18,13 +19,14 @@ type Props = {
   onClose: () => void;
   headerless?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
+  htmlSrcResolver?: (path: string) => string;
 };
 
-type FileType = 'code' | 'markdown' | 'pdf' | 'excel' | 'image' | 'video' | 'audio' | 'unsupported';
+type FileType = 'code' | 'markdown' | 'html' | 'json' | 'pdf' | 'excel' | 'image' | 'video' | 'audio' | 'unsupported';
 
 const CODE_EXTENSIONS = [
   'js', 'jsx', 'ts', 'tsx', 'py', 'rs', 'go', 'java', 'c', 'cpp', 'h', 'hpp',
-  'css', 'html', 'json', 'xml', 'yaml', 'yml', 'toml', 'sh', 'bash', 'zsh',
+  'css', 'xml', 'yaml', 'yml', 'toml', 'sh', 'bash', 'zsh',
   'rb', 'php', 'swift', 'kt', 'scala', 'sql', 'r', 'lua', 'vim', 'txt', 'log',
   'env', 'gitignore', 'dockerignore', 'Makefile', 'Dockerfile',
 ];
@@ -41,6 +43,8 @@ function getFileType(path: string): FileType {
   // Handle extensionless files as code (plain text fallback)
   if (!ext) return 'code';
   if (ext === 'md') return 'markdown';
+  if (ext === 'html' || ext === 'htm') return 'html';
+  if (ext === 'json') return 'json';
   if (ext === 'pdf') return 'pdf';
   if (EXCEL_EXTENSIONS.includes(ext)) return 'excel';
   if (IMAGE_EXTENSIONS.includes(ext)) return 'image';
@@ -55,16 +59,16 @@ function getFileName(path: string): string {
   return path.split('/').pop() || path;
 }
 
-export function FileViewer({ filePath, rpc, onClose, headerless, onDirtyChange }: Props) {
+export function FileViewer({ filePath, rpc, onClose, headerless, onDirtyChange, htmlSrcResolver }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [content, setContent] = useState<string>('');
-  const [editing, setEditing] = useState(true);
+  const [editing, setEditing] = useState(() => !['html', 'json'].includes(getFileType(filePath)));
   const [dirty, setDirty] = useState(false);
   const [version, setVersion] = useState(0); // bump to force reload
   const fileType = getFileType(filePath);
   const fileName = getFileName(filePath);
-  const canEdit = fileType === 'code' || fileType === 'markdown';
+  const canEdit = fileType === 'code' || supportsFilePreview(fileType);
 
   useEffect(() => {
     if (fileType === 'unsupported') {
@@ -92,6 +96,10 @@ export function FileViewer({ filePath, rpc, onClose, headerless, onDirtyChange }
         setLoading(false);
       });
   }, [filePath, rpc, fileType, version]);
+
+  useEffect(() => {
+    setEditing(!['html', 'json'].includes(getFileType(filePath)));
+  }, [filePath]);
 
   const handleSave = useCallback(async (newContent: string) => {
     await rpc('fs.write', { path: filePath, content: newContent });
@@ -136,17 +144,17 @@ export function FileViewer({ filePath, rpc, onClose, headerless, onDirtyChange }
     };
   }, [filePath, rpc]);
 
-  // Cmd+Shift+V handler (dispatched by App): force markdown tabs into rendered preview mode.
+  // Cmd+Shift+V asks the active file's viewer to show its preview mode.
   useEffect(() => {
-    if (fileType !== 'markdown') return;
+    if (!supportsFilePreview(fileType)) return;
     const onPreview = (event: Event) => {
       const detail = (event as CustomEvent<{ filePath?: string }>).detail;
       if (!detail?.filePath) return;
       if (detail.filePath !== filePath) return;
       setEditing(false);
     };
-    window.addEventListener(MARKDOWN_PREVIEW_EVENT, onPreview as EventListener);
-    return () => window.removeEventListener(MARKDOWN_PREVIEW_EVENT, onPreview as EventListener);
+    window.addEventListener(FILE_PREVIEW_EVENT, onPreview as EventListener);
+    return () => window.removeEventListener(FILE_PREVIEW_EVENT, onPreview as EventListener);
   }, [filePath, fileType]);
 
   const renderViewer = () => {
@@ -189,6 +197,32 @@ export function FileViewer({ filePath, rpc, onClose, headerless, onDirtyChange }
           );
         }
         return <MarkdownViewer content={content} />;
+      case 'html':
+        if (editing) {
+          return (
+            <MonacoEditor
+              content={content}
+              filePath={filePath}
+              readOnly={false}
+              onSave={handleSave}
+              onDirtyChange={handleDirtyChange}
+            />
+          );
+        }
+        return <HtmlViewer filePath={filePath} resolveSrc={htmlSrcResolver} />;
+      case 'json':
+        if (editing) {
+          return (
+            <MonacoEditor
+              content={content}
+              filePath={filePath}
+              readOnly={false}
+              onSave={handleSave}
+              onDirtyChange={handleDirtyChange}
+            />
+          );
+        }
+        return <JsonViewer content={content} onEdit={() => setEditing(true)} />;
       case 'pdf':
         return <Suspense fallback={<div className="p-4 text-xs text-muted-foreground">Loading PDF viewer...</div>}><PDFViewer filePath={filePath} rpc={rpc} /></Suspense>;
       case 'excel':
