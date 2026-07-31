@@ -8,6 +8,7 @@ import { guardImages } from './image-guard.js';
 import { DORABOT_DIR, CLAUDE_KEY_PATH, CLAUDE_OAUTH_PATH } from '../workspace.js';
 import { cleanEnvForSdk } from '../sdk-env.js';
 import { getSecretStorageBackend, keychainDelete, keychainLoad, keychainStore, type SecretStorageBackend } from '../auth/keychain.js';
+import { canReuseAccessTokenAfterRefreshFailure } from './oauth-refresh.js';
 
 // ── Node binary resolution ──────────────────────────────────────────
 // Electron apps get a minimal PATH. Resolve the full path to node once at startup
@@ -261,7 +262,7 @@ async function refreshAccessToken(refreshToken: string): Promise<OAuthTokens | n
     });
     if (!res.ok) {
       console.error(`[claude] token refresh failed: ${res.status}`);
-      lastRefreshRejected = true;
+      lastRefreshRejected = res.status === 400 || res.status === 401 || res.status === 403;
       return null;
     }
     lastRefreshRejected = false;
@@ -351,14 +352,12 @@ function scheduleTokenRefresh(tokens: OAuthTokens, retryDelayMs?: number): void 
     console.log(
       `[claude] token refresh failed (attempt ${refreshFailureStreak}), retrying in ${Math.round(backoff / 1000)}s`,
     );
-    // Only tell the user when it looks like a credential problem, or when we have been
-    // failing long enough that the backoff has reached its ceiling. Offline stretches
-    // stay silent and recover by themselves.
+    // only rejected credentials require reconnect
     if (lastRefreshRejected && refreshFailureStreak >= 3) {
       emitAuthRequired('OAuth refresh rejected, still retrying in background');
     } else if (backoff >= REFRESH_RETRY_MAX_MS && !refreshCapNotified) {
       refreshCapNotified = true;
-      emitAuthRequired('OAuth refresh has been failing, still retrying in background');
+      console.warn('[claude] OAuth refresh is still unavailable; background retries will continue');
     }
     scheduleTokenRefresh(latest, backoff);
   }, delay);
@@ -384,10 +383,10 @@ function applyAuthEnv(env: Record<string, string>, method: AuthMethod, freshToke
     return;
   }
   if (method === 'dorabot_oauth') {
-    // Prefer the freshly ensured token, but fall back to whatever is stored rather than
-    // unsetting: a refresh that failed on a network blip does not invalidate an access
-    // token that still has time left on it.
-    const token = freshToken || loadOAuthTokens()?.access_token;
+    const stored = loadOAuthTokens();
+    const token = freshToken || (stored && Date.now() < stored.expires_at
+      ? stored.access_token
+      : undefined);
     if (token) env.CLAUDE_CODE_OAUTH_TOKEN = token;
     else delete env.CLAUDE_CODE_OAUTH_TOKEN;
     delete env.ANTHROPIC_API_KEY;
@@ -396,10 +395,10 @@ function applyAuthEnv(env: Record<string, string>, method: AuthMethod, freshToke
   if (method === 'cli_keychain') {
     // The CLI owns and refreshes this credential. Deliberately do not override it with
     // dorabot's token: they can be different accounts, and silently switching which one
-    // is billed is worse than the expiry it would fix. Only clear the snapshot's token,
-    // which was captured at startup and is stale by definition, so it cannot shadow the
-    // keychain.
+    // is billed is worse than the expiry it would fix. Clear snapshot credentials so
+    // they cannot shadow the keychain.
     delete env.CLAUDE_CODE_OAUTH_TOKEN;
+    delete env.ANTHROPIC_API_KEY;
   }
 }
 
@@ -421,6 +420,10 @@ async function ensureOAuthToken(): Promise<string | null> {
       // cycles, and incrementing it per turn pins the backoff at its ceiling, which
       // makes recovery slower the more the user types.
       if (!refreshTimer) scheduleTokenRefresh(tokens, REFRESH_RETRY_BASE_MS);
+      if (canReuseAccessTokenAfterRefreshFailure(tokens.expires_at, lastRefreshRejected)) {
+        process.env.CLAUDE_CODE_OAUTH_TOKEN = tokens.access_token;
+        return tokens.access_token;
+      }
       return null;
     }
     refreshFailureStreak = 0;
@@ -591,15 +594,17 @@ export class ClaudeProvider implements Provider {
           };
           return this._cachedAuth;
         }
-        // token expired and refresh failed — needs re-auth
+        const needsReconnect = tokenState.reconnectRequired;
         return {
           authenticated: false,
           method: 'oauth',
-          error: 'OAuth token expired. Re-authentication required.',
+          error: needsReconnect
+            ? 'OAuth token expired. Re-authentication required.'
+            : 'OAuth token refresh is temporarily unavailable.',
           storageBackend: tokenState.storageBackend,
           tokenHealth: tokenState.tokenHealth,
           nextRefreshAt: tokenState.nextRefreshAt,
-          reconnectRequired: true,
+          reconnectRequired: needsReconnect,
         };
       }
       default:
@@ -760,19 +765,17 @@ export class ClaudeProvider implements Provider {
     const timeout = setTimeout(() => abortController.abort(), 30_000);
 
     try {
-      // Ensure OAuth token is fresh
       const method = getActiveAuthMethod();
-      if (method === 'dorabot_oauth') {
-        await ensureOAuthToken();
-      }
+      const oauthToken = method === 'dorabot_oauth'
+        ? await ensureOAuthToken()
+        : null;
 
       // Build the env exactly as a real run does, then apply the same credential
       // selection. Calling the SDK bare here meant this check ran against a different
       // environment than every actual session, which is how it could pass while chats
       // were failing.
       const verifyEnv = cleanEnvForSdk();
-      if (method === 'dorabot_oauth') await ensureOAuthToken();
-      applyAuthEnv(verifyEnv, method);
+      applyAuthEnv(verifyEnv, method, oauthToken);
 
       const stream = query({
         prompt: "Reply with only the word 'ok'",

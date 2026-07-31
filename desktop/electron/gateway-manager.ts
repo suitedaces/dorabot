@@ -131,8 +131,12 @@ export class GatewayManager {
 
       const waited = Date.now() - startedAt;
       if (waited > hardTimeoutMs) {
+        if (this.process === proc) this.process = null;
+        try {
+          proc.kill();
+        } catch {}
         throw new Error(
-          `Gateway did not begin listening within ${Math.round(hardTimeoutMs / 1000)}s (process still alive)`
+          `Gateway did not begin listening within ${Math.round(hardTimeoutMs / 1000)}s`
         );
       }
       if (waited > softTimeoutMs && !notifiedSlowStart) {
@@ -216,6 +220,7 @@ export class GatewayManager {
 
       proc.on('exit', (code: number | null) => {
         console.log(`[gateway-manager] Gateway exited with code ${code}`);
+        if (this.process !== proc) return;
         this.process = null;
 
         if (!this.stopping && this.retries < this.maxRetries) {

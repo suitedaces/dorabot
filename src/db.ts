@@ -292,6 +292,8 @@ export function backfillFtsIndex(): void {
   const indexLost = !sample?.n && ftsIndexedCount > 0;
   if (needsRebuild || (!sample?.n && !ftsMaxId) || indexLost) {
     if (indexLost) console.error('[db] FTS index is empty but was previously populated, rebuilding');
+    // reset first so an interrupted rebuild resumes from row zero
+    setMark(0, 0);
     // drop and recreate for clean rebuild
     d.exec('DROP TABLE IF EXISTS messages_fts');
     d.exec("CREATE VIRTUAL TABLE messages_fts USING fts5(text_content, content='', tokenize='porter unicode61')");

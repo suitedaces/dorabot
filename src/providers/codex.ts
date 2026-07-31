@@ -11,6 +11,7 @@ import { DORABOT_DIR, CODEX_OAUTH_PATH, OPENAI_KEY_PATH, TMP_DIR } from '../work
 import { getSecretStorageBackend, keychainDelete, keychainLoad, keychainStore, type SecretStorageBackend } from '../auth/keychain.js';
 import { guardImages } from './image-guard.js';
 import { isLoggedInCodexStatusText, summarizeCodexCliAuthRecord } from './codex-auth-state.js';
+import { canReuseAccessTokenAfterRefreshFailure } from './oauth-refresh.js';
 import { mergeSkillEnv } from '../skills/env.js';
 
 // ── OAuth constants (same client as Codex CLI) ──────────────────────
@@ -1223,7 +1224,7 @@ async function refreshCodexAccessToken(refreshToken: string, previousIdToken?: s
     });
     if (!res.ok) {
       console.error(`[codex] token refresh failed: ${res.status}`);
-      lastRefreshRejected = true;
+      lastRefreshRejected = res.status === 400 || res.status === 401 || res.status === 403;
       return null;
     }
     lastRefreshRejected = false;
@@ -1319,7 +1320,7 @@ function scheduleCodexRefresh(tokens: CodexOAuthTokens, retryDelayMs?: number): 
       emitAuthRequired('OAuth refresh rejected, still retrying in background');
     } else if (backoff >= REFRESH_RETRY_MAX_MS && !refreshCapNotified) {
       refreshCapNotified = true;
-      emitAuthRequired('OAuth refresh has been failing, still retrying in background');
+      console.warn('[codex] OAuth refresh is still unavailable; background retries will continue');
     }
     scheduleCodexRefresh(latest, backoff);
   }, delay);
@@ -1327,11 +1328,11 @@ function scheduleCodexRefresh(tokens: CodexOAuthTokens, retryDelayMs?: number): 
 }
 
 /** Ensure we have a valid access token, refreshing if needed */
-async function ensureCodexOAuthToken(): Promise<string | null> {
+async function ensureCodexOAuthToken(forceRefresh = false): Promise<string | null> {
   const tokens = loadCodexOAuthTokens();
   if (!tokens) return null;
 
-  if (Date.now() > tokens.expires_at - 300_000) {
+  if (forceRefresh || Date.now() > tokens.expires_at - 300_000) {
     console.log('[codex] access token expiring, refreshing...');
     const refreshed = await refreshCodexAccessTokenShared(tokens.refresh_token, tokens.id_token);
     if (!refreshed) {
@@ -1341,6 +1342,13 @@ async function ensureCodexOAuthToken(): Promise<string | null> {
       // the background timer would never fire while the user is active. The streak is
       // deliberately untouched: it counts retry cycles, not turns.
       if (!refreshTimer) scheduleCodexRefresh(tokens, REFRESH_RETRY_BASE_MS);
+      if (canReuseAccessTokenAfterRefreshFailure(
+        tokens.expires_at,
+        lastRefreshRejected,
+        forceRefresh,
+      )) {
+        return tokens.access_token;
+      }
       return null;
     }
     refreshFailureStreak = 0;
@@ -1450,6 +1458,20 @@ async function resolveCodexAuthState(): Promise<{ apiKey?: string; status: Provi
         },
       };
     }
+    const needsReconnect = reconnectRequired;
+    return {
+      status: {
+        authenticated: false,
+        method: 'oauth',
+        error: needsReconnect
+          ? 'OAuth token expired. Reconnect required.'
+          : 'OAuth token refresh is temporarily unavailable.',
+        storageBackend,
+        tokenHealth: tokenHealth(latest),
+        nextRefreshAt: nextRefreshAt || undefined,
+        reconnectRequired: needsReconnect,
+      },
+    };
   }
 
   const cliAuth = await getCodexCliAuthStatus();
@@ -1461,21 +1483,6 @@ async function resolveCodexAuthState(): Promise<{ apiKey?: string; status: Provi
         identity: cliAuth.identity,
         storageBackend: cliAuth.storageBackend,
         tokenHealth: 'valid',
-      },
-    };
-  }
-
-  if (oauthTokens) {
-    const latest = loadCodexOAuthTokens() || oauthTokens;
-    return {
-      status: {
-        authenticated: false,
-        method: 'oauth',
-        error: 'OAuth token expired. Reconnect required.',
-        storageBackend,
-        tokenHealth: tokenHealth(latest),
-        nextRefreshAt: nextRefreshAt || undefined,
-        reconnectRequired: true,
       },
     };
   }
@@ -1709,7 +1716,7 @@ async function handleCodexServerRequest(message: JsonRpcResponse, opts: Provider
   }
 
   if (method === 'account/chatgptAuthTokens/refresh') {
-    const accessToken = await ensureCodexOAuthToken();
+    const accessToken = await ensureCodexOAuthToken(true);
     const latest = loadCodexOAuthTokens();
     if (!accessToken || !latest) throw new Error('No ChatGPT OAuth token available');
     return {

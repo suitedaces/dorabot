@@ -906,6 +906,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       console.log(`[gateway] started watching: ${resolved}`);
     } catch (err) {
       console.error(`[gateway] failed to watch ${resolved}:`, err);
+      throw err;
     }
   };
 
@@ -5535,8 +5536,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
           const tracked = clientWs ? watchedPathsByClient.get(clientWs) : undefined;
           if (!tracked?.has(resolvedWatch)) {
-            startWatching(resolvedWatch);
-            tracked?.add(resolvedWatch);
+            try {
+              startWatching(resolvedWatch);
+              tracked?.add(resolvedWatch);
+            } catch (err) {
+              return { id, error: err instanceof Error ? err.message : String(err) };
+            }
           }
           return { id, result: { watching: resolvedWatch } };
         }
