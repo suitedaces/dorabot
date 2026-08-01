@@ -133,6 +133,19 @@ export function getDb(): Database.Database {
   try { db.exec(`ALTER TABLE sessions ADD COLUMN name TEXT`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE sessions ADD COLUMN model TEXT`); } catch { /* already exists */ }
 
+  // an earlier build paired messages_fts with a trigger that deleted the matching row
+  // whenever a message was deleted. messages_fts is contentless (content='') and was never
+  // declared contentless_delete=1, so SQLite refuses that statement outright:
+  //   cannot DELETE from contentless fts5 table: messages_fts
+  // The trigger is gone from this schema, but it survives in every database created while
+  // it existed, where it still aborts the enclosing transaction. SessionManager.delete()
+  // deletes messages and the session together in one transaction, so the abort rolls both
+  // back and deleting a session silently does nothing. Drop the leftover.
+  // Orphaned index rows left behind are harmless: both search sites inner-join messages on
+  // f.rowid so unmatched rows drop out, and messages.id is AUTOINCREMENT, so a freed id is
+  // never handed to a new message that could collide with one.
+  db.exec('DROP TRIGGER IF EXISTS messages_fts_after_delete');
+
   runSessionStatsRepair(db);
 
   return db;
