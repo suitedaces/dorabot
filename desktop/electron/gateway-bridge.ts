@@ -17,6 +17,14 @@ import { httpAuthHealthCheck, httpAuthStatus, isHttpAuthAvailable, type AuthStat
 const HEARTBEAT_INTERVAL_MS = 10_000;
 const HEARTBEAT_TIMEOUT_MS = 5_000;
 
+// Reconnect pacing. Attempts stay quick for the first stretch, which covers the
+// common cases (gateway restarting after an upgrade, a brief socket drop), then
+// settle into a slow poll so a gateway that is down for hours is retried once a
+// minute instead of every few seconds. There is deliberately no attempt limit.
+const RECONNECT_FAST_ATTEMPTS = 30;
+const RECONNECT_FAST_MAX_MS = 10_000;
+const RECONNECT_SLOW_MS = 60_000;
+
 /**
  * Connection states:
  * - connecting: WebSocket handshake in progress
@@ -293,12 +301,23 @@ export class GatewayBridge {
 
   private scheduleReconnect(reason: string): void {
     if (this.manuallyClosed || this.reconnectTimer !== null) return;
-    // Stop retrying after 30 attempts (roughly 5 minutes of backoff)
-    if (this.reconnectAttempt >= 30) {
-      this.setState('disconnected', 'Connection failed after multiple attempts. Restart the app to try again.');
-      return;
+
+    // Keep retrying indefinitely. Giving up after a fixed number of attempts left
+    // the window permanently dead with "Restart the app to try again", and the
+    // situations that exhaust those attempts are the ones that recover on their
+    // own: a machine asleep overnight, a gateway restarting behind an upgrade, a
+    // long stretch where timers never fired. The gateway is a local process on a
+    // Unix socket, so once it is back the very next attempt succeeds.
+    //
+    // This is the same failure the token refresh had: a bounded retry that
+    // treated a transient outage as terminal and required a relaunch to clear.
+    const slow = this.reconnectAttempt >= RECONNECT_FAST_ATTEMPTS;
+    const base = slow
+      ? RECONNECT_SLOW_MS
+      : Math.min(1000 * (2 ** Math.min(this.reconnectAttempt, 3)), RECONNECT_FAST_MAX_MS);
+    if (slow && this.reconnectAttempt === RECONNECT_FAST_ATTEMPTS) {
+      this.log(`gateway still unreachable after ${RECONNECT_FAST_ATTEMPTS} attempts, slowing to ${RECONNECT_SLOW_MS / 1000}s polls`);
     }
-    const base = Math.min(1000 * (2 ** Math.min(this.reconnectAttempt, 3)), 10_000);
     const jitter = Math.floor(Math.random() * 250);
     const delay = base + jitter;
     this.reconnectAttempt += 1;

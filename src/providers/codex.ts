@@ -11,6 +11,7 @@ import { DORABOT_DIR, CODEX_OAUTH_PATH, OPENAI_KEY_PATH, TMP_DIR } from '../work
 import { getSecretStorageBackend, keychainDelete, keychainLoad, keychainStore, type SecretStorageBackend } from '../auth/keychain.js';
 import { guardImages } from './image-guard.js';
 import { isLoggedInCodexStatusText, summarizeCodexCliAuthRecord } from './codex-auth-state.js';
+import { canReuseAccessTokenAfterRefreshFailure } from './oauth-refresh.js';
 import { mergeSkillEnv } from '../skills/env.js';
 
 // ── OAuth constants (same client as Codex CLI) ──────────────────────
@@ -941,6 +942,12 @@ type CodexCliAuthStatus = {
 
 let nextRefreshAt: number | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+// Retry state for token refresh, mirroring claude.ts.
+let refreshFailureStreak = 0;
+let lastRefreshRejected = false;
+let refreshCapNotified = false;
+const REFRESH_RETRY_BASE_MS = 30_000;
+const REFRESH_RETRY_MAX_MS = 10 * 60 * 1000;
 let reconnectRequired = false;
 let lastAuthRequiredEmit = 0;
 const AUTH_REQUIRED_COOLDOWN_MS = 60_000;
@@ -1217,8 +1224,10 @@ async function refreshCodexAccessToken(refreshToken: string, previousIdToken?: s
     });
     if (!res.ok) {
       console.error(`[codex] token refresh failed: ${res.status}`);
+      lastRefreshRejected = res.status === 400 || res.status === 401 || res.status === 403;
       return null;
     }
+    lastRefreshRejected = false;
     const data = await res.json() as { access_token: string; refresh_token: string; expires_in: number; id_token?: string };
     if (!data.access_token || !data.refresh_token) return null;
     const accountId = getAccountId(data.access_token);
@@ -1231,19 +1240,48 @@ async function refreshCodexAccessToken(refreshToken: string, previousIdToken?: s
       ...(data.id_token || previousIdToken ? { id_token: data.id_token || previousIdToken } : {}),
     };
   } catch (err) {
+    // Network-class failure, not an auth problem. See the matching note in claude.ts:
+    // raising authRequired here means a notification every time a sleeping machine wakes
+    // before its network is up.
     console.error('[codex] token refresh error:', err);
-    emitAuthRequired('OAuth refresh failed');
+    lastRefreshRejected = false;
     return null;
   }
 }
 
-function scheduleCodexRefresh(tokens: CodexOAuthTokens): void {
+// Single-flight, mirroring claude.ts. Codex rotates refresh_token on every response (the
+// parse above rejects a response without one), so two concurrent refreshes carrying the
+// same token guarantee that one of them is rejected. Persisting inside the wrapper keeps
+// that write on exactly one path.
+let inflightCodexRefresh: Promise<CodexOAuthTokens | null> | null = null;
+
+function refreshCodexAccessTokenShared(refreshToken: string, previousIdToken?: string): Promise<CodexOAuthTokens | null> {
+  if (inflightCodexRefresh) return inflightCodexRefresh;
+  inflightCodexRefresh = refreshCodexAccessToken(refreshToken, previousIdToken)
+    .then((tokens) => {
+      if (tokens) persistCodexOAuthTokens(tokens);
+      return tokens;
+    })
+    .finally(() => {
+      inflightCodexRefresh = null;
+    });
+  return inflightCodexRefresh;
+}
+
+/**
+ * Arm the next Codex token refresh. Pass `retryDelayMs` to re-arm after a failure rather
+ * than scheduling off the token's expiry, so a failed refresh never leaves the process
+ * with no timer armed.
+ */
+function scheduleCodexRefresh(tokens: CodexOAuthTokens, retryDelayMs?: number): void {
   if (refreshTimer) {
     clearTimeout(refreshTimer);
     refreshTimer = null;
   }
 
-  const runAt = Math.max(Date.now() + 1_000, tokens.expires_at - REFRESH_LEAD_MS);
+  const runAt = retryDelayMs !== undefined
+    ? Date.now() + retryDelayMs
+    : Math.max(Date.now() + 1_000, tokens.expires_at - REFRESH_LEAD_MS);
   nextRefreshAt = runAt;
   const delay = runAt - Date.now();
   refreshTimer = setTimeout(async () => {
@@ -1254,41 +1292,67 @@ function scheduleCodexRefresh(tokens: CodexOAuthTokens): void {
       nextRefreshAt = null;
       return;
     }
-    // Retry refresh up to 3 times with exponential backoff
-    let refreshed: CodexOAuthTokens | null = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      refreshed = await refreshCodexAccessToken(latest.refresh_token, latest.id_token);
-      if (refreshed) break;
-      if (attempt < 2) {
-        const backoff = (attempt + 1) * 5_000;
-        console.log(`[codex] token refresh attempt ${attempt + 1} failed, retrying in ${backoff / 1000}s...`);
-        await new Promise(r => setTimeout(r, backoff));
-      }
-    }
-    if (!refreshed) {
-      emitAuthRequired('OAuth refresh failed after retries');
-      nextRefreshAt = null;
+    // ensureCodexOAuthToken() may have refreshed while this timer was pending.
+    if (tokenHealth(latest) === 'valid') {
+      refreshFailureStreak = 0;
+      refreshCapNotified = false;
+      scheduleCodexRefresh(latest);
       return;
     }
-    persistCodexOAuthTokens(refreshed);
-    scheduleCodexRefresh(refreshed);
+    const refreshed = await refreshCodexAccessTokenShared(latest.refresh_token, latest.id_token);
+    if (refreshed) {
+      refreshFailureStreak = 0;
+      refreshCapNotified = false;
+      scheduleCodexRefresh(refreshed);
+      return;
+    }
+    // Keep trying. The refresh token outlives the access token, so a failure here is
+    // almost always the network rather than a dead credential.
+    refreshFailureStreak++;
+    const backoff = Math.min(
+      REFRESH_RETRY_BASE_MS * 2 ** (refreshFailureStreak - 1),
+      REFRESH_RETRY_MAX_MS,
+    );
+    console.log(
+      `[codex] token refresh failed (attempt ${refreshFailureStreak}), retrying in ${Math.round(backoff / 1000)}s`,
+    );
+    if (lastRefreshRejected && refreshFailureStreak >= 3) {
+      emitAuthRequired('OAuth refresh rejected, still retrying in background');
+    } else if (backoff >= REFRESH_RETRY_MAX_MS && !refreshCapNotified) {
+      refreshCapNotified = true;
+      console.warn('[codex] OAuth refresh is still unavailable; background retries will continue');
+    }
+    scheduleCodexRefresh(latest, backoff);
   }, delay);
   refreshTimer.unref?.();
 }
 
 /** Ensure we have a valid access token, refreshing if needed */
-async function ensureCodexOAuthToken(): Promise<string | null> {
+async function ensureCodexOAuthToken(forceRefresh = false): Promise<string | null> {
   const tokens = loadCodexOAuthTokens();
   if (!tokens) return null;
 
-  if (Date.now() > tokens.expires_at - 300_000) {
+  if (forceRefresh || Date.now() > tokens.expires_at - 300_000) {
     console.log('[codex] access token expiring, refreshing...');
-    const refreshed = await refreshCodexAccessToken(tokens.refresh_token, tokens.id_token);
+    const refreshed = await refreshCodexAccessTokenShared(tokens.refresh_token, tokens.id_token);
     if (!refreshed) {
-      emitAuthRequired('OAuth token expired');
+      if (lastRefreshRejected) emitAuthRequired('OAuth token expired');
+      // Arm a background retry only if nothing is armed. This runs at the top of every
+      // turn, so re-arming unconditionally would clear the pending retry each time and
+      // the background timer would never fire while the user is active. The streak is
+      // deliberately untouched: it counts retry cycles, not turns.
+      if (!refreshTimer) scheduleCodexRefresh(tokens, REFRESH_RETRY_BASE_MS);
+      if (canReuseAccessTokenAfterRefreshFailure(
+        tokens.expires_at,
+        lastRefreshRejected,
+        forceRefresh,
+      )) {
+        return tokens.access_token;
+      }
       return null;
     }
-    persistCodexOAuthTokens(refreshed);
+    refreshFailureStreak = 0;
+    refreshCapNotified = false;
     scheduleCodexRefresh(refreshed);
     reconnectRequired = false;
     return refreshed.access_token;
@@ -1394,6 +1458,20 @@ async function resolveCodexAuthState(): Promise<{ apiKey?: string; status: Provi
         },
       };
     }
+    const needsReconnect = reconnectRequired;
+    return {
+      status: {
+        authenticated: false,
+        method: 'oauth',
+        error: needsReconnect
+          ? 'OAuth token expired. Reconnect required.'
+          : 'OAuth token refresh is temporarily unavailable.',
+        storageBackend,
+        tokenHealth: tokenHealth(latest),
+        nextRefreshAt: nextRefreshAt || undefined,
+        reconnectRequired: needsReconnect,
+      },
+    };
   }
 
   const cliAuth = await getCodexCliAuthStatus();
@@ -1405,21 +1483,6 @@ async function resolveCodexAuthState(): Promise<{ apiKey?: string; status: Provi
         identity: cliAuth.identity,
         storageBackend: cliAuth.storageBackend,
         tokenHealth: 'valid',
-      },
-    };
-  }
-
-  if (oauthTokens) {
-    const latest = loadCodexOAuthTokens() || oauthTokens;
-    return {
-      status: {
-        authenticated: false,
-        method: 'oauth',
-        error: 'OAuth token expired. Reconnect required.',
-        storageBackend,
-        tokenHealth: tokenHealth(latest),
-        nextRefreshAt: nextRefreshAt || undefined,
-        reconnectRequired: true,
       },
     };
   }
@@ -1653,7 +1716,7 @@ async function handleCodexServerRequest(message: JsonRpcResponse, opts: Provider
   }
 
   if (method === 'account/chatgptAuthTokens/refresh') {
-    const accessToken = await ensureCodexOAuthToken();
+    const accessToken = await ensureCodexOAuthToken(true);
     const latest = loadCodexOAuthTokens();
     if (!accessToken || !latest) throw new Error('No ChatGPT OAuth token available');
     return {

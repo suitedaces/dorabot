@@ -28,6 +28,8 @@ export interface GatewayManagerOptions {
   onReady?: () => void;
   onError?: (error: string) => void;
   onExit?: (code: number) => void;
+  /** Fired once when startup exceeds the soft timeout but the process is still alive. */
+  onSlowStart?: () => void;
 }
 
 export class GatewayManager {
@@ -92,12 +94,32 @@ export class GatewayManager {
     });
   }
 
-  /** Wait for gateway token and gateway Unix socket listener to become available */
-  private async waitForReady(proc: UtilityProcess | ChildProcess, timeoutMs = 20000): Promise<void> {
+  /**
+   * Wait for the gateway token and Unix socket listener to become available.
+   *
+   * A slow start is not the same as a failed start. On a large database the gateway can
+   * spend well over the soft timeout on one-off work (schema migration, search index
+   * rebuild) before it begins listening. Treating that as a failure used to strand the
+   * app: the throw propagated to start()'s catch, which scheduled a retry, but start()
+   * returns early while `this.process` is still set, so the retry was a no-op and nothing
+   * ever re-checked the socket. The gateway would come up healthy seconds later and the
+   * window stayed dead until the user quit and relaunched.
+   *
+   * So keep waiting while the process is alive, and report progress instead of failing.
+   * A genuinely dead process is still caught: the 'exit' handler clears `this.process`,
+   * which trips the identity check below and drives the existing restart path.
+   */
+  private async waitForReady(
+    proc: UtilityProcess | ChildProcess,
+    softTimeoutMs = 20000,
+    hardTimeoutMs = 120000
+  ): Promise<void> {
     const tokenPath = GATEWAY_TOKEN_PATH;
     const socketPath = GATEWAY_SOCKET_PATH;
     const startedAt = Date.now();
-    while (Date.now() - startedAt <= timeoutMs) {
+    let notifiedSlowStart = false;
+
+    for (;;) {
       // Process exited/replaced while waiting for readiness
       if (this.process !== proc) {
         throw new Error('Gateway process exited before becoming ready');
@@ -106,9 +128,25 @@ export class GatewayManager {
         const listening = await this.isGatewayListening(socketPath);
         if (listening) return;
       }
+
+      const waited = Date.now() - startedAt;
+      if (waited > hardTimeoutMs) {
+        if (this.process === proc) this.process = null;
+        try {
+          proc.kill();
+        } catch {}
+        throw new Error(
+          `Gateway did not begin listening within ${Math.round(hardTimeoutMs / 1000)}s`
+        );
+      }
+      if (waited > softTimeoutMs && !notifiedSlowStart) {
+        notifiedSlowStart = true;
+        console.log('[gateway-manager] Gateway is taking longer than usual to start, still waiting...');
+        this.opts.onSlowStart?.();
+      }
+
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
-    throw new Error('Gateway failed to start within timeout');
   }
 
   async start(): Promise<void> {
@@ -182,6 +220,7 @@ export class GatewayManager {
 
       proc.on('exit', (code: number | null) => {
         console.log(`[gateway-manager] Gateway exited with code ${code}`);
+        if (this.process !== proc) return;
         this.process = null;
 
         if (!this.stopping && this.retries < this.maxRetries) {

@@ -1,4 +1,4 @@
-import { useRef, useCallback, useEffect, useMemo, useState } from 'react';
+import { forwardRef, useRef, useCallback, useEffect, useImperativeHandle, useMemo, useState } from 'react';
 import Editor, { loader, type OnMount } from '@monaco-editor/react';
 import type { editor as monacoEditor } from 'monaco-editor';
 import { useTheme } from '../../hooks/useTheme';
@@ -50,7 +50,14 @@ type Props = {
   onDirtyChange?: (dirty: boolean) => void;
 };
 
-export function MonacoEditor({ content, filePath, readOnly = false, onSave, onDirtyChange }: Props) {
+export type MonacoEditorHandle = {
+  flush: () => Promise<void>;
+};
+
+export const MonacoEditor = forwardRef<MonacoEditorHandle, Props>(function MonacoEditor(
+  { content, filePath, readOnly = false, onSave, onDirtyChange },
+  ref,
+) {
   const { theme, palette } = useTheme();
   const editorRef = useRef<monacoEditor.IStandaloneCodeEditor | null>(null);
   const [monacoTheme, setMonacoTheme] = useState(theme === 'dark' ? 'vs-dark' : 'vs');
@@ -63,6 +70,35 @@ export function MonacoEditor({ content, filePath, readOnly = false, onSave, onDi
 
   // Track whether user has made edits (vs content prop changing)
   const userDirtyRef = useRef(false);
+
+  const saveCurrent = useCallback(async () => {
+    const editor = editorRef.current;
+    const save = onSaveRef.current;
+    if (!editor || !save || !userDirtyRef.current) return;
+
+    const value = editor.getValue();
+    await save(value);
+
+    const latestValue = editorRef.current?.getValue();
+    const stillDirty = latestValue != null && latestValue !== value;
+    originalContentRef.current = value;
+    userDirtyRef.current = stillDirty;
+    onDirtyChangeRef.current?.(stillDirty);
+  }, []);
+
+  const flush = useCallback(async () => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.updateOptions({ readOnly: true });
+    try {
+      await saveCurrent();
+    } catch (err) {
+      editor.updateOptions({ readOnly });
+      throw err;
+    }
+  }, [readOnly, saveCurrent]);
+
+  useImperativeHandle(ref, () => ({ flush }), [flush]);
 
   // Build a Monaco theme from active CSS palette tokens so editor tracks palette changes.
   useEffect(() => {
@@ -187,8 +223,7 @@ export function MonacoEditor({ content, filePath, readOnly = false, onSave, onDi
       // KeyMod.CtrlCmd | KeyCode.KeyS
       2048 | 49,
       () => {
-        const value = editor.getValue();
-        onSaveRef.current?.(value);
+        void saveCurrent().catch(() => {});
       }
     );
 
@@ -203,13 +238,7 @@ export function MonacoEditor({ content, filePath, readOnly = false, onSave, onDi
       if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
       if (isDirty) {
         autosaveTimerRef.current = setTimeout(() => {
-          const currentValue = editorRef.current?.getValue();
-          if (currentValue != null && currentValue !== originalContentRef.current) {
-            onSaveRef.current?.(currentValue);
-            originalContentRef.current = currentValue;
-            userDirtyRef.current = false;
-            onDirtyChangeRef.current?.(false);
-          }
+          void saveCurrent().catch(() => {});
         }, 1000);
       }
     });
@@ -220,7 +249,7 @@ export function MonacoEditor({ content, filePath, readOnly = false, onSave, onDi
     // Opening from anywhere else (cmd+P, tab click) still focuses normally.
     const treeHasFocus = !!document.activeElement?.closest?.('[data-file-tree]');
     if (!treeHasFocus) editor.focus();
-  }, []);
+  }, [saveCurrent]);
 
   const language = getMonacoLanguage(filePath);
 
@@ -271,4 +300,4 @@ export function MonacoEditor({ content, filePath, readOnly = false, onSave, onDi
       }
     />
   );
-}
+});

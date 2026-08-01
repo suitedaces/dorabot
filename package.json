@@ -28,6 +28,8 @@
     "test:codex-provider": "node scripts/smoke-codex-145.mjs",
     "test:claude-provider": "node scripts/smoke-claude-sdk.mjs",
     "test:model-catalog": "node scripts/test-model-catalog.mjs",
+    "test:oauth-refresh": "tsx scripts/test-oauth-refresh.ts",
+    "test:fs-watch-events": "tsx scripts/test-fs-watch-events.ts",
     "test:fs-ops": "tsx scripts/test-fs-ops.ts"
   },
   "dependencies": {

@@ -205,4 +205,17 @@ describe('pane role targeting', () => {
     act(() => { r.result.current.tabs.openFileTab('/a/two.ts'); });
     console.log('  file again     :', snapshot(r), `(panes=${paneCount(r)})`);
   });
+
+  it('12. closing a chat prunes its in-memory draft', () => {
+    const r = setup();
+    const chat = r.result.current.tabs.tabs.find(isChatTab)!;
+    act(() => {
+      r.result.current.tabs.chatDrafts.set(chat.sessionKey, {
+        text: 'discard me',
+        images: [],
+      });
+      r.result.current.tabs.closeTab(chat.id);
+    });
+    expect(r.result.current.tabs.chatDrafts.has(chat.sessionKey)).toBe(false);
+  });
 });

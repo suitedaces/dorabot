@@ -1520,6 +1520,11 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
   homeCwdRef.current = homeCwd;
   const [viewRoot, setViewRoot] = useState(initialViewRoot || '');
   const [dirs, setDirs] = useState<Map<string, DirState>>(new Map());
+  // Mirror of `dirs` for the fs.change subscription. Reading the state directly
+  // there would put it in the effect's deps and tear down and re-establish the
+  // watch every time any directory loads.
+  const dirsRef = useRef(dirs);
+  dirsRef.current = dirs;
   const [expanded, setExpanded] = useState<Set<string>>(new Set(initialExpanded || []));
   // selectedPath is the cursor: the row the keyboard acts on and the anchor a
   // shift-click ranges from. selection is everything highlighted. Invariant:
@@ -1677,9 +1682,16 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
 
   useEffect(() => {
     if (!viewRoot || !connected) return;
-    rpc('fs.watch.start', { path: viewRoot }).catch(() => {});
+    // Surface a failed watch instead of swallowing it. When this silently failed
+    // the tree just stopped updating, which reads as "the explorer is broken"
+    // rather than "the watcher never started".
+    rpc('fs.watch.start', { path: viewRoot }).catch((err) => {
+      console.error('[FileExplorer] failed to start fs watch', viewRoot, err);
+    });
     const unsubscribe = onFileChange?.((changedPath) => {
-      if (changedPath === viewRoot) loadDir(viewRoot);
+      // Reload whichever directory changed, provided it is one we have loaded.
+      // Only ever reloading viewRoot left every expanded subdirectory stale.
+      if (changedPath === viewRoot || dirsRef.current.has(changedPath)) loadDir(changedPath);
     });
     return () => {
       rpc('fs.watch.stop', { path: viewRoot }).catch(() => {});

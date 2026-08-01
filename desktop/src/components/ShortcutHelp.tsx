@@ -21,7 +21,7 @@ export const SHORTCUTS = [
   ]},
   { section: 'Editor', items: [
     { keys: '⌘S', desc: 'Save file' },
-    { keys: '⌘⇧V', desc: 'Toggle markdown preview' },
+    { keys: '⌘⇧V', desc: 'Show file preview' },
     { keys: '⌃`', desc: 'Open terminal' },
     { keys: 'Esc', desc: 'Stop agent' },
   ]},

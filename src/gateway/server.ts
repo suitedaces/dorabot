@@ -22,7 +22,7 @@ const resolve = (p: string, base?: string) => {
 };
 import { moveToTrash, copyPath, movePath, isInside } from './fs-ops.js';
 import type { Config } from '../config.js';
-import { isPathAllowed, saveConfig, ALWAYS_DENIED, type SecurityConfig, type ToolPolicyConfig } from '../config.js';
+import { isPathAllowed, saveConfig, ALWAYS_DENIED, PROVIDER_NAMES, type SecurityConfig, type ToolPolicyConfig } from '../config.js';
 import type { WsMessage, WsResponse, WsEvent, GatewayContext } from './types.js';
 import { SessionRegistry } from './session-registry.js';
 import { ChannelManager } from './channel-manager.js';
@@ -43,6 +43,7 @@ import { getDb } from '../db.js';
 import { insertEvent, queryEventsBySessionCursor, deleteEventsUpToSeq, cleanupOldEvents } from './event-log.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { closeBrowser } from '../browser/manager.js';
+import { rememberFsWatchEvent, type FsWatchEvent } from './fs-watch-events.js';
 import { setScheduler, setBrowserConfig } from '../tools/index.js';
 import { loadProjects, saveProjects, type Project } from '../tools/projects.js';
 import {
@@ -734,7 +735,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     watcher: FSWatcher;
     refCount: number;
     debounceTimer?: ReturnType<typeof setTimeout>;
-    pendingEvent?: { eventType: string; filename: string | null };
+    pendingEvents?: Map<string, FsWatchEvent>;
   };
   const fileWatchers = new Map<string, FileWatchEntry>();
   const watchedPathsByClient = new Map<WebSocket, Set<string>>();
@@ -864,13 +865,15 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     const entry = fileWatchers.get(resolved);
     if (!entry) return;
     entry.debounceTimer = undefined;
-    const pending = entry.pendingEvent;
-    entry.pendingEvent = undefined;
+    const pending = entry.pendingEvents;
+    entry.pendingEvents = undefined;
     if (!pending) return;
-    broadcast({
-      event: 'fs.change',
-      data: { path: resolved, eventType: pending.eventType, filename: pending.filename, timestamp: Date.now() },
-    });
+    for (const event of pending.values()) {
+      broadcast({
+        event: 'fs.change',
+        data: { path: resolved, eventType: event.eventType, filename: event.filename, timestamp: Date.now() },
+      });
+    }
   };
 
   const startWatching = (path: string) => {
@@ -883,14 +886,21 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     }
 
     try {
-      const watcher = watch(resolved, { recursive: false }, (eventType, filename) => {
+      // Recursive: the explorer renders an expandable tree, so a change anywhere
+      // under the open root is visible to the user. Watching only the top level
+      // meant edits, creations and deletions inside any subdirectory produced no
+      // event at all and the tree silently went stale. On macOS this is backed by
+      // FSEvents, and events are debounced below, so the cost is a coalesced
+      // notification rather than one per file.
+      const watcher = watch(resolved, { recursive: true }, (eventType, filename) => {
         const entry = fileWatchers.get(resolved);
         if (!entry) return;
         const filenameStr = filename ? String(filename) : null;
         if (DEBUG_FS_WATCH) {
           console.log(`[gateway] fs.watch: ${eventType} in ${resolved}${filenameStr ? '/' + filenameStr : ''}`);
         }
-        entry.pendingEvent = { eventType, filename: filenameStr };
+        if (!entry.pendingEvents) entry.pendingEvents = new Map();
+        rememberFsWatchEvent(entry.pendingEvents, { eventType, filename: filenameStr });
         if (entry.debounceTimer) return;
         entry.debounceTimer = setTimeout(() => emitFsWatchEvent(resolved), FS_WATCH_DEBOUNCE_MS);
         entry.debounceTimer.unref?.();
@@ -900,6 +910,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       console.log(`[gateway] started watching: ${resolved}`);
     } catch (err) {
       console.error(`[gateway] failed to watch ${resolved}:`, err);
+      throw err;
     }
   };
 
@@ -5048,8 +5059,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
           // provider config keys
           if (key === 'provider.name' && typeof value === 'string') {
-            if (!['claude', 'codex', 'minimax'].includes(value)) {
-              return { id, error: 'provider.name must be "claude", "codex", or "minimax"' };
+            if (!(PROVIDER_NAMES as readonly string[]).includes(value)) {
+              return { id, error: `provider.name must be one of: ${PROVIDER_NAMES.join(', ')}` };
             }
             config.provider.name = value as ProviderName;
             saveConfig(config);
@@ -5529,8 +5540,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
           const tracked = clientWs ? watchedPathsByClient.get(clientWs) : undefined;
           if (!tracked?.has(resolvedWatch)) {
-            startWatching(resolvedWatch);
-            tracked?.add(resolvedWatch);
+            try {
+              startWatching(resolvedWatch);
+              tracked?.add(resolvedWatch);
+            } catch (err) {
+              return { id, error: err instanceof Error ? err.message : String(err) };
+            }
           }
           return { id, result: { watching: resolvedWatch } };
         }

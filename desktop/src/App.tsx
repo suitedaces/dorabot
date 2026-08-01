@@ -31,6 +31,7 @@ import {
 import { PALETTES } from './lib/palettes';
 import type { Palette as PaletteId } from './lib/palettes';
 import { ToastContainer } from './components/ToastContainer';
+import { FILE_PREVIEW_EVENT } from './lib/file-preview';
 
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
 type UpdateState = {
@@ -112,7 +113,6 @@ const QUICK_OPEN_IGNORED_DIRS = new Set([
 ]);
 const QUICK_OPEN_MAX_FILES = 8000;
 const QUICK_OPEN_MAX_RESULTS = 120;
-const MARKDOWN_PREVIEW_EVENT = 'dorabot:markdown-preview';
 
 function joinPath(base: string, name: string): string {
   if (!base || base === '.') return `./${name}`;
@@ -831,10 +831,10 @@ export default function App() {
     openQuickOpen: () => openQuickOpen(),
     openGlobalSearch: () => setShowGlobalSearch(true),
     openShortcutHelp: () => setShowShortcutHelp(p => !p),
-    previewMarkdown: () => {
+    previewFile: () => {
       const tab = tabState.activeTab;
-      if (!tab || tab.type !== 'file' || !tab.filePath.toLowerCase().endsWith('.md')) return;
-      window.dispatchEvent(new CustomEvent(MARKDOWN_PREVIEW_EVENT, { detail: { filePath: tab.filePath } }));
+      if (!tab || tab.type !== 'file') return;
+      window.dispatchEvent(new CustomEvent(FILE_PREVIEW_EVENT, { detail: { filePath: tab.filePath } }));
     },
     toggleFiles: toggleFileExplorer,
     openSettings: () => handleNavClick('settings'),

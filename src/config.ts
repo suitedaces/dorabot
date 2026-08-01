@@ -128,7 +128,12 @@ export type SecurityConfig = {
   autoApprove?: string[];
 };
 
-export type ProviderName = 'claude' | 'codex' | 'minimax' | 'openrouter';
+// Single source of truth. The type, the config setter's validation and the
+// provider factory all derive from this, so they cannot drift apart: the list
+// previously named four providers, the setter accepted three and the factory
+// implemented two, and picking one of the differences bricked every run.
+export const PROVIDER_NAMES = ['claude', 'codex'] as const;
+export type ProviderName = (typeof PROVIDER_NAMES)[number];
 
 export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh' | 'ultra';
 
@@ -179,19 +184,9 @@ export type CodexProviderConfig = {
   config?: Record<string, CodexCliConfigValue>;
 };
 
-export type OpenRouterProviderConfig = {
-  baseUrl?: string;
-  model?: string;
-  referer?: string;
-  title?: string;
-  temperature?: number;
-  maxTokens?: number;
-};
-
 export type ProviderConfig = {
   name: ProviderName;
   codex?: CodexProviderConfig;
-  openrouter?: OpenRouterProviderConfig;
 };
 
 export type McpServerEntry = {

@@ -7,7 +7,7 @@ type ShortcutActions = {
   prevTab: () => void;
   focusTabByIndex: (index: number) => void;
   openQuickOpen: () => void;
-  previewMarkdown: () => void;
+  previewFile: () => void;
   toggleFiles: () => void;
   openSettings: () => void;
   focusInput: () => void;
@@ -105,10 +105,10 @@ export function useKeyboardShortcuts(actions: ShortcutActions, options: Shortcut
         return;
       }
 
-      // Cmd+Shift+V — render markdown preview in active markdown tab
+      // Cmd+Shift+V — show the active file's preview mode
       if (e.key.toLowerCase() === 'v' && e.shiftKey && !e.altKey) {
         e.preventDefault();
-        actions.previewMarkdown();
+        actions.previewFile();
         return;
       }
 

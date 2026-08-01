@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, session, ipcMain, shell, Notification as ElectronNotification } from 'electron';
+import { app, BrowserWindow, Tray, Menu, nativeImage, session, ipcMain, shell, webContents as electronWebContents, Notification as ElectronNotification } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { is } from '@electron-toolkit/utils';
 import * as path from 'path';
@@ -19,6 +19,40 @@ function readGatewayLogs(): string {
 }
 
 let mainWindow: BrowserWindow | null = null;
+
+export const HTML_PREVIEW_PARTITION = 'htmlpreview';
+let htmlPreviewSessionReady = false;
+const htmlPreviewContents = new Set<number>();
+const htmlPreviewRemoteAllowed = new Set<number>();
+
+function setupHtmlPreviewSession() {
+  if (htmlPreviewSessionReady) return;
+  htmlPreviewSessionReady = true;
+  const previewSession = session.fromPartition(HTML_PREVIEW_PARTITION);
+  previewSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+  previewSession.webRequest.onBeforeRequest((details, callback) => {
+    const url = details.url;
+    const webContentsId = details.webContentsId;
+    const isLocal = url.startsWith('file:') || url.startsWith('data:')
+      || url.startsWith('blob:') || url.startsWith('about:') || url.startsWith('devtools:');
+    if (isLocal || (webContentsId !== undefined && htmlPreviewRemoteAllowed.has(webContentsId))) {
+      callback({ cancel: false });
+      return;
+    }
+    if (webContentsId !== undefined) {
+      mainWindow?.webContents.send('html-preview:blocked', { url, webContentsId });
+    }
+    callback({ cancel: true });
+  });
+}
+
+ipcMain.handle('html-preview:set-allow-remote', (event, webContentsId: number, allow: boolean) => {
+  if (event.sender !== mainWindow?.webContents || !htmlPreviewContents.has(webContentsId)) return false;
+  if (!electronWebContents.fromId(webContentsId)) return false;
+  if (allow) htmlPreviewRemoteAllowed.add(webContentsId);
+  else htmlPreviewRemoteAllowed.delete(webContentsId);
+  return !!allow;
+});
 let tray: Tray | null = null;
 let isQuitting = false;
 let gatewayManager: GatewayManager | null = null;
@@ -171,7 +205,35 @@ function createWindow(): void {
       nodeIntegration: false,
       sandbox: false,
       backgroundThrottling: false,
+      webviewTag: true,
     },
+  });
+
+  setupHtmlPreviewSession();
+
+  mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    delete (webPreferences as { preload?: string }).preload;
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    webPreferences.webSecurity = true;
+    webPreferences.javascript = false;
+    const src = String(params.src || '');
+    const onPreviewPartition = String(params.partition || '') === HTML_PREVIEW_PARTITION;
+    if (!onPreviewPartition || !src.startsWith('file:')) {
+      console.warn('[main] refused webview attach', { src: src.slice(0, 80), partition: params.partition });
+      event.preventDefault();
+    }
+  });
+
+  mainWindow.webContents.on('did-attach-webview', (_event, contents) => {
+    htmlPreviewContents.add(contents.id);
+    contents.once('destroyed', () => {
+      htmlPreviewContents.delete(contents.id);
+      htmlPreviewRemoteAllowed.delete(contents.id);
+    });
+    contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    contents.on('will-navigate', navEvent => navEvent.preventDefault());
   });
 
   mainWindow.once('ready-to-show', () => {
@@ -305,6 +367,12 @@ app.on('ready', async () => {
       updateTrayTitle('online');
       // Gateway is listening, now connect the bridge
       gatewayBridge?.connect();
+    },
+    onSlowStart: () => {
+      // First launch after an upgrade can spend a while on one-off work before the
+      // gateway listens. Say so instead of leaving a silent window.
+      console.log('[main] Gateway slow to start, still waiting');
+      updateTrayTitle('starting (this can take a minute)...');
     },
     onError: (error) => {
       console.error('[main] Gateway error:', error);

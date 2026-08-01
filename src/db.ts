@@ -257,53 +257,127 @@ export function backfillFtsIndex(): void {
   const currentVersion = versionRow ? parseInt(versionRow.value, 10) : 0;
   const needsRebuild = currentVersion < FTS_VERSION;
 
-  const sample = d.prepare("SELECT text_content FROM messages_fts LIMIT 1").get() as { text_content: string | null } | undefined;
+  // messages_fts is a contentless FTS5 table (content=''), so SQLite does not store the
+  // column values and reading one back always yields NULL no matter how many rows are
+  // indexed. Probing the column therefore reported "empty" on every start, forced a full
+  // rebuild each time and left the fts_version check above unreachable. Count rows.
+  const sample = d.prepare('SELECT COUNT(*) AS n FROM messages_fts').get() as { n: number } | undefined;
 
-  if (needsRebuild || !sample?.text_content) {
+  // High-water mark: the largest message id this index has already considered, indexed
+  // or not. Most messages extract to no searchable text at all (tool_use/tool_result
+  // blocks are stripped, and what is left is often under the 5 character floor), so they
+  // never get an FTS rowid. Without this mark the "missing from FTS" query re-selects
+  // every one of them on every launch forever. messages.id is AUTOINCREMENT, so ids are
+  // monotonic and are never reused even after a session delete, which is what makes a
+  // simple high-water mark safe here.
+  const markRow = d.prepare("SELECT value FROM db_meta WHERE key = 'fts_max_id'").get() as { value: string } | undefined;
+  const ftsMaxId = markRow ? parseInt(markRow.value, 10) || 0 : 0;
+  const countRow = d.prepare("SELECT value FROM db_meta WHERE key = 'fts_indexed_count'").get() as { value: string } | undefined;
+  const ftsIndexedCount = countRow ? parseInt(countRow.value, 10) || 0 : 0;
+  const setMark = (id: number, count: number) => {
+    d.prepare("INSERT OR REPLACE INTO db_meta (key, value) VALUES ('fts_max_id', ?)").run(String(id));
+    d.prepare("INSERT OR REPLACE INTO db_meta (key, value) VALUES ('fts_indexed_count', ?)").run(String(count));
+  };
+
+  // Decide whether the index is missing rather than merely empty. Skipping past a high
+  // water mark means a lost index can no longer heal itself the way the old rebuild-every
+  // -boot behaviour accidentally did, so the two cases have to be told apart:
+  //   never scanned            -> no mark, rebuild
+  //   scanned, indexed nothing -> legitimate on a history with no searchable text, skip
+  //   scanned, indexed rows, now empty -> index was lost or truncated, rebuild
+  const liveIndexCount = () => (d.prepare('SELECT COUNT(*) AS n FROM messages_fts').get() as { n: number }).n;
+  const highestConsideredId = () =>
+    (d.prepare("SELECT COALESCE(MAX(id), 0) AS n FROM messages WHERE type IN ('user', 'assistant')").get() as { n: number }).n;
+
+  const indexLost = !sample?.n && ftsIndexedCount > 0;
+  if (needsRebuild || (!sample?.n && !ftsMaxId) || indexLost) {
+    if (indexLost) console.error('[db] FTS index is empty but was previously populated, rebuilding');
+    // reset first so an interrupted rebuild resumes from row zero
+    setMark(0, 0);
     // drop and recreate for clean rebuild
     d.exec('DROP TABLE IF EXISTS messages_fts');
     d.exec("CREATE VIRTUAL TABLE messages_fts USING fts5(text_content, content='', tokenize='porter unicode61')");
 
     console.error(`[db] rebuilding FTS index (v${FTS_VERSION})...`);
-    const rows = d.prepare('SELECT id, content, type FROM messages WHERE type IN (\'user\', \'assistant\') ORDER BY id').all() as { id: number; content: string; type: string }[];
-
-    const insert = d.prepare('INSERT INTO messages_fts(rowid, text_content) VALUES (?, ?)');
-    const tx = d.transaction(() => {
-      let indexed = 0;
-      for (const row of rows) {
-        const text = extractMessageText(row.content);
-        if (!text || text.length < 5) continue;
-        insert.run(row.id, text);
-        indexed++;
-      }
-      d.prepare("INSERT OR REPLACE INTO db_meta (key, value) VALUES ('fts_version', ?)").run(String(FTS_VERSION));
-      console.error(`[db] FTS rebuild complete (v${FTS_VERSION}): ${indexed}/${rows.length} messages indexed`);
-    });
-    tx();
+    const { indexed, maxId } = indexMessagesInPages(
+      "SELECT id, content FROM messages WHERE type IN ('user', 'assistant') AND id > ? ORDER BY id LIMIT ?"
+    );
+    void maxId;
+    setMark(highestConsideredId(), liveIndexCount());
+    d.prepare("INSERT OR REPLACE INTO db_meta (key, value) VALUES ('fts_version', ?)").run(String(FTS_VERSION));
+    console.error(`[db] FTS rebuild complete (v${FTS_VERSION}): ${indexed} messages indexed`);
     return;
   }
 
-  // incremental: index any messages missing from FTS (only user + assistant, skip result)
-  const missing = d.prepare(`
-    SELECT m.id, m.content, m.type FROM messages m
-    WHERE m.type IN ('user', 'assistant')
-      AND m.id NOT IN (SELECT rowid FROM messages_fts)
-    ORDER BY m.id
-  `).all() as { id: number; content: string; type: string }[];
+  // incremental: index any messages added since the high-water mark
+  const { indexed } = indexMessagesInPages(
+    `SELECT m.id, m.content FROM messages m
+     WHERE m.type IN ('user', 'assistant')
+       AND m.id > ?
+       AND m.id NOT IN (SELECT rowid FROM messages_fts)
+     ORDER BY m.id
+     LIMIT ?`,
+    2000,
+    ftsMaxId
+  );
 
-  if (missing.length === 0) return;
+  // Advance the mark to the highest id that now exists, not to the last row the query
+  // happened to return. Messages are already indexed on write by indexMessageForSearch,
+  // so the NOT IN filter usually excludes the newest rows entirely and the paging cursor
+  // never reaches them. Marking only what the filter returned would freeze the mark and
+  // leave every later message to be re-scanned on every start, which is the cost this
+  // mark exists to avoid. Everything up to here has now been considered either way.
+  // The count is read back live rather than accumulated: indexMessageForSearch writes
+  // rows without touching db_meta, so a running total drifts away from reality and the
+  // lost-index check above depends on this value being real.
+  const newMark = highestConsideredId();
+  if (newMark > ftsMaxId || liveIndexCount() !== ftsIndexedCount) setMark(newMark, liveIndexCount());
+  if (indexed > 0) {
+    console.error(`[db] incremental FTS backfill complete: ${indexed} messages indexed`);
+  }
+}
 
-  console.error(`[db] incremental FTS backfill: ${missing.length} messages to index...`);
+/**
+ * Index messages into messages_fts one bounded page at a time.
+ *
+ * pageSql must select id and content, take a keyset cursor as its first parameter and a
+ * page size as its second, and order by id. Paging keeps peak memory flat regardless of
+ * history size. The previous code materialised every user and assistant message in one
+ * .all(), which on a large database exhausted the V8 heap and crash-looped the gateway.
+ *
+ * This pages rather than streaming with .iterate() on purpose: better-sqlite3 refuses to
+ * run a write while an iterator is open on the same connection, throwing "This database
+ * connection is busy executing a query", so an open iterator plus batched inserts is not
+ * an option here.
+ */
+function indexMessagesInPages(
+  pageSql: string,
+  pageSize = 2000,
+  startAfterId = 0
+): { indexed: number; maxId: number } {
+  const d = getDb();
+  const page = d.prepare(pageSql);
   const insert = d.prepare('INSERT INTO messages_fts(rowid, text_content) VALUES (?, ?)');
-  const tx = d.transaction(() => {
-    let indexed = 0;
-    for (const row of missing) {
+
+  const writePage = d.transaction((rows: { id: number; content: string }[]): number => {
+    let n = 0;
+    for (const row of rows) {
       const text = extractMessageText(row.content);
       if (!text || text.length < 5) continue;
       insert.run(row.id, text);
-      indexed++;
+      n++;
     }
-    console.error(`[db] incremental FTS backfill complete: ${indexed}/${missing.length} messages indexed`);
+    return n;
   });
-  tx();
+
+  let cursor = startAfterId;
+  let indexed = 0;
+  for (;;) {
+    const rows = page.all(cursor, pageSize) as { id: number; content: string }[];
+    if (rows.length === 0) break;
+    indexed += writePage(rows);
+    cursor = rows[rows.length - 1].id;
+    if (rows.length < pageSize) break;
+  }
+  return { indexed, maxId: cursor };
 }
