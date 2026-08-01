@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
-import { MonacoEditor } from './viewers/MonacoEditor';
+import { MonacoEditor, type MonacoEditorHandle } from './viewers/MonacoEditor';
 import { MarkdownViewer } from './viewers/MarkdownViewer';
 import { HtmlViewer } from './viewers/HtmlViewer';
 import { JsonViewer } from './viewers/JsonViewer';
@@ -12,6 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { X, Pencil, Eye } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { FILE_PREVIEW_EVENT, supportsFilePreview } from '@/lib/file-preview';
+import { toast } from 'sonner';
 
 type Props = {
   filePath: string;
@@ -66,6 +67,8 @@ export function FileViewer({ filePath, rpc, onClose, headerless, onDirtyChange, 
   const [editing, setEditing] = useState(() => !['html', 'json'].includes(getFileType(filePath)));
   const [dirty, setDirty] = useState(false);
   const [version, setVersion] = useState(0); // bump to force reload
+  const editorRef = useRef<MonacoEditorHandle>(null);
+  const previewTransitionRef = useRef(false);
   const fileType = getFileType(filePath);
   const fileName = getFileName(filePath);
   const canEdit = fileType === 'code' || supportsFilePreview(fileType);
@@ -113,6 +116,25 @@ export function FileViewer({ filePath, rpc, onClose, headerless, onDirtyChange, 
     onDirtyChange?.(d);
   }, [onDirtyChange]);
 
+  const showPreview = useCallback(async () => {
+    if (!supportsFilePreview(fileType)) {
+      setEditing(false);
+      return;
+    }
+    if (previewTransitionRef.current) return;
+    previewTransitionRef.current = true;
+    try {
+      await editorRef.current?.flush();
+      setEditing(false);
+    } catch (err) {
+      toast.error('Could not save before opening preview', {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      previewTransitionRef.current = false;
+    }
+  }, [fileType]);
+
   // File watcher: reload content when file changes externally
   const dirtyRef = useRef(dirty);
   const editingRef = useRef(editing);
@@ -151,11 +173,11 @@ export function FileViewer({ filePath, rpc, onClose, headerless, onDirtyChange, 
       const detail = (event as CustomEvent<{ filePath?: string }>).detail;
       if (!detail?.filePath) return;
       if (detail.filePath !== filePath) return;
-      setEditing(false);
+      void showPreview();
     };
     window.addEventListener(FILE_PREVIEW_EVENT, onPreview as EventListener);
     return () => window.removeEventListener(FILE_PREVIEW_EVENT, onPreview as EventListener);
-  }, [filePath, fileType]);
+  }, [filePath, fileType, showPreview]);
 
   const renderViewer = () => {
     if (loading) {
@@ -177,6 +199,7 @@ export function FileViewer({ filePath, rpc, onClose, headerless, onDirtyChange, 
       case 'code':
         return (
           <MonacoEditor
+            ref={editorRef}
             content={content}
             filePath={filePath}
             readOnly={!editing}
@@ -188,6 +211,7 @@ export function FileViewer({ filePath, rpc, onClose, headerless, onDirtyChange, 
         if (editing) {
           return (
             <MonacoEditor
+              ref={editorRef}
               content={content}
               filePath={filePath}
               readOnly={false}
@@ -201,6 +225,7 @@ export function FileViewer({ filePath, rpc, onClose, headerless, onDirtyChange, 
         if (editing) {
           return (
             <MonacoEditor
+              ref={editorRef}
               content={content}
               filePath={filePath}
               readOnly={false}
@@ -214,6 +239,7 @@ export function FileViewer({ filePath, rpc, onClose, headerless, onDirtyChange, 
         if (editing) {
           return (
             <MonacoEditor
+              ref={editorRef}
               content={content}
               filePath={filePath}
               readOnly={false}
@@ -249,7 +275,7 @@ export function FileViewer({ filePath, rpc, onClose, headerless, onDirtyChange, 
                 'flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-colors',
                 !editing ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary/50'
               )}
-              onClick={() => setEditing(false)}
+              onClick={() => void showPreview()}
             >
               <Eye className="w-3 h-3" />
               View
@@ -290,7 +316,10 @@ export function FileViewer({ filePath, rpc, onClose, headerless, onDirtyChange, 
             variant="ghost"
             size="sm"
             className="h-6 px-2 text-[10px]"
-            onClick={() => setEditing(!editing)}
+            onClick={() => {
+              if (editing) void showPreview();
+              else setEditing(true);
+            }}
           >
             {editing ? <><Eye className="w-3 h-3 mr-1" />View</> : <><Pencil className="w-3 h-3 mr-1" />Edit</>}
           </Button>

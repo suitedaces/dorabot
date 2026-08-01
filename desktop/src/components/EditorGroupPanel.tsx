@@ -143,6 +143,7 @@ export function EditorGroupPanel({
             agentStatus={ss.agentStatus}
             pendingQuestion={ss.pendingQuestion}
             sessionKey={activeTab.sessionKey}
+            drafts={tabState.chatDrafts}
             onNavigateSettings={onNavigateSettings}
             onOpenFile={(filePath) => tabState.openFileTab(filePath)}
             onOpenDiff={(opts) => tabState.openDiffTab(opts)}

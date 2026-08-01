@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import type { useGateway } from './useGateway';
+import type { useGateway, ImageAttachment } from './useGateway';
 import type { useLayout, GroupId, PaneRole } from './useLayout';
 
 export type TabType = 'chat' | 'channels' | 'goals' | 'automation' | 'extensions' | 'agents' | 'memory' | 'research' | 'settings' | 'file' | 'diff' | 'terminal' | 'task' | 'pr';
@@ -68,6 +68,13 @@ export type ViewTab = {
 };
 
 export type Tab = ChatTab | ViewTab | FileTab | DiffTab | TerminalTab | TaskTab | PrTab;
+
+export type ChatDraft = {
+  text: string;
+  images: ImageAttachment[];
+};
+
+export type ChatDraftStore = Map<string, ChatDraft>;
 
 export function isChatTab(tab: Tab): tab is ChatTab {
   return tab.type === 'chat';
@@ -160,6 +167,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
   const closingRef = useRef(0);
   const subscribedSessionKeysRef = useRef<Set<string>>(new Set());
   const streamCountRef = useRef<Record<string, number>>({});
+  const chatDraftsRef = useRef<ChatDraftStore>(new Map());
   const [unreadBySession, setUnreadBySession] = useState<Record<string, number>>({});
   const [dirtyTabs, setDirtyTabs] = useState<Set<string>>(new Set());
 
@@ -925,6 +933,15 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     });
   }, [gw.sessionStates, tabs, layout.visibleGroups]);
 
+  // chat views remount when the pane layout changes. keep drafts at the tab
+  // lifetime, then prune them after a chat tab is actually closed.
+  useEffect(() => {
+    const liveSessionKeys = new Set(tabs.filter(isChatTab).map(tab => tab.sessionKey));
+    for (const sessionKey of chatDraftsRef.current.keys()) {
+      if (!liveSessionKeys.has(sessionKey)) chatDraftsRef.current.delete(sessionKey);
+    }
+  }, [tabs]);
+
   return {
     tabs,
     activeTabId,
@@ -945,6 +962,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     openPrTab,
     newChatTab,
     unreadBySession,
+    chatDrafts: chatDraftsRef.current,
     dirtyTabs,
     setTabDirty,
     updateTabLabel,

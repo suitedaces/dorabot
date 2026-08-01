@@ -4,6 +4,7 @@ import { DorabotSprite } from '../components/DorabotSprite';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { useGateway, ChatItem, AskUserQuestion, ImageAttachment, PendingElicitation, CodexModelCatalog, ProviderInputItem } from '../hooks/useGateway';
+import type { ChatDraftStore } from '../hooks/useTabs';
 import { ElicitationForm } from '../components/ElicitationForm';
 import { ApprovalList } from '@/components/approval-ui';
 import { ToolUI } from '@/components/tool-ui';
@@ -63,6 +64,7 @@ type Props = {
   agentStatus: string;
   pendingQuestion: AskUserQuestion | null;
   sessionKey?: string;
+  drafts: ChatDraftStore;
   onNavigateSettings?: () => void;
   onOpenFile?: (filePath: string) => void;
   onOpenDiff?: (opts: { filePath: string; oldContent: string; newContent: string; label?: string }) => void;
@@ -1210,7 +1212,7 @@ function AssistantTextWithReply({
   );
 }
 
-export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, sessionKey, onNavigateSettings, onOpenFile, onOpenDiff, onClearChat, onNewTab }: Props) {
+export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, sessionKey, drafts, onNavigateSettings, onOpenFile, onOpenDiff, onClearChat, onNewTab }: Props) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [attachedImages, setAttachedImages] = useState<ImageAttachment[]>([]);
@@ -1239,7 +1241,6 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   const slashListRef = useRef<HTMLDivElement>(null);
   const atListRef = useRef<HTMLDivElement>(null);
   const dragStartRef = useRef<{ y: number; height: number } | null>(null);
-  const draftsRef = useRef<Record<string, { text: string; images: ImageAttachment[] }>>({});
   const liveInputRef = useRef(input);
   liveInputRef.current = input;
   const liveImagesRef = useRef(attachedImages);
@@ -1251,12 +1252,17 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   const activeState = sessionKey ? gateway.sessionStates[sessionKey] : undefined;
   const pendingElicitation = activeState?.pendingElicitation ?? null;
 
-  // Save/restore input draft and images per session when switching tabs
+  // save/restore input draft and images per session when switching tabs or panes
   useEffect(() => {
     if (!sessionKey) return;
     const sk = sessionKey;
-    setInput(draftsRef.current[sk]?.text || '');
-    setAttachedImages(draftsRef.current[sk]?.images || []);
+    const draft = drafts.get(sk);
+    const text = draft?.text || '';
+    const images = draft ? [...draft.images] : [];
+    liveInputRef.current = text;
+    liveImagesRef.current = images;
+    setInput(text);
+    setAttachedImages(images);
     // Reset ephemeral picker state
     setSlashOpen(false);
     setSlashFilter('');
@@ -1265,12 +1271,15 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     setAtStartPos(-1);
     setActiveSkill(null);
     return () => {
-      draftsRef.current[sk] = {
-        text: liveInputRef.current,
-        images: liveImagesRef.current,
-      };
+      const text = liveInputRef.current;
+      const images = liveImagesRef.current;
+      if (text || images.length > 0) {
+        drafts.set(sk, { text, images: [...images] });
+      } else {
+        drafts.delete(sk);
+      }
     };
-  }, [sessionKey]);
+  }, [drafts, sessionKey]);
 
   // Seed message history from existing chat items so ArrowUp works after reload
   useEffect(() => {
@@ -1506,8 +1515,15 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
 
     const images = attachedImages.length > 0 ? [...attachedImages] : undefined;
     nextAutoScrollBehaviorRef.current = 'smooth';
+    const remainingText = overridePrompt ? input : '';
     if (!overridePrompt) setInput('');
     setAttachedImages([]);
+    liveInputRef.current = remainingText;
+    liveImagesRef.current = [];
+    if (sessionKey) {
+      if (remainingText) drafts.set(sessionKey, { text: remainingText, images: [] });
+      else drafts.delete(sessionKey);
+    }
     setInputHeight(null);
     setSlashOpen(false);
     setSlashFilter('');
@@ -1527,6 +1543,12 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     setSlashOpen(false);
     setSlashFilter('');
     setInput('');
+    liveInputRef.current = '';
+    if (sessionKey) {
+      const images = liveImagesRef.current;
+      if (images.length > 0) drafts.set(sessionKey, { text: '', images: [...images] });
+      else drafts.delete(sessionKey);
+    }
 
     if (item.type === 'command') {
       switch (item.command) {

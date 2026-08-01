@@ -43,6 +43,7 @@ import { getDb } from '../db.js';
 import { insertEvent, queryEventsBySessionCursor, deleteEventsUpToSeq, cleanupOldEvents } from './event-log.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { closeBrowser } from '../browser/manager.js';
+import { rememberFsWatchEvent, type FsWatchEvent } from './fs-watch-events.js';
 import { setScheduler, setBrowserConfig } from '../tools/index.js';
 import { loadProjects, saveProjects, type Project } from '../tools/projects.js';
 import {
@@ -734,7 +735,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     watcher: FSWatcher;
     refCount: number;
     debounceTimer?: ReturnType<typeof setTimeout>;
-    pendingEvent?: { eventType: string; filename: string | null };
+    pendingEvents?: Map<string, FsWatchEvent>;
   };
   const fileWatchers = new Map<string, FileWatchEntry>();
   const watchedPathsByClient = new Map<WebSocket, Set<string>>();
@@ -864,13 +865,15 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     const entry = fileWatchers.get(resolved);
     if (!entry) return;
     entry.debounceTimer = undefined;
-    const pending = entry.pendingEvent;
-    entry.pendingEvent = undefined;
+    const pending = entry.pendingEvents;
+    entry.pendingEvents = undefined;
     if (!pending) return;
-    broadcast({
-      event: 'fs.change',
-      data: { path: resolved, eventType: pending.eventType, filename: pending.filename, timestamp: Date.now() },
-    });
+    for (const event of pending.values()) {
+      broadcast({
+        event: 'fs.change',
+        data: { path: resolved, eventType: event.eventType, filename: event.filename, timestamp: Date.now() },
+      });
+    }
   };
 
   const startWatching = (path: string) => {
@@ -896,7 +899,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         if (DEBUG_FS_WATCH) {
           console.log(`[gateway] fs.watch: ${eventType} in ${resolved}${filenameStr ? '/' + filenameStr : ''}`);
         }
-        entry.pendingEvent = { eventType, filename: filenameStr };
+        if (!entry.pendingEvents) entry.pendingEvents = new Map();
+        rememberFsWatchEvent(entry.pendingEvents, { eventType, filename: filenameStr });
         if (entry.debounceTimer) return;
         entry.debounceTimer = setTimeout(() => emitFsWatchEvent(resolved), FS_WATCH_DEBOUNCE_MS);
         entry.debounceTimer.unref?.();
