@@ -1994,7 +1994,9 @@ export function FileExplorer({ rpc, connected, onFileClick, onOpenDiff, onOpenPr
     const els = container.querySelectorAll('[data-path]');
     for (const el of els) {
       if ((el as HTMLElement).dataset.path === path) {
-        el.scrollIntoView({ block: 'nearest' });
+        // not every environment implements it, and a purely cosmetic scroll
+        // must never be the thing that takes the render tree down
+        el.scrollIntoView?.({ block: 'nearest' });
         break;
       }
     }

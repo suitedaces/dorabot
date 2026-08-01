@@ -358,8 +358,12 @@ export default function App() {
   }, []);
 
   // Persist sidebar state
-  useEffect(() => { localStorage.setItem('dorabot:showFiles', String(showFiles)); }, [showFiles]);
-  useEffect(() => { localStorage.setItem('dorabot:sidebarView', sidebarView); }, [sidebarView]);
+  useEffect(() => {
+    try { localStorage.setItem('dorabot:showFiles', String(showFiles)); } catch { /* quota */ }
+  }, [showFiles]);
+  useEffect(() => {
+    try { localStorage.setItem('dorabot:sidebarView', sidebarView); } catch { /* quota */ }
+  }, [sidebarView]);
 
   // Toggle file explorer via the library's imperative API.
   // onResize is the single source of truth for showFiles — no sync effects needed.

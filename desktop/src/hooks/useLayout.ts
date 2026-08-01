@@ -168,7 +168,9 @@ export function useLayout() {
 
   // Persist
   useEffect(() => {
-    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(state));
+    try {
+      localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(state));
+    } catch { /* quota exceeded, ignore */ }
   }, [state]);
 
   // Derived
