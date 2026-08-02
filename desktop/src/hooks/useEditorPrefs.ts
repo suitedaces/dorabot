@@ -34,7 +34,9 @@ export function useEditorPrefs() {
   const update = useCallback((partial: Partial<EditorPrefs>) => {
     setPrefs(prev => {
       const next = { ...prev, ...partial };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      // runs in the render phase, so an unguarded throw here is attributed to
+      // the component and unwinds the tree
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch { /* quota */ }
       return next;
     });
   }, []);

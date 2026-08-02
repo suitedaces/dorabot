@@ -386,7 +386,9 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
   }, [tabs]);
 
   useEffect(() => {
-    localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTabId);
+    try {
+      localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTabId);
+    } catch { /* quota exceeded, ignore */ }
   }, [activeTabId]);
 
   // Invariant: always have at least one tab, and the active group should have

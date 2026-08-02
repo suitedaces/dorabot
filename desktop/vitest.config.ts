@@ -7,7 +7,7 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
-    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    include: ['src/**/*.{test,spec}.{ts,tsx}', 'electron/**/*.{test,spec}.ts'],
     exclude: [
       '**/node_modules/**',
       // standalone tsx script that mirrors the layout logic instead of

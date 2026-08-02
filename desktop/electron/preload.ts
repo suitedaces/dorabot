@@ -29,14 +29,10 @@ const electronAPI = {
     ipcRenderer.on('update-status', handler);
     return () => { ipcRenderer.removeListener('update-status', handler); };
   },
-  htmlPreviewPartition: 'htmlpreview',
-  setHtmlPreviewAllowRemote: (webContentsId: number, allow: boolean): Promise<boolean> =>
-    ipcRenderer.invoke('html-preview:set-allow-remote', webContentsId, allow),
-  onHtmlPreviewBlocked: (cb: (info: { url: string; webContentsId: number }) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, info: { url: string; webContentsId: number }) => cb(info);
-    ipcRenderer.on('html-preview:blocked', handler);
-    return () => { ipcRenderer.removeListener('html-preview:blocked', handler); };
-  },
+  openHtmlPreview: (filePath: string, allowRemote: boolean): Promise<string | null> =>
+    ipcRenderer.invoke('html-preview:open', filePath, allowRemote),
+  closeHtmlPreview: (url: string): Promise<boolean> =>
+    ipcRenderer.invoke('html-preview:close', url),
   // Gateway bridge IPC (WebSocket runs in main process, renderer talks via IPC)
   gatewaySend: (data: string) => ipcRenderer.send('gateway:send', data),
   gatewayState: (): Promise<{ state: string; reconnectCount: number; connectId?: string }> => ipcRenderer.invoke('gateway:state'),
