@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { tool } from '@anthropic-ai/claude-agent-sdk';
+import { loadConfig, isPathAllowed } from '../config.js';
 
 export type ChannelHandler = {
   send(target: string, message: string, opts?: { media?: string; replyTo?: string }): Promise<{ id: string; chatId: string }>;
@@ -62,6 +63,19 @@ export const messageTool = tool(
               content: [{ type: 'text', text: 'Error: target and message required for send' }],
               isError: true,
             };
+          }
+          // an attachment is the one part of this tool that reads the disk and puts
+          // the bytes on the network, so it gets the same path rules as file access.
+          // this is deliberately not tied to approvalMode: autonomous should still
+          // not be able to mail out ~/.ssh.
+          if (args.media) {
+            const config = await loadConfig();
+            if (!isPathAllowed(args.media, config)) {
+              return {
+                content: [{ type: 'text', text: `Error: not allowed to attach ${args.media}` }],
+                isError: true,
+              };
+            }
           }
           const result = await handler.send(target, args.message, {
             media: args.media,

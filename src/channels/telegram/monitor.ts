@@ -66,19 +66,31 @@ export async function startTelegramMonitor(opts: TelegramMonitorOptions): Promis
     },
   });
 
+  // an allowFrom of [] means "nobody is authorized", so it has to reject everyone.
+  // treating it as unset would fail open and hand a full agent run to any stranger
+  // who messages the bot.
+  function senderAllowed(senderId: string): boolean {
+    if (!opts.allowFrom) return true;
+    if (opts.allowFrom.length === 0) {
+      console.log('[telegram] no authorized senders configured, rejecting all messages');
+      return false;
+    }
+    return opts.allowFrom.includes(senderId);
+  }
+
   // bot commands
   if (opts.onCommand) {
     const onCmd = opts.onCommand;
     bot.command('new', async (ctx) => {
       const senderId = String(ctx.from?.id || '');
-      if (opts.allowFrom && opts.allowFrom.length > 0 && !opts.allowFrom.includes(senderId)) return;
+      if (!senderAllowed(senderId)) return;
       const chatId = String(ctx.chat.id);
       const reply = await onCmd('new', chatId);
       if (reply) await ctx.reply(reply);
     });
     bot.command('status', async (ctx) => {
       const senderId = String(ctx.from?.id || '');
-      if (opts.allowFrom && opts.allowFrom.length > 0 && !opts.allowFrom.includes(senderId)) return;
+      if (!senderAllowed(senderId)) return;
       const chatId = String(ctx.chat.id);
       const reply = await onCmd('status', chatId);
       if (reply) await ctx.reply(reply);
@@ -138,11 +150,9 @@ export async function startTelegramMonitor(opts: TelegramMonitorOptions): Promis
     const isGroup = chat.type === 'group' || chat.type === 'supergroup';
     if (isGroup && opts.groupPolicy === 'disabled') return null;
     const senderId = String(msg.from?.id || '');
-    if (opts.allowFrom && opts.allowFrom.length > 0) {
-      if (!opts.allowFrom.includes(senderId)) {
-        console.log(`[telegram] unauthorized sender: ${senderId} (${msg.from?.first_name || 'unknown'})`);
-        return null;
-      }
+    if (!senderAllowed(senderId)) {
+      console.log(`[telegram] unauthorized sender: ${senderId} (${msg.from?.first_name || 'unknown'})`);
+      return null;
     }
     return { chat, isGroup, senderId };
   }

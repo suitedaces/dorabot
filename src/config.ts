@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, basename, sep } from 'node:path';
 import {
   DORABOT_CONFIG_PATH,
   GATEWAY_SOCKET_PATH,
@@ -346,29 +346,55 @@ export const ALWAYS_DENIED = [
   '~/.config/nanoclaw',
 ];
 
+// resolve symlinks, including for paths that don't exist yet. a plain realpath throws
+// on ENOENT, which is every create-a-new-file write, so we walk up to the nearest
+// existing ancestor and re-append the tail. otherwise ~/work/link/authorized_keys
+// passes the check while the write lands wherever link points.
+function canonicalize(p: string): string {
+  const abs = resolve(p);
+  const tail: string[] = [];
+  let cur = abs;
+  for (;;) {
+    try {
+      const real = realpathSync(cur);
+      return tail.length ? join(real, ...tail) : real;
+    } catch {}
+    const parent = dirname(cur);
+    if (parent === cur) return abs;
+    tail.unshift(basename(cur));
+    cur = parent;
+  }
+}
+
+// match on segment boundaries so /tmp doesn't also cover /tmpfoo
+function isUnder(target: string, prefix: string, ignoreCase: boolean): boolean {
+  const t = ignoreCase ? target.toLowerCase() : target;
+  const p = ignoreCase ? prefix.toLowerCase() : prefix;
+  if (t === p) return true;
+  return t.startsWith(p.endsWith(sep) ? p : p + sep);
+}
+
 export function isPathAllowed(
   targetPath: string,
   config: Config,
   channelOverride?: { allowedPaths?: string[]; deniedPaths?: string[] },
 ): boolean {
   const home = homedir();
-  let resolved: string;
-  try {
-    resolved = realpathSync(targetPath);
-  } catch {
-    resolved = resolve(targetPath);
-  }
+  const resolved = canonicalize(targetPath);
 
   // denied: always_denied + global + channel-specific (all merged)
   const globalDenied = [...ALWAYS_DENIED, ...(config.gateway?.deniedPaths || [])];
   const channelDenied = channelOverride?.deniedPaths || [];
-  const denied = [...globalDenied, ...channelDenied].map(p => resolve(p.replace(/^~/, home)));
-  if (denied.some(d => resolved.startsWith(d))) return false;
+  const denied = [...globalDenied, ...channelDenied].map(p => canonicalize(p.replace(/^~/, home)));
+  // deny ignores case: macos filesystems are case-insensitive by default, so ~/.SSH
+  // and ~/.ssh are the same bytes on disk and realpath does not normalize between them
+  if (denied.some(d => isUnder(resolved, d, true))) return false;
 
   // allowed: channel-specific overrides global if set
   const allowedRaw = channelOverride?.allowedPaths?.length
     ? channelOverride.allowedPaths
     : (config.gateway?.allowedPaths || [home, '/tmp']);
-  const allowed = allowedRaw.map(p => resolve(p.replace(/^~/, home)));
-  return allowed.some(a => resolved.startsWith(a));
+  const allowed = allowedRaw.map(p => canonicalize(p.replace(/^~/, home)));
+  // allow stays case-sensitive so this never grants more than it was configured to
+  return allowed.some(a => isUnder(resolved, a, false));
 }

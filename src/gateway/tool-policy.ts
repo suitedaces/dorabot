@@ -82,10 +82,23 @@ export function classifyToolCall(
     return 'require-approval';
   }
 
-  if (name === 'schedule_reminder' ||
-      name === 'schedule_recurring' ||
-      name === 'schedule_cron') {
+  // these are the names the calendar tools actually register under. the old list
+  // (schedule_reminder/schedule_recurring/schedule_cron) matched nothing, so
+  // scheduling persistence was silently auto-allowed.
+  if (name === 'schedule' ||
+      name === 'update_schedule' ||
+      name === 'cancel_schedule') {
     return 'require-approval';
+  }
+
+  // outbound messaging leaves the machine, and attaching a file makes it an
+  // exfiltration path. notify at minimum, approve when it carries a payload.
+  if (name === 'message') {
+    const action = (input.action as string) || '';
+    if (action === 'send') {
+      return input.media ? 'require-approval' : 'notify';
+    }
+    return 'notify';
   }
 
   return 'auto-allow';
