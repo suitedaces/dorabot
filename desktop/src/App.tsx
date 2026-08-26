@@ -33,7 +33,9 @@ import type { Palette as PaletteId } from './lib/palettes';
 import { ToastContainer } from './components/ToastContainer';
 import { FILE_PREVIEW_EVENT } from './lib/file-preview';
 
-type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
+type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp' | 'calendar';
+
+const SESSION_PAGE = 30;
 type UpdateState = {
   status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
   version?: string;
@@ -241,6 +243,8 @@ export default function App() {
     })()
   );
   const [sessionFilter, setSessionFilter] = useState<SessionFilter>('all');
+  const [sessionLimit, setSessionLimit] = useState(SESSION_PAGE);
+  const sessionSentinelRef = useRef<HTMLDivElement | null>(null);
   const [selectedChannel, setSelectedChannel] = useState<'whatsapp' | 'telegram'>('whatsapp');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const onboardingCheckedRef = useRef(false);
@@ -615,6 +619,24 @@ export default function App() {
     return gw.sessions.filter(s => (s.channel || 'desktop') === sessionFilter);
   }, [gw.sessions, sessionFilter]);
 
+  const hasMoreSessions = filteredSessions.length > sessionLimit;
+
+  // reset paging when the filter changes
+  useEffect(() => { setSessionLimit(SESSION_PAGE); }, [sessionFilter]);
+
+  // lazy-load: bump the limit when the sentinel scrolls into the viewport
+  useEffect(() => {
+    const node = sessionSentinelRef.current;
+    if (!node || !hasMoreSessions) return;
+    const root = node.closest('[data-slot="scroll-area-viewport"]') as HTMLElement | null;
+    const io = new IntersectionObserver(
+      entries => { if (entries[0]?.isIntersecting) setSessionLimit(n => n + SESSION_PAGE); },
+      { root, rootMargin: '200px' },
+    );
+    io.observe(node);
+    return () => io.disconnect();
+  }, [hasMoreSessions, sessionLimit]);
+
   // Track which sessions are visible across all panes (for sidebar highlighting)
   const visibleSessionIds = useMemo(() => {
     const ids = new Set<string>();
@@ -951,6 +973,7 @@ export default function App() {
   const channelIcon = (ch?: string) => {
     if (ch === 'whatsapp') return <img src={whatsappImg} className="w-3 h-3" alt="W" />;
     if (ch === 'telegram') return <img src={telegramImg} className="w-3 h-3" alt="T" />;
+    if (ch === 'calendar') return <Clock className="w-3 h-3 opacity-50" />;
     return <MessageSquare className="w-3 h-3 opacity-50" />;
   };
 
@@ -1357,11 +1380,12 @@ export default function App() {
                       <option value="desktop">desktop</option>
                       <option value="telegram">telegram</option>
                       <option value="whatsapp">whatsapp</option>
+                      <option value="calendar">schedule</option>
                     </select>
                   </div>
                 </div>
                 <ScrollArea className="flex-1 min-h-0 px-2 pb-2">
-                  {filteredSessions.slice(0, 30).map(s => {
+                  {filteredSessions.slice(0, sessionLimit).map(s => {
                     const isActive = tabState.activeTab && isChatTab(tabState.activeTab) && tabState.activeTab.sessionId === s.id;
                     const isVisible = !isActive && visibleSessionIds.has(s.id);
                     const unread = unreadBySessionId[s.id] || 0;
@@ -1456,6 +1480,11 @@ export default function App() {
                       </button>
                     );
                   })}
+                  {hasMoreSessions && (
+                    <div ref={sessionSentinelRef} className="px-2.5 py-2 text-[9px] text-muted-foreground">
+                      loading {filteredSessions.length - sessionLimit} more...
+                    </div>
+                  )}
                 </ScrollArea>
               </>
             )}
