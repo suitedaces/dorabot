@@ -30,6 +30,7 @@ function formatRelativeDate(dateStr: string): string {
 function channelLabel(channel?: string): string {
   if (channel === 'telegram') return 'Telegram';
   if (channel === 'whatsapp') return 'WhatsApp';
+  if (channel === 'calendar') return 'Schedule';
   return 'Desktop';
 }
 
