@@ -624,7 +624,9 @@ class CodexAppServerClient {
     // notifications), so rejecting `pending` alone is not enough: if the app-server
     // process dies mid-turn, the events iterator just ends and the run finishes
     // with an empty result — to the user the agent appears to stop silently.
-    this.notifications.push({ method: 'error', params: { error: { message: error.message } } });
+    // Distinct method name: 'error' notifications from the app-server can be
+    // transient (stream reconnects) and must not be conflated with process death.
+    this.notifications.push({ method: 'appServer/exited', params: { error: { message: error.message } } });
     this.notifications.close();
     for (const [, pending] of this.pending) {
       pending.reject(error);
@@ -2191,9 +2193,33 @@ export class CodexProvider implements Provider {
         return;
       }
 
+      // app-server child died (synthetic event from failAll) — always terminal
+      if (message.method === 'appServer/exited') {
+        const exitErr = params.error as Record<string, unknown> | undefined;
+        const errMsg = String(exitErr?.message || 'Codex app-server exited');
+        result = lastAgentMessage || `Codex error: ${errMsg}`;
+        yield { type: 'result', subtype: 'error_max_turns', result, session_id: sessionId } as ProviderMessage;
+        turnDone = true;
+        return;
+      }
+
       if (message.method === 'error') {
         const error = params.error as Record<string, unknown> | undefined;
         const errMsg = String(error?.message || params.message || 'Codex app-server error');
+        // Transient stream errors are retried by codex itself (incl. a WebSocket->HTTPS
+        // transport fallback); the turn continues, and terminal failures arrive as
+        // turn/completed with status=failed. Ending the run here aborts a recovering
+        // turn — and the cleanup in finally{} then kill()s the app-server mid-retry.
+        // Observed live on 0.152.0: { error: { message: "Reconnecting... 2/5",
+        // codexErrorInfo: { responseStreamDisconnected: {...} } } } followed by a
+        // successful turn/completed after the HTTPS fallback.
+        const info = (error as { codexErrorInfo?: Record<string, unknown> } | undefined)?.codexErrorInfo;
+        const transient = (info && info.responseStreamDisconnected !== undefined)
+          || /^Reconnecting\.{0,3}\s/i.test(errMsg);
+        if (transient) {
+          console.log(`[codex] transient stream error (turn continues): ${errMsg}`);
+          return;
+        }
         if (isContextOverflowError(errMsg, error?.code) && !compactRetried) {
           contextOverflow = true;
           turnDone = true;
