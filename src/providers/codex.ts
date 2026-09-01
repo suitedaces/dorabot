@@ -619,6 +619,12 @@ class CodexAppServerClient {
   private failAll(error: Error): void {
     if (this.closed) return;
     this.closed = true;
+    // Surface the failure to the streaming loop before closing the queue. During a
+    // turn there are usually no pending RPC requests (turn progress arrives as
+    // notifications), so rejecting `pending` alone is not enough: if the app-server
+    // process dies mid-turn, the events iterator just ends and the run finishes
+    // with an empty result — to the user the agent appears to stop silently.
+    this.notifications.push({ method: 'error', params: { error: { message: error.message } } });
     this.notifications.close();
     for (const [, pending] of this.pending) {
       pending.reject(error);
