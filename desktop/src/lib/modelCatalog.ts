@@ -40,8 +40,9 @@ const CODEX_FALLBACK_REASONING_EFFORTS: ReasoningEffortOption[] = [
 const CODEX_APP_SERVER_REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
 export const CLAUDE_MODELS: ModelOption[] = [
-  { value: 'claude-fable-5', label: 'Fable 5', description: 'Frontier model. Adaptive thinking always on. Requires usage credits on some plans.' },
-  { value: 'claude-opus-5', label: 'Opus 5', description: 'Near-frontier intelligence at half of Fable 5 price. 1M context, thinking on by default.' },
+  { value: 'claude-fable-5-1', label: 'Fable 5.1', description: 'Frontier reasoning and long-horizon agentic work. 1M context, 128K output, adaptive thinking always on. Cache reads are $0.25/MTok (0.025x input, vs 0.1x on every other model), so long cached sessions are far cheaper than Fable 5.' },
+  { value: 'claude-opus-5', label: 'Opus 5', description: 'Near-frontier intelligence at half of Fable 5.1 price ($5/$25 per MTok). 1M context, thinking on by default.' },
+  { value: 'claude-fable-5', label: 'Fable 5 (legacy)', description: 'Superseded by Fable 5.1. Same $10/$50 per MTok but 4x more expensive cache reads ($1/MTok).' },
   { value: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Deep reasoning for hard, long-horizon tasks.' },
   { value: 'claude-opus-4-7', label: 'Opus 4.7' },
   { value: 'claude-sonnet-5', label: 'Sonnet 5', description: 'Latest Sonnet, balanced speed/capability. Default.' },

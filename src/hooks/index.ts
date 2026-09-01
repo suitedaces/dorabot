@@ -5,11 +5,13 @@ import type { Config } from '../config.js';
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
-// hook event types (matching Claude SDK v0.2.80)
+// hook event types (matching Claude SDK v0.3.258)
 export type HookEvent =
   | 'PreToolUse'
   | 'PostToolUse'
   | 'PostToolUseFailure'
+  | 'PreModelSwitch'
+  | 'PostModelSwitch'
   | 'Notification'
   | 'UserPromptSubmit'
   | 'SessionStart'
@@ -134,6 +136,27 @@ export type InstructionsLoadedHookInput = BaseHookInput & {
   files: string[];
 };
 
+// model switch: 'command' = /model or /config, 'picker' = interactive picker,
+// 'sdk' = headless set_model (which is how the gateway's agent.setModel arrives)
+export type ModelSwitchSource = 'command' | 'picker' | 'sdk';
+
+export type PreModelSwitchHookInput = BaseHookInput & {
+  hook_event_name: 'PreModelSwitch';
+  from_model: string;
+  to_model: string;
+  /** what was asked for: an alias like "opus", a full id, or null for "default" */
+  requested_model: string | null;
+  source: ModelSwitchSource;
+};
+
+export type PostModelSwitchHookInput = BaseHookInput & {
+  hook_event_name: 'PostModelSwitch';
+  from_model: string;
+  to_model: string;
+  requested_model: string | null;
+  source: ModelSwitchSource;
+};
+
 export type HookInput =
   | PreToolUseHookInput
   | PostToolUseHookInput
@@ -149,7 +172,9 @@ export type HookInput =
   | ElicitationResultHookInput
   | WorktreeCreateHookInput
   | WorktreeRemoveHookInput
-  | InstructionsLoadedHookInput;
+  | InstructionsLoadedHookInput
+  | PreModelSwitchHookInput
+  | PostModelSwitchHookInput;
 
 export type HookJSONOutput = {
   continue?: boolean;
@@ -255,11 +280,26 @@ const sessionTrackingHook: HookCallback = async (input) => {
   return { continue: true };
 };
 
+// model switch tracking — a run can change model mid-conversation (gateway
+// agent.setModel arrives as source 'sdk'), so the model in the init event is not
+// necessarily the model that produced a later turn.
+const modelSwitchHook: HookCallback = async (input) => {
+  if (input.hook_event_name !== 'PostModelSwitch') return { continue: true };
+  const requested = input.requested_model ?? 'default';
+  console.log(
+    `[model] ${input.from_model} → ${input.to_model} (requested: ${requested}, source: ${input.source})`
+  );
+  return { continue: true };
+};
+
 // default hooks configuration
 export function createDefaultHooks(config: Config): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
   return {
     SessionStart: [
       { hooks: [sessionTrackingHook] },
+    ],
+    PostModelSwitch: [
+      { hooks: [modelSwitchHook] },
     ],
     PostToolUse: [
       { matcher: 'Write', hooks: [typecheckHook] },

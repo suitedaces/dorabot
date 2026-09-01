@@ -16,6 +16,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { VirtualChatList } from '@/components/VirtualChatList';
+import { ContextWheel } from '@/components/ContextWheel';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
 import { safeParse } from '@/lib/safe-parse';
@@ -2108,11 +2109,20 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
           {gateway.backgroundTasks[sessionKey].map(t => (
             <span
               key={t.taskId}
-              className="inline-flex items-center gap-1 rounded-full border border-border/40 bg-muted/30 px-2 py-0.5 text-[10px] font-mono text-muted-foreground"
+              className="group inline-flex items-center gap-1 rounded-full border border-border/40 bg-muted/30 pl-2 pr-1 py-0.5 text-[10px] font-mono text-muted-foreground"
               title={t.description}
             >
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
               {t.taskType}: {t.description.slice(0, 48)}{t.description.length > 48 ? '…' : ''}
+              <button
+                type="button"
+                aria-label={`Stop task ${t.description.slice(0, 40)}`}
+                title="Stop this task"
+                className="ml-0.5 rounded-full p-0.5 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-destructive/20 hover:text-destructive transition-opacity"
+                onClick={() => { gateway.stopTask(sessionKey, t.taskId).catch(() => {}); }}
+              >
+                <X className="w-2.5 h-2.5" />
+              </button>
             </span>
           ))}
         </div>
@@ -2167,6 +2177,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
               <Paperclip className="w-4 h-4 text-muted-foreground" />
             </Button>
             <ModelSelector gateway={gateway} disabled={!connected} sessionId={activeState?.sessionId} />
+            <ContextWheel getContextUsage={gateway.getContextUsage} sessionKey={sessionKey} isRunning={isRunning} />
             {input.trim() && (
               <span className="text-[9px] text-muted-foreground/60 ml-2 select-none hidden @sm:inline">{'\u21E7\u21B5 new line'}</span>
             )}
