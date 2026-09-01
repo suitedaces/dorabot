@@ -984,6 +984,32 @@ export class ClaudeProvider implements Provider {
       async mcpServerStatus() { return queryRef?.mcpServerStatus() ?? []; },
       async reconnectMcpServer(name: string) { await (queryRef as any)?.reconnectMcpServer?.(name); },
       async toggleMcpServer(name: string, enabled: boolean) { await (queryRef as any)?.toggleMcpServer?.(name, enabled); },
+      // 0.3.258+. 'summary' answers from the last response's usage and local
+      // estimates; 'full' (SDK default) makes a token-count API call per
+      // category, so default to summary for a UI poll.
+      async getContextUsage(detail: 'summary' | 'full' = 'summary') {
+        const fn = (queryRef as any)?.getContextUsage;
+        if (!fn) throw new Error('getContextUsage not supported by this CLI version');
+        const r = await fn.call(queryRef, { detail });
+        return {
+          model: r.model,
+          totalTokens: r.totalTokens,
+          maxTokens: r.maxTokens,
+          rawMaxTokens: r.rawMaxTokens,
+          percentage: r.percentage,
+          categories: (r.categories ?? []).map((c: any) => ({
+            name: c.name,
+            tokens: c.tokens,
+            isDeferred: c.isDeferred,
+          })),
+          mcpTools: (r.mcpTools ?? []).map((t: any) => ({
+            name: t.name,
+            serverName: t.serverName,
+            tokens: t.tokens,
+            isLoaded: t.isLoaded,
+          })),
+        };
+      },
     };
 
     // Notify caller that the handle is ready (before SDK query starts)
@@ -1034,7 +1060,10 @@ export class ClaudeProvider implements Provider {
         model: opts.model,
         systemPrompt: opts.systemPrompt,
         tools: { type: 'preset', preset: 'claude_code' } as any,
-        disallowedTools: ['EnterPlanMode', 'ExitPlanMode', 'ToolSearch'],
+        // ToolSearch stays ALLOWED: MCP tool schemas arrive deferred (isLoaded:false)
+        // and ToolSearch is what loads them on demand. Blocking it strands them —
+        // we'd carry the awareness cost for tools that could never be called.
+        disallowedTools: ['EnterPlanMode', 'ExitPlanMode'],
         agents: opts.agents as any,
         hooks: opts.hooks as any,
         mcpServers: opts.mcpServer as any,
@@ -1052,6 +1081,11 @@ export class ClaudeProvider implements Provider {
         settingSources: opts.config.settingSources,
         agentProgressSummaries: opts.config.agentProgressSummaries ?? true,
         includePartialMessages: true,
+        // Interrupt aborts only the current turn; background tasks survive and are
+        // stopped individually. Safe because the desktop exposes a per-task stop
+        // (chip ✕ → agent.stopTask). The CLI fails closed without this declaration,
+        // so do NOT set it if that control is ever removed.
+        perTaskStopAffordance: true,
         canUseTool: opts.canUseTool as any,
         abortController: opts.abortController,
         stderr: (data: string) => console.error(`[claude:stderr] ${data.trimEnd()}`),

@@ -3602,6 +3602,18 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           return { id, result: { stopped: true, taskId, sessionKey: sk } };
         }
 
+        case 'agent.contextUsage': {
+          const sk = params?.sessionKey as string;
+          if (!sk) return { id, error: 'sessionKey required' };
+          const detail = params?.detail === 'full' ? 'full' : 'summary';
+          const h = runHandles.get(sk);
+          // only readable while a run is live — the breakdown comes from the CLI process
+          if (!h?.active) return { id, error: 'no active run for that session' };
+          if (!h.getContextUsage) return { id, error: 'getContextUsage not supported by current provider' };
+          const usage = await h.getContextUsage(detail);
+          return { id, result: usage };
+        }
+
         case 'agent.mcpStatus': {
           const sk = params?.sessionKey as string;
           if (!sk) return { id, error: 'sessionKey required' };

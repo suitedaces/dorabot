@@ -39,6 +39,33 @@ export type RunHandle = {
   reconnectMcpServer?(name: string): Promise<void>;
   /** Toggle MCP server enabled state (Claude SDK only) */
   toggleMcpServer?(name: string, enabled: boolean): Promise<void>;
+  /** Context window usage breakdown for the live run (Claude SDK only) */
+  getContextUsage?(detail?: 'summary' | 'full'): Promise<ContextUsage>;
+};
+
+/** A single row of the context breakdown. */
+export type ContextUsageCategory = {
+  name: string;
+  tokens: number;
+  /** deferred rows are out-of-window tool schemas — shown for awareness, excluded from usage math */
+  isDeferred?: boolean;
+};
+
+/**
+ * Context window usage for a live run. `percentage` is measured against
+ * `rawMaxTokens`, which is the resolved autocompact window — that may be
+ * smaller than the model's hard limit (e.g. the 200K boundary on a 1M model),
+ * so `percentage` can exceed 100 without the API refusing the next request.
+ */
+export type ContextUsage = {
+  model: string;
+  totalTokens: number;
+  maxTokens: number;
+  rawMaxTokens: number;
+  percentage: number;
+  categories: ContextUsageCategory[];
+  /** per-tool MCP cost, so a caller can attribute the MCP category to a server */
+  mcpTools: { name: string; serverName: string; tokens: number; isLoaded?: boolean }[];
 };
 
 export type ProviderRunOptions = {

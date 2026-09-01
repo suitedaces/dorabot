@@ -35,6 +35,24 @@ const TOOL_PENDING_TEXT: Record<string, string> = {
 
 export type ConnectionState = 'connecting' | 'connected' | 'degraded' | 'disconnected';
 
+export type ContextUsageCategory = { name: string; tokens: number; isDeferred?: boolean };
+
+/**
+ * percentage is measured against rawMaxTokens (the resolved autocompact window),
+ * which can be smaller than the model's hard limit — so >100 does not necessarily
+ * mean the next request is refused.
+ */
+export type ContextUsage = {
+  model: string;
+  totalTokens: number;
+  maxTokens: number;
+  rawMaxTokens: number;
+  percentage: number;
+  categories: ContextUsageCategory[];
+  /** per-tool MCP cost, so the breakdown can attribute the MCP row to a server */
+  mcpTools: { name: string; serverName: string; tokens: number; isLoaded?: boolean }[];
+};
+
 // apply a raw stream event to a ChatItem array (works for top-level or subItems)
 function applyStreamEvent(items: ChatItem[], evt: Record<string, unknown>): ChatItem[] {
   if (evt.type === 'content_block_start') {
@@ -2384,6 +2402,17 @@ export function useGateway() {
     refreshSessions,
     ws: null, // WebSocket is in main process now
     rpc,
+    // Context window usage for a live run. Rejects when no run is active —
+    // the breakdown is read out of the running CLI process, not the transcript.
+    getContextUsage: useCallback(async (sessionKey: string, detail: 'summary' | 'full' = 'summary') => {
+      return rpc('agent.contextUsage', { sessionKey, detail }) as Promise<ContextUsage>;
+    }, [rpc]),
+    // Kill one background task. This is the affordance that makes
+    // perTaskStopAffordance safe: interrupt spares background work, so there has
+    // to be a way to stop a runaway task short of ending the session.
+    stopTask: useCallback(async (sessionKey: string, taskId: string) => {
+      await rpc('agent.stopTask', { sessionKey, taskId });
+    }, [rpc]),
     sendMessage,
     abortAgent,
     newSession,
