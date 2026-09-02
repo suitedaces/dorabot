@@ -70,7 +70,12 @@ function telegramRenderer(): MarkedExtension {
         const items = token.items
           .map((item, index) => {
             const prefix = token.ordered ? `${(token.start || 1) + index}. ` : '\u2022 ';
-            const content = this.parser.parseInline(item.tokens).replace(/\n+$/, '');
+            // loose items hold block tokens, parseInline throws on those;
+            // parse blocks one by one so nested lists don't glue to item text
+            const content = item.tokens
+              .map(t => this.parser.parse([t]).replace(/\n+$/, ''))
+              .filter(Boolean)
+              .join('\n');
             return `${prefix}${content}`;
           })
           .join('\n');
@@ -131,6 +136,10 @@ function telegramRenderer(): MarkedExtension {
         if ('tokens' in token && token.tokens) {
           return this.parser.parseInline(token.tokens);
         }
+        // parser marks synthesized text tokens as escaped, don't re-escape
+        if ('escaped' in token && token.escaped) {
+          return token.text;
+        }
         return escapeHtml(token.text);
       },
       html(token: Tokens.HTML | Tokens.Tag) {
@@ -173,7 +182,12 @@ function whatsappRenderer(): MarkedExtension {
         const items = token.items
           .map((item, index) => {
             const prefix = token.ordered ? `${(token.start || 1) + index}. ` : '- ';
-            const content = this.parser.parseInline(item.tokens).replace(/\n+$/, '');
+            // loose items hold block tokens, parseInline throws on those;
+            // parse blocks one by one so nested lists don't glue to item text
+            const content = item.tokens
+              .map(t => this.parser.parse([t]).replace(/\n+$/, ''))
+              .filter(Boolean)
+              .join('\n');
             return `${prefix}${content}`;
           })
           .join('\n');
