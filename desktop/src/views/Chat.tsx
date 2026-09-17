@@ -146,10 +146,10 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   memory_search: Search, memory_read: FileText,
 };
 
-function ModelSelector({ gateway, disabled, sessionId }: { gateway: ReturnType<typeof useGateway>; disabled: boolean; sessionId?: string }) {
+function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: ReturnType<typeof useGateway>; disabled: boolean; sessionId?: string; sessionKey?: string }) {
   const providerName = (gateway.configData as any)?.provider?.name || 'claude';
-  // Per-session model if set, otherwise fall back to the default (config-level) model
-  const claudeModel = gateway.getSessionModel(sessionId) || DEFAULT_CLAUDE_MODEL;
+  // this session's model: saved pick, unsent pick, or the last model picked anywhere
+  const claudeModel = gateway.getSessionModel(sessionId, sessionKey) || DEFAULT_CLAUDE_MODEL;
   const codexModel = (gateway.configData as any)?.provider?.codex?.model || DEFAULT_CODEX_MODEL;
   const [codexAuthMethod, setCodexAuthMethod] = useState<string | undefined>(undefined);
   const [codexCatalog, setCodexCatalog] = useState<CodexModelCatalog | null>(null);
@@ -188,12 +188,8 @@ function ModelSelector({ gateway, disabled, sessionId }: { gateway: ReturnType<t
       if (reasoningEffort && !reasoningEffortIsSupported(CLAUDE_AGENT_SDK_REASONING_EFFORTS, reasoningEffort)) {
         await gateway.setConfig('reasoningEffort', null);
       }
-      // If we have a session, set the model per-session; otherwise change the default.
-      if (sessionId) {
-        gateway.changeSessionModel(sessionId, model);
-      } else {
-        gateway.changeModel(model);
-      }
+      // always scoped to this chat. with no session row yet it rides along with the next message.
+      gateway.selectModel(sessionKey || '', sessionId, model);
     } else {
       if (providerName !== 'codex') await gateway.setProvider('codex');
       await gateway.setConfig('provider.codex.model', model);
@@ -1969,7 +1965,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                   >
                     <Paperclip className="w-4 h-4 text-muted-foreground" />
                   </Button>
-                  <ModelSelector gateway={gateway} disabled={!connected} sessionId={activeState?.sessionId} />
+                  <ModelSelector gateway={gateway} disabled={!connected} sessionId={activeState?.sessionId} sessionKey={sessionKey} />
                   {input.trim() && (
                     <span className="text-[9px] text-muted-foreground/60 ml-2 select-none hidden @sm:inline">{'\u21E7\u21B5 new line'}</span>
                   )}
@@ -2176,7 +2172,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             >
               <Paperclip className="w-4 h-4 text-muted-foreground" />
             </Button>
-            <ModelSelector gateway={gateway} disabled={!connected} sessionId={activeState?.sessionId} />
+            <ModelSelector gateway={gateway} disabled={!connected} sessionId={activeState?.sessionId} sessionKey={sessionKey} />
             <ContextWheel getContextUsage={gateway.getContextUsage} sessionKey={sessionKey} isRunning={isRunning} />
             {input.trim() && (
               <span className="text-[9px] text-muted-foreground/60 ml-2 select-none hidden @sm:inline">{'\u21E7\u21B5 new line'}</span>

@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Check, X, ChevronDown, ChevronUp } from 'lucide-react';
-import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL, codexModelsForAuth } from '@/lib/modelCatalog';
+import { DEFAULT_CODEX_MODEL, codexModelsForAuth } from '@/lib/modelCatalog';
 
 type Props = {
   gateway: ReturnType<typeof useGateway>;
@@ -52,7 +52,6 @@ export function ProviderCard({ gateway, disabled }: Props) {
     gateway.getProviderStatus();
   }, [gateway.getProviderStatus]);
 
-  const currentModel = gateway.model || cfg?.model || DEFAULT_CLAUDE_MODEL;
   const codexModel = cfg?.provider?.codex?.model || '';
   const codexOptions = codexModelsForAuth(providerName === 'codex' ? authMethod : undefined, codexModel);
 
@@ -139,21 +138,8 @@ export function ProviderCard({ gateway, disabled }: Props) {
             )}
           </div>
 
-          {/* Model selector */}
-          {providerName === 'claude' ? (
-            <SettingRow label="model" description="default model for new chats">
-              <Select value={currentModel} onValueChange={gateway.changeModel} disabled={disabled}>
-                <SelectTrigger className="h-7 w-48 text-[11px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {CLAUDE_MODELS.map(m => (
-                    <SelectItem key={m.value} value={m.value} className="text-[11px]">{m.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </SettingRow>
-          ) : (
+          {/* claude model is picked per-chat from the composer selector, not here */}
+          {providerName === 'claude' ? null : (
             <SettingRow label="model" description="codex model for agent runs">
               <Select value={codexModel || DEFAULT_CODEX_MODEL} onValueChange={handleCodexModelChange} disabled={disabled}>
                 <SelectTrigger className="h-7 w-52 text-[11px]">
