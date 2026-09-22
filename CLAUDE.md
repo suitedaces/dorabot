@@ -150,7 +150,7 @@ Eligibility checks: required binaries (`which`), env vars, config keys.
 Loaded from (first found): explicit path → `./dorabot.config.json` → `~/.dorabot/config.json` → defaults.
 
 Key settings:
-- `model` — default `claude-sonnet-4-6`
+- `model` — default `claude-opus-5-5`
 - `permissionMode` — default | acceptEdits | bypassPermissions | plan | dontAsk
 - `sandbox.enabled` — false by default
 - `sandbox.mode` — off | non-main | all
