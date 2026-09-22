@@ -67,8 +67,14 @@ jobs:
           #   version (5.0.8) is ESM-only and breaks CJS minimatch@3 consumers inside
           #   electron-builder's packaging chain (verified locally). Nested copies are on
           #   1.1.16/2.1.2 which are patched for every other brace-expansion advisory.
+          # - GHSA-9f4c-93c8-jc8g: electron sandboxed-iframe allow-popups bypass. No 40.x
+          #   backport exists (first patched 41.10.3); 40.10.6 is the last 40.x and fixes
+          #   every other electron advisory. Exposure while allowlisted: an HtmlViewer
+          #   preview (sandbox without allow-popups) could open a popup that
+          #   setWindowOpenHandler hands to shell.openExternal unfiltered. Remove when the
+          #   44.x bump lands (audited 2026-09-04, needs the packaged-app smoke).
           node scripts/audit-gate.mjs --dir=.
-          node scripts/audit-gate.mjs --dir=desktop --allow=GHSA-mh99-v99m-4gvg
+          node scripts/audit-gate.mjs --dir=desktop --allow=GHSA-mh99-v99m-4gvg,GHSA-9f4c-93c8-jc8g
 
   pin-check:
     runs-on: ubuntu-latest
@@ -110,10 +116,8 @@ jobs:
       - name: Check package age (desktop, 7 days)
         run: node scripts/check-package-age.mjs --min-days=7 --dir=desktop --allow=@anthropic-ai/claude-agent-sdk,@openai/codex
 
-      # next temporarily allowed: 16.2.11 (published 2026-07-21) is the only patch for
-      # the Jul 22 advisory wave (4 highs incl. SSRF). Remove from allowlist after 2026-07-28.
       - name: Check package age (site, 7 days)
-        run: node scripts/check-package-age.mjs --min-days=7 --dir=site --allow=@anthropic-ai/claude-agent-sdk,@openai/codex,next
+        run: node scripts/check-package-age.mjs --min-days=7 --dir=site --allow=@anthropic-ai/claude-agent-sdk,@openai/codex
 
   snyk:
     runs-on: ubuntu-latest
