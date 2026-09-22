@@ -19,7 +19,7 @@ export type ReasoningEffortOption = {
   description?: string | null;
 };
 
-export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5';
+export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5-5';
 export const DEFAULT_CODEX_MODEL = 'gpt-5.6-terra';
 
 export const CLAUDE_AGENT_SDK_REASONING_EFFORTS: ReasoningEffortOption[] = [
@@ -40,12 +40,13 @@ const CODEX_FALLBACK_REASONING_EFFORTS: ReasoningEffortOption[] = [
 const CODEX_APP_SERVER_REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
 export const CLAUDE_MODELS: ModelOption[] = [
+  { value: 'claude-opus-5-5', label: 'Opus 5.5', description: 'Released Sep 22, 2026. Fable 5.1-level on most agentic work at $4/$20 per MTok (60% cheaper), 30%+ faster output. 1M context, 128K output, adaptive thinking always on, default effort medium. Anthropic\'s recommended starting point. Default.' },
   { value: 'claude-fable-5-1', label: 'Fable 5.1', description: 'Frontier reasoning and long-horizon agentic work. 1M context, 128K output, adaptive thinking always on. Cache reads are $0.25/MTok (0.025x input, vs 0.1x on every other model), so long cached sessions are far cheaper than Fable 5.' },
-  { value: 'claude-opus-5', label: 'Opus 5', description: 'Near-frontier intelligence at half of Fable 5.1 price ($5/$25 per MTok). 1M context, thinking on by default.' },
+  { value: 'claude-opus-5', label: 'Opus 5 (legacy)', description: 'Superseded by Opus 5.5, which is cheaper ($5/$25 vs $4/$20 per MTok) and stronger. 1M context, thinking on by default.' },
   { value: 'claude-fable-5', label: 'Fable 5 (legacy)', description: 'Superseded by Fable 5.1. Same $10/$50 per MTok but 4x more expensive cache reads ($1/MTok).' },
   { value: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Deep reasoning for hard, long-horizon tasks.' },
   { value: 'claude-opus-4-7', label: 'Opus 4.7' },
-  { value: 'claude-sonnet-5', label: 'Sonnet 5', description: 'Latest Sonnet, balanced speed/capability. Default.' },
+  { value: 'claude-sonnet-5', label: 'Sonnet 5', description: 'Latest Sonnet, balanced speed/capability, half the price of Opus 5.5.' },
   { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
   { value: 'claude-haiku-4-5', label: 'Haiku 4.5' },
   { value: 'claude-opus-4-6', label: 'Opus 4.6 (legacy)' },

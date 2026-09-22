@@ -17,8 +17,6 @@ import { PALETTES } from '../lib/palettes';
 import type { Palette } from '../lib/palettes';
 import {
   CLAUDE_AGENT_SDK_REASONING_EFFORTS,
-  CLAUDE_MODELS,
-  DEFAULT_CLAUDE_MODEL,
   DEFAULT_CODEX_MODEL,
   codexModelsForAuth,
   codexReasoningEffortOptions,
@@ -572,7 +570,6 @@ function AnthropicCard({ gateway, disabled }: { gateway: ReturnType<typeof useGa
   const [showAuth, setShowAuth] = useState(false);
   const [authStatus, setAuthStatus] = useState<ProviderAuthView | null>(null);
   const cfg = gateway.configData as Record<string, any> | null;
-  const currentModel = gateway.model || cfg?.model || DEFAULT_CLAUDE_MODEL;
   const permissionMode = cfg?.permissionMode || 'default';
 
   // Query auth independently
@@ -656,19 +653,7 @@ function AnthropicCard({ gateway, disabled }: { gateway: ReturnType<typeof useGa
             )}
           </div>
 
-          {/* model selector */}
-          <SettingRow label="model" description="default model for new chats">
-            <Select value={currentModel} onValueChange={gateway.changeModel} disabled={disabled}>
-              <SelectTrigger className="h-7 w-48 text-[11px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {CLAUDE_MODELS.map(m => (
-                  <SelectItem key={m.value} value={m.value} className="text-[11px]">{m.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </SettingRow>
+          {/* model is picked per-chat from the composer selector, not here */}
 
           {/* permission mode */}
           <SettingRow label="permission mode" description="how Claude Code SDK handles tool permissions">

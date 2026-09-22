@@ -635,10 +635,26 @@ export function useGateway() {
 
   const [channelMessages, setChannelMessages] = useState<ChannelMessage[]>([]);
   const [channelStatuses, setChannelStatuses] = useState<ChannelStatusInfo[]>([]);
-  // Default model (config-backed). Used for new sessions and as fallback.
+  // Boot fallback from config. Only used until the user picks a model; no UI writes it.
   const [model, setModel] = useState<string>('');
   // Per-session model overrides. Keyed by sessionId (not sessionKey), mirrors server DB state.
   const [modelsBySession, setModelsBySession] = useState<Record<string, string>>({});
+  // Picked in the composer before the session exists server-side. Keyed by sessionKey,
+  // flushed to the server with the next message.
+  const [pendingModelByKey, setPendingModelByKey] = useState<Record<string, string>>({});
+  // Last model picked anywhere. Seeds new chats. Client-side only, never written to config.
+  const [lastPickedModel, setLastPickedModel] = useState<string>(() => {
+    try { return localStorage.getItem('dorabot.lastPickedModel') || ''; } catch { return ''; }
+  });
+  // the two values the user writes are authoritative in refs, updated synchronously on pick,
+  // so a send in the same react batch still sees the pick. state above only drives rendering.
+  const pendingModelRef = useRef<Record<string, string>>(pendingModelByKey);
+  const lastPickedRef = useRef<string>(lastPickedModel);
+  // server-driven values, safe to mirror on render (nothing writes them synchronously)
+  const modelSelectionRef = useRef({ modelsBySession, model });
+  modelSelectionRef.current = { modelsBySession, model };
+  const sessionStatesRef = useRef(sessionStates);
+  sessionStatesRef.current = sessionStates;
   const [configData, setConfigData] = useState<Record<string, unknown> | null>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<ToolApproval[]>([]);
@@ -1932,6 +1948,11 @@ export function useGateway() {
         },
       };
     });
+    // send the model the selector is showing, so display and run never disagree
+    const { modelsBySession: saved, model: fallback } = modelSelectionRef.current;
+    const pending = pendingModelRef.current;
+    const sid = sessionStatesRef.current[sk]?.sessionId;
+    const effectiveModel = (sid ? saved[sid] : undefined) || pending[sk] || lastPickedRef.current || fallback || '';
     try {
       const res = await rpc('chat.send', {
         prompt,
@@ -1939,7 +1960,15 @@ export function useGateway() {
         inputItems: inputItems?.length ? inputItems : undefined,
         chatId: cid,
         sessionKey: sk,
+        model: effectiveModel || undefined,
       }) as { sessionKey?: string } | undefined;
+      // the server pinned it to the session row; the pending pick has done its job
+      if (pending[sk]) {
+        const cleared = { ...pendingModelRef.current };
+        delete cleared[sk];
+        pendingModelRef.current = cleared;
+        setPendingModelByKey(cleared);
+      }
       if (res?.sessionKey && res.sessionKey !== sk) {
         // sessionKey changed (e.g. server normalized it) — migrate state
         activeSessionKeyRef.current = res.sessionKey;
@@ -2060,12 +2089,6 @@ export function useGateway() {
     return { sessionKey: sk, chatId: newChatId };
   }, []);
 
-  // Change the default model (config-level). Affects new sessions and sessions without an override.
-  const changeModel = useCallback(async (newModel: string) => {
-    await rpc('config.set', { key: 'model', value: newModel });
-    setModel(newModel);
-  }, [rpc]);
-
   // Change the model for a specific session. Persists server-side in sessions.model column.
   // Pass empty string to clear the override and fall back to default.
   const changeSessionModel = useCallback(async (sessionId: string, newModel: string) => {
@@ -2095,11 +2118,29 @@ export function useGateway() {
     }
   }, [rpc]);
 
-  // Read the effective model for a session: per-session override or default fallback.
-  const getSessionModel = useCallback((sessionId: string | undefined): string => {
+  // The model selector is the only model control. A pick is scoped to the session it was
+  // made in; if the session doesn't exist server-side yet it waits for the next message.
+  const selectModel = useCallback(async (sessionKey: string, sessionId: string | undefined, newModel: string) => {
+    if (!newModel) return;
+    lastPickedRef.current = newModel;
+    setLastPickedModel(newModel);
+    try { localStorage.setItem('dorabot.lastPickedModel', newModel); } catch { /* private mode */ }
+    if (sessionId) {
+      await changeSessionModel(sessionId, newModel);
+      return;
+    }
+    pendingModelRef.current = { ...pendingModelRef.current, [sessionKey]: newModel };
+    setPendingModelByKey(prev => ({ ...prev, [sessionKey]: newModel }));
+  }, [changeSessionModel]);
+
+  // Effective model, in precedence order: this session's saved pick, a pick not yet sent,
+  // the last pick made anywhere (seeds new chats), then the config fallback.
+  // sendMessage sends exactly this value, so what the dropdown shows is what runs.
+  const getSessionModel = useCallback((sessionId: string | undefined, sessionKey?: string): string => {
     if (sessionId && modelsBySession[sessionId]) return modelsBySession[sessionId];
-    return model;
-  }, [modelsBySession, model]);
+    if (sessionKey && pendingModelByKey[sessionKey]) return pendingModelByKey[sessionKey];
+    return lastPickedModel || model;
+  }, [modelsBySession, pendingModelByKey, lastPickedModel, model]);
 
   const setConfig = useCallback(async (key: string, value: unknown) => {
     // optimistic local update
@@ -2426,9 +2467,9 @@ export function useGateway() {
       });
     }, []),
     model,
-    changeModel,
     modelsBySession,
     changeSessionModel,
+    selectModel,
     getSessionModel,
     configData,
     setConfig,

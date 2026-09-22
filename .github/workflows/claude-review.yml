@@ -6,6 +6,11 @@ on:
 
 jobs:
   claude-review:
+    # disabled: CLAUDE_CODE_OAUTH_TOKEN (set 2026-02-16) is dead — the action fails with
+    # "Your organization does not have access to Claude", turning every PR red.
+    # to re-enable: `claude setup-token` -> `gh secret set CLAUDE_CODE_OAUTH_TOKEN`
+    # -> `gh variable set CLAUDE_REVIEW_ENABLED --body true`
+    if: vars.CLAUDE_REVIEW_ENABLED == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -3520,6 +3520,14 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             fileSessionManager.setMetadata(session.sessionId, { channel: 'desktop', chatId, chatType: 'dm' });
           }
 
+          // the model picked in the composer rides along with the message and pins this session.
+          // handleAgentRun re-reads this metadata, so the run below picks it up.
+          const requestedModel = typeof params?.model === 'string' ? params.model.trim() : '';
+          if (requestedModel) {
+            fileSessionManager.setMetadata(session.sessionId, { model: requestedModel });
+            broadcast({ event: 'sessions.update', data: { sessionId: session.sessionId, model: requestedModel } });
+          }
+
           sessionRegistry.incrementMessages(session.key);
           broadcastSessionUpdate(sessionKey);
 
