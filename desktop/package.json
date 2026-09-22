@@ -72,7 +72,7 @@
     "clsx": "2.1.1",
     "dompurify": "3.3.2",
     "electron": "40.10.6",
-    "electron-builder": "26.15.3",
+    "electron-builder": "26.16.1",
     "electron-vite": "5.0.0",
     "jsdom": "25.0.1",
     "tailwind-merge": "3.4.0",
