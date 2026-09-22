@@ -114,6 +114,7 @@ Focus on clarity and completeness. Flag any ambiguities.`,
 const MODEL_MAP: Record<string, 'sonnet' | 'opus' | 'haiku' | 'inherit'> = {
   'claude-fable-5-1': 'opus',
   'claude-fable-5': 'opus',
+  'claude-opus-5-5': 'opus',
   'claude-opus-5': 'opus',
   'claude-opus-4-8': 'opus',
   'claude-opus-4-7': 'opus',
