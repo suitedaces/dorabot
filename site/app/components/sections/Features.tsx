@@ -76,7 +76,7 @@ export function Features() {
             From model to autonomous operator
           </h2>
           <p className="mt-4 text-text-secondary text-base sm:text-lg max-w-2xl mx-auto">
-            Bring your own API key or subscription. dorabot handles the rest.
+            Works with your existing Claude Code or OpenAI Codex subscription, any plan. No extra API key.
           </p>
         </ScrollReveal>
 
