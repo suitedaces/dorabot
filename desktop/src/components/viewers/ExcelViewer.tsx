@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import ExcelJS from 'exceljs';
+import { readXlsx } from '@/lib/xlsx';
 
 type Props = {
   filePath: string;
@@ -92,19 +92,7 @@ export function ExcelViewer({ filePath, rpc }: Props) {
           bytes[i] = binaryString.charCodeAt(i);
         }
 
-        const workbook = new ExcelJS.Workbook();
-        await workbook.xlsx.load(bytes.buffer as ArrayBuffer);
-
-        const sheetData: SheetData[] = [];
-        workbook.eachSheet((worksheet) => {
-          const data: (string | number)[][] = [];
-          worksheet.eachRow({ includeEmpty: false }, (row) => {
-            const rowValues = row.values as (string | number | null)[];
-            // ExcelJS row.values is 1-indexed (index 0 is empty), skip it
-            data.push(rowValues.slice(1).map(v => v == null ? '' : v));
-          });
-          sheetData.push({ name: worksheet.name, data });
-        });
+        const sheetData: SheetData[] = await readXlsx(bytes);
 
         setSheets(sheetData);
         setActiveSheet(0);
