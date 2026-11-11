@@ -44,6 +44,7 @@ import {
   labelForModel,
   reasoningEffortIsSupported,
   reasoningEffortLabel,
+  fetchSupportedModelsFromGateway,
 } from '@/lib/modelCatalog';
 
 type SlashItem = {
@@ -153,6 +154,7 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
   const codexModel = (gateway.configData as any)?.provider?.codex?.model || DEFAULT_CODEX_MODEL;
   const [codexAuthMethod, setCodexAuthMethod] = useState<string | undefined>(undefined);
   const [codexCatalog, setCodexCatalog] = useState<CodexModelCatalog | null>(null);
+  const [claudeModels, setClaudeModels] = useState(CLAUDE_MODELS);
   const codexOptions = codexModelsForAuth(codexAuthMethod, codexModel, codexCatalog?.models);
   const selectedCodexOption = codexOptions.find(option => option.value === codexModel) || null;
   const currentValue = providerName === 'codex' ? `codex:${codexModel}` : `claude:${claudeModel}`;
@@ -181,6 +183,16 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
     }
   }, [gateway.providerInfo, providerName]);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetchSupportedModelsFromGateway(gateway)
+      .then((models) => {
+        if (!cancelled) setClaudeModels(models);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [gateway.connectionState]);
+
   const handleChange = async (encoded: string) => {
     const [provider, model] = encoded.split(':') as [string, string];
     if (provider === 'claude') {
@@ -203,7 +215,7 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
 
   const currentLabel = providerName === 'codex'
     ? labelForModel(codexOptions, codexModel) || labelForModel(CODEX_MODELS, codexModel)
-    : labelForModel(CLAUDE_MODELS, claudeModel);
+    : labelForModel(claudeModels, claudeModel);
 
   const handleEffortChange = async (value: string) => {
     const v = value === 'off' ? null : value;
@@ -223,7 +235,7 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
         </SelectTrigger>
         <SelectContent position="popper" align="start" className="min-w-[180px]">
           <div className="px-2 py-1 text-[9px] font-semibold text-muted-foreground uppercase tracking-wider">Anthropic</div>
-          {CLAUDE_MODELS.map(m => (
+          {claudeModels.map(m => (
             <SelectItem key={m.value} value={`claude:${m.value}`} className="text-xs">
               <span className="flex items-center gap-1.5">
                 <img src="./claude-icon.svg" alt="" className="w-3 h-3" />

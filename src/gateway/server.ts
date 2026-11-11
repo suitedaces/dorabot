@@ -3369,6 +3369,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     return result;
   }
 
+  // Cache for supported models to avoid spawning multiple SDK processes
+  let supportedModelsCache: Promise<any[] | null> | null = null;
+
   // rpc handler
   async function handleRpc(msg: WsMessage, clientWs?: WebSocket): Promise<WsResponse> {
     const { method, params, id } = msg;
@@ -6867,6 +6870,36 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             }
 
             return { id, result: { results } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'query.supportedModels': {
+          try {
+            if (!supportedModelsCache) {
+              supportedModelsCache = (async () => {
+                try {
+                  const { query: queryFunc } = await import('@anthropic-ai/claude-agent-sdk');
+                  const abortController = new AbortController();
+                  try {
+                    const q = queryFunc({ prompt: '', options: { abortController } });
+                    const models = await q.supportedModels();
+                    return models;
+                  } finally {
+                    abortController.abort();
+                  }
+                } catch {
+                  return null;
+                }
+              })();
+            }
+            const models = await supportedModelsCache;
+            if (!models) {
+              supportedModelsCache = null; // let the next call retry instead of caching the failure
+              return { id, error: 'failed to fetch supported models' };
+            }
+            return { id, result: { models } };
           } catch (err) {
             return { id, error: err instanceof Error ? err.message : String(err) };
           }
