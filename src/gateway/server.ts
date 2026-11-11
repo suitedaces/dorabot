@@ -6872,6 +6872,17 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
         }
 
+        case 'query.supportedModels': {
+          try {
+            const { query: queryFunc } = await import('@anthropic-ai/claude-agent-sdk');
+            const q = queryFunc({ prompt: '' });
+            const models = await q.supportedModels();
+            return { id, result: { models } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
         default:
           return { id, error: `unknown method: ${method}` };
       }

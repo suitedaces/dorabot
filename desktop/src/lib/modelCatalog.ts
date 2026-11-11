@@ -46,9 +46,11 @@ export const CLAUDE_MODELS: ModelOption[] = [
   { value: 'claude-fable-5', label: 'Fable 5 (legacy)', description: 'Superseded by Fable 5.1. Same $10/$50 per MTok but 4x more expensive cache reads ($1/MTok).' },
   { value: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Deep reasoning for hard, long-horizon tasks.' },
   { value: 'claude-opus-4-7', label: 'Opus 4.7' },
-  { value: 'claude-sonnet-5', label: 'Sonnet 5', description: 'Latest Sonnet, balanced speed/capability, half the price of Opus 5.5.' },
+  { value: 'claude-sonnet-5-5', label: 'Sonnet 5.5', description: 'Latest Sonnet, balanced speed/capability at $2/$10 per MTok (half the price of Opus 5.5). 1M context, 128K output, adaptive thinking, default effort high.' },
+  { value: 'claude-sonnet-5', label: 'Sonnet 5 (legacy)', description: 'Superseded by Sonnet 5.5 at the same $2/$10 per MTok.' },
   { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
-  { value: 'claude-haiku-4-5', label: 'Haiku 4.5' },
+  { value: 'claude-haiku-5-5', label: 'Haiku 5.5', description: 'Latest Haiku, fastest model for high-volume work (classification, extraction, routing, subagents). $0.10/$0.50 per MTok for prompts up to 100K tokens ($0.50/$2.50 above). 1M context, 128K output, adaptive thinking, default effort medium.' },
+  { value: 'claude-haiku-4-5', label: 'Haiku 4.5', description: 'Superseded by Haiku 5.5, which is 10x cheaper on prompts up to 100K tokens ($0.10/$0.50 vs $1/$5 per MTok).' },
   { value: 'claude-opus-4-6', label: 'Opus 4.6 (legacy)' },
   { value: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5 (legacy)' },
   { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5 (legacy)' },
@@ -162,4 +164,50 @@ export function codexModelsForAuth(method?: string, currentValue?: string | null
   }
 
   return visible;
+}
+
+type ModelInfoFromSdk = {
+  value: string;
+  displayName: string;
+  description: string;
+  resolvedModel?: string;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: string[];
+  supportsAdaptiveThinking?: boolean;
+  supportsFastMode?: boolean;
+  supportsAutoMode?: boolean;
+};
+
+export async function fetchSupportedModelsFromGateway(gatewayClient?: any): Promise<ModelOption[]> {
+  if (!gatewayClient) return CLAUDE_MODELS;
+
+  try {
+    const result = await gatewayClient.rpc('query.supportedModels');
+    if (!result || !Array.isArray((result as any).models)) {
+      return CLAUDE_MODELS;
+    }
+
+    const sdkModels = (result as any).models as ModelInfoFromSdk[];
+    const result_models: ModelOption[] = [];
+    const knownIds = new Set(CLAUDE_MODELS.map(m => m.value));
+
+    for (const model of sdkModels) {
+      const knownModel = CLAUDE_MODELS.find(m => m.value === model.value);
+      if (knownModel) {
+        result_models.push(knownModel);
+      } else {
+        result_models.push({
+          value: model.value,
+          label: model.displayName || model.value,
+          description: model.description,
+          defaultReasoningEffort: model.supportsEffort ? 'medium' : undefined,
+          supportedReasoningEfforts: model.supportedEffortLevels,
+        });
+      }
+    }
+
+    return result_models.length > 0 ? result_models : CLAUDE_MODELS;
+  } catch {
+    return CLAUDE_MODELS;
+  }
 }
