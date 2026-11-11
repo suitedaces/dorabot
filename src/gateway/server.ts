@@ -6895,7 +6895,10 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               })();
             }
             const models = await supportedModelsCache;
-            if (!models) return { id, error: 'failed to fetch supported models' };
+            if (!models) {
+              supportedModelsCache = null; // let the next call retry instead of caching the failure
+              return { id, error: 'failed to fetch supported models' };
+            }
             return { id, result: { models } };
           } catch (err) {
             return { id, error: err instanceof Error ? err.message : String(err) };
