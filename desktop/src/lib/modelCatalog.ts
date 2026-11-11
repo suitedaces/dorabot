@@ -166,18 +166,6 @@ export function codexModelsForAuth(method?: string, currentValue?: string | null
   return visible;
 }
 
-type ModelInfoFromSdk = {
-  value: string;
-  displayName: string;
-  description: string;
-  resolvedModel?: string;
-  supportsEffort?: boolean;
-  supportedEffortLevels?: string[];
-  supportsAdaptiveThinking?: boolean;
-  supportsFastMode?: boolean;
-  supportsAutoMode?: boolean;
-};
-
 export async function fetchSupportedModelsFromGateway(gatewayClient?: any): Promise<ModelOption[]> {
   if (!gatewayClient) return CLAUDE_MODELS;
 
@@ -187,16 +175,25 @@ export async function fetchSupportedModelsFromGateway(gatewayClient?: any): Prom
       return CLAUDE_MODELS;
     }
 
-    const sdkModels = (result as any).models as ModelInfoFromSdk[];
-    const result_models: ModelOption[] = [];
-    const knownIds = new Set(CLAUDE_MODELS.map(m => m.value));
+    const sdkModels = (result as any).models as Array<{
+      value: string;
+      displayName: string;
+      description: string;
+      resolvedModel?: string;
+      supportsEffort?: boolean;
+      supportedEffortLevels?: string[];
+      supportsAdaptiveThinking?: boolean;
+      supportsFastMode?: boolean;
+      supportsAutoMode?: boolean;
+    }>;
+    const models: ModelOption[] = [];
 
     for (const model of sdkModels) {
       const knownModel = CLAUDE_MODELS.find(m => m.value === model.value);
       if (knownModel) {
-        result_models.push(knownModel);
+        models.push(knownModel);
       } else {
-        result_models.push({
+        models.push({
           value: model.value,
           label: model.displayName || model.value,
           description: model.description,
@@ -206,7 +203,7 @@ export async function fetchSupportedModelsFromGateway(gatewayClient?: any): Prom
       }
     }
 
-    return result_models.length > 0 ? result_models : CLAUDE_MODELS;
+    return models.length > 0 ? models : CLAUDE_MODELS;
   } catch {
     return CLAUDE_MODELS;
   }
