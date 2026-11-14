@@ -992,6 +992,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const runHandles = new Map<string, RunHandle>();
   // model the live run is on, so a message sent with a different pick can switch it
   const runModels = new Map<string, string>();
+  // per-chat fast mode, desktop chats only, in memory so a restart turns it off (it bills 2x to usage credits)
+  const fastModes = new Map<string, boolean>();
+  let claudeModelCatalog: { at: number; data: unknown } | null = null;
   type RunReplyRef = {
     sessionId: string;
     source: string;
@@ -2622,6 +2625,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           canUseTool: makeCanUseTool(channel, messageMetadata?.chatId, sessionKey),
           abortController,
           messageMetadata,
+          fastMode: sessionKey.startsWith('desktop:') && fastModes.get(sessionKey) === true,
           onRunReady: (handle) => { runHandles.set(sessionKey, handle); runModels.set(sessionKey, runConfig.model); },
           lastPulseAt,
           hooks: {
@@ -3536,7 +3540,17 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
           // try injection into active run first
           const handle = runHandles.get(sessionKey);
+          const requestedFast = typeof params?.fastMode === 'boolean' && sessionKey.startsWith('desktop:') ? params.fastMode as boolean : undefined;
+          const fastChanged = requestedFast !== undefined && (fastModes.get(sessionKey) === true) !== requestedFast;
+          if (requestedFast !== undefined) fastModes.set(sessionKey, requestedFast);
           if (handle?.active) {
+            if (fastChanged && handle.setFastMode) {
+              try {
+                await handle.setFastMode(requestedFast!);
+              } catch (err) {
+                console.error(`[gateway] setFastMode on inject failed for ${sessionKey}:`, err);
+              }
+            }
             // the pick applies from this message on, even mid-run
             if (requestedModel && handle.setModel && runModels.get(sessionKey) !== requestedModel) {
               try {
@@ -4907,6 +4921,20 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             const providerName = (params?.provider as string) || config.provider.name;
             const p = await getProviderByName(providerName);
             return { id, result: await p.getAuthStatus() };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'provider.claude.models': {
+          try {
+            const fresh = claudeModelCatalog && Date.now() - claudeModelCatalog.at < 10 * 60_000;
+            if (!fresh || params?.refresh) {
+              const claude = await getProviderByName('claude');
+              if (!claude.getModelCatalog) return { id, error: 'model catalog not supported' };
+              claudeModelCatalog = { at: Date.now(), data: await claude.getModelCatalog() };
+            }
+            return { id, result: claudeModelCatalog!.data };
           } catch (err) {
             return { id, error: err instanceof Error ? err.message : String(err) };
           }

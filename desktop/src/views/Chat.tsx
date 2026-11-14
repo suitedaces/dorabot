@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { DorabotSprite } from '../components/DorabotSprite';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { useGateway, ChatItem, AskUserQuestion, ImageAttachment, PendingElicitation, CodexModelCatalog, ProviderInputItem } from '../hooks/useGateway';
+import type { useGateway, ChatItem, AskUserQuestion, ImageAttachment, PendingElicitation, CodexModelCatalog, ClaudeModelCatalog, ProviderInputItem } from '../hooks/useGateway';
 import type { ChatDraftStore } from '../hooks/useTabs';
 import { ElicitationForm } from '../components/ElicitationForm';
 import { ApprovalList } from '@/components/approval-ui';
@@ -28,17 +28,17 @@ import {
   MessageSquare, Camera, Monitor, Clock, Wrench, ArrowUp, LayoutGrid,
   Smile, Image, Brain, MapPin, PenLine, GitPullRequest, Radio,
   Paperclip, X, ExternalLink, Check, Circle, Loader2, Keyboard, Copy,
-  Quote, Reply,
+  Quote, Reply, Zap,
   type LucideIcon,
 } from 'lucide-react';
 import { SHORTCUTS as ALL_SHORTCUTS } from '@/components/ShortcutHelp';
 import { jsonrepair } from 'jsonrepair';
 import {
-  CLAUDE_AGENT_SDK_REASONING_EFFORTS,
-  CLAUDE_MODELS,
   CODEX_MODELS,
   DEFAULT_CLAUDE_MODEL,
   DEFAULT_CODEX_MODEL,
+  claudeModelsFromCatalog,
+  claudeReasoningEffortOptions,
   codexModelsForAuth,
   codexReasoningEffortOptions,
   labelForModel,
@@ -155,6 +155,9 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
   const [codexCatalog, setCodexCatalog] = useState<CodexModelCatalog | null>(null);
   const codexOptions = codexModelsForAuth(codexAuthMethod, codexModel, codexCatalog?.models);
   const selectedCodexOption = codexOptions.find(option => option.value === codexModel) || null;
+  const [claudeCatalog, setClaudeCatalog] = useState<ClaudeModelCatalog | null>(null);
+  const claudeOptions = claudeModelsFromCatalog(claudeCatalog?.models, claudeModel);
+  const selectedClaudeOption = claudeOptions.find(option => option.value === claudeModel) || null;
   const currentValue = providerName === 'codex' ? `codex:${codexModel}` : `claude:${claudeModel}`;
   const reasoningEffort = (gateway.configData as any)?.reasoningEffort || null;
 
@@ -176,6 +179,17 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
   }, [gateway.connectionState, gateway.getCodexModels]);
 
   useEffect(() => {
+    if (gateway.connectionState !== 'connected') return;
+    let cancelled = false;
+    gateway.getClaudeModels()
+      .then((catalog) => {
+        if (!cancelled) setClaudeCatalog(catalog);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [gateway.connectionState, gateway.getClaudeModels]);
+
+  useEffect(() => {
     if (providerName === 'codex' && gateway.providerInfo?.auth?.method) {
       setCodexAuthMethod(gateway.providerInfo.auth.method);
     }
@@ -185,9 +199,11 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
     const [provider, model] = encoded.split(':') as [string, string];
     if (provider === 'claude') {
       if (providerName !== 'claude') await gateway.setProvider('claude');
-      if (reasoningEffort && !reasoningEffortIsSupported(CLAUDE_AGENT_SDK_REASONING_EFFORTS, reasoningEffort)) {
+      const option = claudeOptions.find(candidate => candidate.value === model) || null;
+      if (reasoningEffort && !reasoningEffortIsSupported(claudeReasoningEffortOptions(option), reasoningEffort)) {
         await gateway.setConfig('reasoningEffort', null);
       }
+      if (sessionKey && !option?.supportsFastMode) gateway.setSessionFastMode(sessionKey, false);
       // always scoped to this chat. with no session row yet it rides along with the next message.
       gateway.selectModel(sessionKey || '', sessionId, model);
     } else {
@@ -203,7 +219,7 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
 
   const currentLabel = providerName === 'codex'
     ? labelForModel(codexOptions, codexModel) || labelForModel(CODEX_MODELS, codexModel)
-    : labelForModel(CLAUDE_MODELS, claudeModel);
+    : labelForModel(claudeOptions, claudeModel);
 
   const handleEffortChange = async (value: string) => {
     const v = value === 'off' ? null : value;
@@ -223,7 +239,7 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
         </SelectTrigger>
         <SelectContent position="popper" align="start" className="min-w-[180px]">
           <div className="px-2 py-1 text-[9px] font-semibold text-muted-foreground uppercase tracking-wider">Anthropic</div>
-          {CLAUDE_MODELS.map(m => (
+          {claudeOptions.map(m => (
             <SelectItem key={m.value} value={`claude:${m.value}`} className="text-xs">
               <span className="flex items-center gap-1.5">
                 <img src="./claude-icon.svg" alt="" className="w-3 h-3" />
@@ -251,7 +267,8 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
       {/* Effort selector — provider-aware icon and levels */}
       {(() => {
         const isClaude = providerName === 'claude';
-        const effortLevels = isClaude ? CLAUDE_AGENT_SDK_REASONING_EFFORTS : codexReasoningEffortOptions(selectedCodexOption);
+        const effortLevels = isClaude ? claudeReasoningEffortOptions(selectedClaudeOption) : codexReasoningEffortOptions(selectedCodexOption);
+        if (effortLevels.length === 0) return null;
         const effortValue = reasoningEffortIsSupported(effortLevels, reasoningEffort) ? reasoningEffort : 'off';
         const EffortIcon = isClaude ? Brain : Sparkles;
         return (
@@ -269,6 +286,31 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
               ))}
             </SelectContent>
           </Select>
+        );
+      })()}
+      {(() => {
+        // desktop chats only: the gateway ignores fast mode for channel and calendar sessions
+        if (providerName !== 'claude' || !selectedClaudeOption?.supportsFastMode) return null;
+        if (!sessionKey?.startsWith('desktop:')) return null;
+        const fastOn = gateway.getSessionFastMode(sessionKey);
+        const available = claudeCatalog?.fastMode.available !== false;
+        const title = !available
+          ? `Fast mode unavailable${claudeCatalog?.fastMode.reason ? ` (${claudeCatalog.fastMode.reason.replace(/_/g, ' ')})` : ''}`
+          : `Fast mode ${fastOn ? 'on' : 'off'}: up to 2.5x faster at 2x the price, billed to usage credits. Applies from your next message.`;
+        return (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            title={title}
+            aria-label={title}
+            aria-pressed={fastOn}
+            disabled={disabled || !available}
+            onClick={() => gateway.setSessionFastMode(sessionKey, !fastOn)}
+            className={cn('h-7 w-7 rounded-lg', fastOn ? 'text-amber-500 bg-amber-500/10 hover:bg-amber-500/20 hover:text-amber-500' : 'text-muted-foreground')}
+          >
+            <Zap className="w-3 h-3" fill={fastOn ? 'currentColor' : 'none'} />
+          </Button>
         );
       })()}
     </div>

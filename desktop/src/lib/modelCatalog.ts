@@ -11,6 +11,7 @@ export type ModelOption = {
   defaultReasoningEffort?: string | null;
   supportedReasoningEfforts?: string[];
   inputModalities?: string[];
+  supportsFastMode?: boolean;
 };
 
 export type ReasoningEffortOption = {
@@ -41,12 +42,15 @@ const CODEX_APP_SERVER_REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'm
 
 export const CLAUDE_MODELS: ModelOption[] = [
   { value: 'claude-opus-5-5', label: 'Opus 5.5', description: 'Released Sep 22, 2026. Fable 5.1-level on most agentic work at $4/$20 per MTok (60% cheaper), 30%+ faster output. 1M context, 128K output, adaptive thinking always on, default effort medium. Anthropic\'s recommended starting point. Default.' },
-  { value: 'claude-fable-5-1', label: 'Fable 5.1', description: 'Frontier reasoning and long-horizon agentic work. 1M context, 128K output, adaptive thinking always on. Cache reads are $0.25/MTok (0.025x input, vs 0.1x on every other model), so long cached sessions are far cheaper than Fable 5.' },
+  { value: 'claude-fable-5-2', label: 'Fable 5.2', description: 'Released Nov 9, 2026. Frontier reasoning and long-horizon agentic work at $8/$40 per MTok (20% cheaper than Fable 5.1). 1M context, 128K output, adaptive thinking always on, default effort high. Cache reads $0.20/MTok.' },
+  { value: 'claude-fable-5-1', label: 'Fable 5.1 (legacy)', description: 'Superseded by Fable 5.2, which is cheaper ($8/$40 vs $10/$50 per MTok). Cache reads $0.25/MTok.' },
   { value: 'claude-opus-5', label: 'Opus 5 (legacy)', description: 'Superseded by Opus 5.5, which is cheaper ($5/$25 vs $4/$20 per MTok) and stronger. 1M context, thinking on by default.' },
   { value: 'claude-fable-5', label: 'Fable 5 (legacy)', description: 'Superseded by Fable 5.1. Same $10/$50 per MTok but 4x more expensive cache reads ($1/MTok).' },
   { value: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Deep reasoning for hard, long-horizon tasks.' },
   { value: 'claude-opus-4-7', label: 'Opus 4.7' },
-  { value: 'claude-sonnet-5', label: 'Sonnet 5', description: 'Latest Sonnet, balanced speed/capability, half the price of Opus 5.5.' },
+  { value: 'claude-sonnet-5-5', label: 'Sonnet 5.5', description: 'Released Sep 28, 2026. Best mix of speed and intelligence at $2/$10 per MTok, half the price of Opus 5.5. 1M context, 128K output, adaptive thinking, default effort high. Cache reads $0.10/MTok.' },
+  { value: 'claude-haiku-5-5', label: 'Haiku 5.5', description: 'Released Oct 7, 2026. Fastest and cheapest: $0.10/$0.50 per MTok for prompts up to 100K tokens, $0.50/$2.50 above that. 1M context, 128K output, adaptive thinking, default effort medium.' },
+  { value: 'claude-sonnet-5', label: 'Sonnet 5 (legacy)', description: 'Superseded by Sonnet 5.5 at the same $2/$10 per MTok.' },
   { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
   { value: 'claude-haiku-4-5', label: 'Haiku 4.5' },
   { value: 'claude-opus-4-6', label: 'Opus 4.6 (legacy)' },
@@ -162,4 +166,46 @@ export function codexModelsForAuth(method?: string, currentValue?: string | null
   }
 
   return visible;
+}
+
+export type ClaudeCatalogModelLike = {
+  value: string;
+  resolvedModel?: string;
+  displayName: string;
+  description?: string;
+  supportedEffortLevels?: string[];
+  supportsFastMode?: boolean;
+};
+
+// the sdk lists family aliases (opus, sonnet, fable...) next to exact ids. chats pin exact ids,
+// so key every row on resolvedModel, drop the 'default' row and keep the first row per id.
+export function claudeModelsFromCatalog(catalog: ClaudeCatalogModelLike[] | null | undefined, currentValue?: string | null): ModelOption[] {
+  if (!catalog?.length) return CLAUDE_MODELS;
+  const seen = new Set<string>();
+  const options: ModelOption[] = [];
+  for (const row of catalog) {
+    if (row.value === 'default') continue;
+    const id = row.resolvedModel || row.value;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const known = CLAUDE_MODELS.find(option => option.value === id);
+    options.push({
+      value: id,
+      label: known?.label || row.displayName || id,
+      description: known?.description || row.description,
+      supportedReasoningEfforts: row.supportedEffortLevels ?? [],
+      supportsFastMode: !!row.supportsFastMode,
+    });
+  }
+  if (currentValue && !seen.has(currentValue)) {
+    const current = CLAUDE_MODELS.find(option => option.value === currentValue);
+    if (current) options.push(current);
+  }
+  return options;
+}
+
+// no catalog (offline, signed out): offer every level and let the cli clamp
+export function claudeReasoningEffortOptions(model?: ModelOption | null): ReasoningEffortOption[] {
+  if (!model?.supportedReasoningEfforts) return CLAUDE_AGENT_SDK_REASONING_EFFORTS;
+  return CLAUDE_AGENT_SDK_REASONING_EFFORTS.filter(effort => model.supportedReasoningEfforts!.includes(effort.value));
 }
