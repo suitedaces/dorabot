@@ -178,6 +178,9 @@ export async function launchBrowser(config: BrowserConfig = {}): Promise<void> {
   const args = [
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${profileDir}`,
+    // a user data dir with 2+ profiles opens the profile picker, which has no default
+    // browser context: connectOverCDP then dies on Browser.setDownloadBehavior
+    '--profile-directory=Default',
     '--no-first-run',
     '--no-default-browser-check',
   ];
