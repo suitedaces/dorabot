@@ -274,6 +274,7 @@ export function EditorGroupPanel({
                 onShellEvent={gateway.onShellEvent}
                 palette={palette}
                 focused={t.id === activeTab?.id}
+                connectionState={gateway.connectionState}
               />
             </div>
           ))}

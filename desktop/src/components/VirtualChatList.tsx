@@ -29,7 +29,7 @@ export function VirtualChatList<T>({
   const measureRafRef = useRef<number | null>(null);
   const observerRef = useRef<ResizeObserver | null>(null);
   const observedRef = useRef<Map<number, HTMLDivElement>>(new Map());
-  const totalHeightRef = useRef(0);
+  const rowRefs = useRef<Map<number, (el: HTMLDivElement | null) => void>>(new Map());
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [measureVersion, setMeasureVersion] = useState(0);
@@ -63,6 +63,11 @@ export function VirtualChatList<T>({
             heightsRef.current.set(idx, height);
             queueMeasureRecalc();
           }
+          // rows sit in normal flow, so a row that grows pushes the scroll height in the same
+          // frame. keep the bottom pinned now instead of on the next items change.
+          if (nearBottomRef.current && viewportRef.current) {
+            viewportRef.current.scrollTop = viewportRef.current.scrollHeight;
+          }
         }
       }
     });
@@ -88,7 +93,6 @@ export function VirtualChatList<T>({
     }
     return { heights, offsets, total };
   }, [items.length, estimateItemHeight, measureVersion]);
-  totalHeightRef.current = layout.total;
 
   const visibleRange = useMemo(() => {
     if (items.length === 0) return { start: 0, end: 0 };
@@ -112,12 +116,18 @@ export function VirtualChatList<T>({
     return { start, end };
   }, [items.length, layout.heights, layout.offsets, overscanPx, scrollTop, viewportHeight]);
 
+  const topSpacer = items.length ? layout.offsets[visibleRange.start] ?? 0 : 0;
+  const lastRendered = visibleRange.end - 1;
+  const bottomSpacer = lastRendered >= visibleRange.start
+    ? Math.max(0, layout.total - (layout.offsets[lastRendered] + layout.heights[lastRendered]))
+    : 0;
+
   const onScroll = useCallback(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
     const nextScrollTop = viewport.scrollTop;
     setScrollTop(prev => (prev === nextScrollTop ? prev : nextScrollTop));
-    const distanceFromBottom = totalHeightRef.current - (nextScrollTop + viewport.clientHeight);
+    const distanceFromBottom = viewport.scrollHeight - (nextScrollTop + viewport.clientHeight);
     nearBottomRef.current = distanceFromBottom <= bottomThresholdPx;
   }, [bottomThresholdPx]);
 
@@ -161,6 +171,16 @@ export function VirtualChatList<T>({
     return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner); };
   }, [hasItems]);
 
+  // one stable ref per index: an inline ref re-detaches and re-observes every row on every render
+  const rowRef = (index: number) => {
+    let ref = rowRefs.current.get(index);
+    if (!ref) {
+      ref = (el: HTMLDivElement | null) => attachRow(index, el);
+      rowRefs.current.set(index, ref);
+    }
+    return ref;
+  };
+
   const attachRow = useCallback((index: number, el: HTMLDivElement | null) => {
     const ro = observerRef.current;
     if (!ro) return;
@@ -189,26 +209,18 @@ export function VirtualChatList<T>({
       className={className || 'flex-1 overflow-auto'}
       onScroll={onScroll}
     >
-      <div style={{ position: 'relative', height: `${layout.total}px` }}>
-        {items.slice(visibleRange.start, visibleRange.end).map((item, offset) => {
-          const index = visibleRange.start + offset;
-          return (
-            <div
-              key={index}
-              ref={(el) => attachRow(index, el)}
-              className={itemClassName}
-              style={{
-                position: 'absolute',
-                left: 0,
-                right: 0,
-                top: `${layout.offsets[index]}px`,
-              }}
-            >
-              {renderItem(item, index)}
-            </div>
-          );
-        })}
-      </div>
+      {/* rendered rows stay in normal flow between two spacers, so a row that changes height
+          moves the rows below it in the same frame instead of a frame later */}
+      <div style={{ height: `${topSpacer}px` }} />
+      {items.slice(visibleRange.start, visibleRange.end).map((item, offset) => {
+        const index = visibleRange.start + offset;
+        return (
+          <div key={index} ref={rowRef(index)} className={itemClassName}>
+            {renderItem(item, index)}
+          </div>
+        );
+      })}
+      <div style={{ height: `${bottomSpacer}px` }} />
     </div>
   );
 }
