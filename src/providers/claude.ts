@@ -10,6 +10,7 @@ import { DORABOT_DIR, CLAUDE_KEY_PATH, CLAUDE_OAUTH_PATH } from '../workspace.js
 import { cleanEnvForSdk } from '../sdk-env.js';
 import { getSecretStorageBackend, keychainDelete, keychainLoad, keychainStore, type SecretStorageBackend } from '../auth/keychain.js';
 import { canReuseAccessTokenAfterRefreshFailure } from './oauth-refresh.js';
+import { claudeUsageFromRateLimitInfo, getProviderUsage, setProviderUsage } from './usage.js';
 
 // ── Node binary resolution ──────────────────────────────────────────
 // Electron apps get a minimal PATH. Resolve the full path to node once at startup
@@ -1165,6 +1166,9 @@ export class ClaudeProvider implements Provider {
         yield msg as ProviderMessage;
 
         const m = msg as Record<string, unknown>;
+        if (m.type === 'rate_limit_event') {
+          setProviderUsage(claudeUsageFromRateLimitInfo(m.rate_limit_info, getProviderUsage('claude')));
+        }
         if (m.type === 'system' && m.subtype === 'init' && m.session_id) {
           sessionId = m.session_id as string;
         }
