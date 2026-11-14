@@ -13,6 +13,8 @@ type Props = {
   onShellEvent?: (listener: (data: { shellId: string; type: string; data?: string }) => void) => () => void;
   palette?: Palette;
   focused?: boolean;
+  /** gateway connection state: the shell is re-claimed when it comes back, or the gateway kills it after 60s */
+  connectionState?: string;
 };
 
 function getTerminalTheme(palette?: Palette) {
@@ -24,7 +26,7 @@ function getTerminalTheme(palette?: Palette) {
   return getPalette(p).terminal;
 }
 
-export function TerminalView({ shellId, cwd, rpc, onShellEvent, palette, focused }: Props) {
+export function TerminalView({ shellId, cwd, rpc, onShellEvent, palette, focused, connectionState }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -120,8 +122,13 @@ export function TerminalView({ shellId, cwd, rpc, onShellEvent, palette, focused
     });
 
     // Send input to shell
+    let toldShellGone = false;
     const disposable = term.onData((data) => {
-      rpc('shell.write', { shellId, data }).catch(() => {});
+      rpc('shell.write', { shellId, data }).catch((err) => {
+        if (toldShellGone || !String(err).includes('shell not found')) return;
+        toldShellGone = true;
+        term.writeln('\r\n\x1b[90m[Shell ended. Open a new terminal tab.]\x1b[0m');
+      });
     });
 
     // Send resize events
@@ -134,6 +141,22 @@ export function TerminalView({ shellId, cwd, rpc, onShellEvent, palette, focused
       resizeDisposable.dispose();
     };
   }, [shellId, rpc]);
+
+  // after a reconnect the gateway holds this shell as orphaned and kills it after 60s
+  // unless a client claims it again. the terminal never unmounted, so skip the scrollback.
+  const wasConnectedRef = useRef(connectionState === 'connected');
+  useEffect(() => {
+    const isConnected = connectionState === 'connected';
+    const reconnected = isConnected && !wasConnectedRef.current && spawnedRef.current;
+    wasConnectedRef.current = isConnected;
+    if (!reconnected) return;
+    const term = terminalRef.current;
+    rpc('shell.spawn', { shellId, cols: term?.cols ?? 80, rows: term?.rows ?? 24, ...(cwd ? { cwd } : {}) }).then((res) => {
+      const result = res as { reclaimed?: boolean } | undefined;
+      if (!result?.reclaimed) term?.writeln('\r\n\x1b[90m[Shell restarted]\x1b[0m');
+      setConnected(true);
+    }).catch(() => {});
+  }, [connectionState, shellId, cwd, rpc]);
 
   // Receive output from shell
   useEffect(() => {

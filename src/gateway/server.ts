@@ -7100,6 +7100,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             shellSessionKeys.delete(shellId);
             pty.kill();
             shellProcesses.delete(shellId);
+            broadcast({ event: 'shell.data', data: { shellId, type: 'exit', code: null } });
           }
         }, SHELL_ORPHAN_GRACE_MS);
         timer.unref?.();
