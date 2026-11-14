@@ -1,7 +1,7 @@
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, basename, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import matter from 'gray-matter';
+import { parseFrontmatter } from '../frontmatter.js';
 import type { Config } from '../config.js';
 import { getPersistedSkillEnv } from './env.js';
 
@@ -124,7 +124,7 @@ export function loadSkill(skillPath: string): Skill | null {
 
   try {
     const content = readFileSync(skillMdPath, 'utf-8');
-    const { data, content: body } = matter(content);
+    const { data, content: body } = parseFrontmatter(content);
 
     const name = data.name || basename(skillDir);
     const description = data.description || '';

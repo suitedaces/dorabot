@@ -2,7 +2,7 @@
 import { ClaudeProvider } from '../dist/providers/claude.js';
 
 const from = process.argv[2] || 'claude-sonnet-5';
-const to = process.argv[3] || 'claude-fable-5-1';
+const to = process.argv[3] || 'claude-fable-5-2';
 const provider = new ClaudeProvider();
 
 const auth = await provider.getAuthStatus();

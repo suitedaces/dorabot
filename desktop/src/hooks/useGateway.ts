@@ -314,6 +314,11 @@ export type CodexModelCatalog = {
   source: 'app-server';
 };
 
+export type ClaudeModelCatalog = {
+  models: import('../lib/modelCatalog').ClaudeCatalogModelLike[];
+  fastMode: { available: boolean; reason?: string };
+};
+
 export type CodexAppServerSnapshot = CodexModelCatalog & {
   config: unknown;
   configLayers: unknown[] | null;
@@ -649,6 +654,9 @@ export function useGateway() {
   // the two values the user writes are authoritative in refs, updated synchronously on pick,
   // so a send in the same react batch still sees the pick. state above only drives rendering.
   const pendingModelRef = useRef<Record<string, string>>(pendingModelByKey);
+  // per-chat fast mode, in memory only: off again after a restart since it bills 2x
+  const [fastModeByKey, setFastModeByKey] = useState<Record<string, boolean>>({});
+  const fastModeRef = useRef<Record<string, boolean>>(fastModeByKey);
   const lastPickedRef = useRef<string>(lastPickedModel);
   // server-driven values, safe to mirror on render (nothing writes them synchronously)
   const modelSelectionRef = useRef({ modelsBySession, model });
@@ -1961,6 +1969,7 @@ export function useGateway() {
         chatId: cid,
         sessionKey: sk,
         model: effectiveModel || undefined,
+        fastMode: !!fastModeRef.current[sk],
       }) as { sessionKey?: string } | undefined;
       // the server pinned it to the session row; the pending pick has done its job
       if (pending[sk]) {
@@ -2142,6 +2151,13 @@ export function useGateway() {
     return lastPickedModel || model;
   }, [modelsBySession, pendingModelByKey, lastPickedModel, model]);
 
+  const setSessionFastMode = useCallback((sessionKey: string, on: boolean) => {
+    fastModeRef.current = { ...fastModeRef.current, [sessionKey]: on };
+    setFastModeByKey(fastModeRef.current);
+  }, []);
+
+  const getSessionFastMode = useCallback((sessionKey?: string) => !!(sessionKey && fastModeByKey[sessionKey]), [fastModeByKey]);
+
   const setConfig = useCallback(async (key: string, value: unknown) => {
     // optimistic local update
     setConfigData(prev => prev ? setNestedKey(prev, key, value) : prev);
@@ -2314,6 +2330,10 @@ export function useGateway() {
 
   const getProviderAuth = useCallback(async (provider: string) => {
     return await rpc('provider.auth.status', { provider }) as ProviderAuthInfo;
+  }, [rpc]);
+
+  const getClaudeModels = useCallback(async () => {
+    return await rpc('provider.claude.models') as ClaudeModelCatalog;
   }, [rpc]);
 
   const getCodexModels = useCallback(async () => {
@@ -2529,6 +2549,9 @@ export function useGateway() {
     checkProvider,
     getProviderAuth,
     getCodexModels,
+    getClaudeModels,
+    setSessionFastMode,
+    getSessionFastMode,
     getCodexAppServerSnapshot,
     codexAppServerRpc,
     detectProviders,
