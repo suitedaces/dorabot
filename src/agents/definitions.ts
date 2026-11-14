@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, basename } from 'node:path';
-import matter from 'gray-matter';
+import { parseFrontmatter } from '../frontmatter.js';
 import type { AgentDefinition, Config } from '../config.js';
 import { CLAUDE_AGENTS_DIR } from '../workspace.js';
 
@@ -165,7 +165,7 @@ function loadCCAgentsFromDir(dir: string): Record<string, AgentDefinition> {
 
     try {
       const content = readFileSync(mdPath, 'utf-8');
-      const { data, content: body } = matter(content);
+      const { data, content: body } = parseFrontmatter(content);
 
       const description = data.description || '';
       const prompt = body.trim();

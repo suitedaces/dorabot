@@ -8,7 +8,7 @@ import { homedir, tmpdir } from 'node:os';
 import { execSync, execFileSync } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { pipeline } from 'node:stream/promises';
-import matter from 'gray-matter';
+import { parseFrontmatter } from '../frontmatter.js';
 
 // Resolve a user-supplied path. Relative paths resolve against `base` when
 // provided (fall back to process.cwd() for legacy callers), NOT against the
@@ -118,7 +118,7 @@ function skillManagerEnv(): NodeJS.ProcessEnv {
 }
 
 function parseSkillMetadata(raw: string): { description: string; metadata: { requires?: { bins?: string[]; env?: string[] } } } {
-  const parsed = matter(raw);
+  const parsed = parseFrontmatter(raw);
   return {
     description: typeof parsed.data.description === 'string' ? parsed.data.description : '',
     metadata: (parsed.data.metadata as { requires?: { bins?: string[]; env?: string[] } } | undefined) || {},
