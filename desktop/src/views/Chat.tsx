@@ -708,7 +708,7 @@ function UserMessageItem({
   );
 }
 
-function AskUserQuestionPanel({
+export function AskUserQuestionPanel({
   question,
   onAnswer,
   onDismiss,
@@ -727,6 +727,16 @@ function AskUserQuestionPanel({
   const total = question.questions.length;
   const q = question.questions[step];
   const options = q?.options || [];
+
+  // keyboard: the panel takes focus when it appears and hands it back when it goes away
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [cursor, setCursor] = useState(0);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    panelRef.current?.focus();
+    return () => { if (previous?.isConnected) previous.focus(); };
+  }, [question.requestId]);
+  useEffect(() => { setCursor(0); }, [step]);
 
   const handleSelect = (questionText: string, label: string, multiSelect: boolean) => {
     if (multiSelect) {
@@ -763,6 +773,53 @@ function AskUserQuestionPanel({
     (useOther[q.question] && otherTexts[q.question]) || selections[q.question];
   const isLast = step === total - 1;
 
+  // option index options.length is "Other"
+  const choose = (index: number) => {
+    if (index < options.length) handleSelect(q.question, options[index].label, q.multiSelect);
+    else {
+      setUseOther(prev => ({ ...prev, [q.question]: true }));
+      setSelections(prev => ({ ...prev, [q.question]: '' }));
+    }
+  };
+  const confirm = () => {
+    if (streaming || !currentAnswered) return;
+    if (isLast) handleSubmit();
+    else setStep(s => s + 1);
+  };
+  const skip = () => {
+    if (streaming) return;
+    if (isLast) handleSubmit();
+    else setStep(s => s + 1);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    // typing in "Other", or the header/footer buttons, keep their own keys
+    if (target !== panelRef.current && target.dataset.questionOption == null) return;
+    const count = options.length + 1;
+    if (/^[1-9]$/.test(e.key) && Number(e.key) <= count) {
+      e.preventDefault();
+      setCursor(Number(e.key) - 1);
+      choose(Number(e.key) - 1);
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      setCursor(c => (c + (e.key === 'ArrowDown' ? 1 : count - 1)) % count);
+    } else if (e.key === ' ') {
+      e.preventDefault();
+      choose(cursor);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      confirm();
+    } else if ((e.key === 'Tab' && e.shiftKey) || e.key === 'ArrowLeft') {
+      if (step === 0) return;
+      e.preventDefault();
+      setStep(s => s - 1);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      skip();
+    }
+  };
+
   // Countdown timer (5 min timeout from gateway)
   const [secondsLeft, setSecondsLeft] = useState(300);
   const [collapsed, setCollapsed] = useState(false);
@@ -774,7 +831,7 @@ function AskUserQuestionPanel({
   const secs = secondsLeft % 60;
 
   return (
-    <div className="border-t border-primary bg-card shrink-0">
+    <div ref={panelRef} tabIndex={-1} onKeyDown={handleKeyDown} className="border-t border-primary bg-card shrink-0 outline-none">
       {/* Collapsible header - always visible */}
       <button
         className="flex items-center justify-between w-full px-3 py-1.5 hover:bg-secondary/30 transition-colors"
@@ -806,33 +863,44 @@ function AskUserQuestionPanel({
               return (
                 <button
                   key={oi}
+                  data-question-option={oi}
+                  aria-pressed={selected}
                   className={cn(
-                    'flex flex-col items-start px-2.5 py-1.5 rounded-md border text-left w-full transition-colors',
+                    'flex items-start gap-2 px-2.5 py-1.5 rounded-md border text-left w-full transition-colors',
                     selected
                       ? 'border-primary bg-primary/10'
-                      : 'border-border bg-background hover:border-primary/50'
+                      : 'border-border bg-background hover:border-primary/50',
+                    cursor === oi && 'ring-1 ring-primary/60'
                   )}
-                  onClick={() => handleSelect(q.question, opt.label, q.multiSelect)}
+                  onFocus={() => setCursor(oi)}
+                  onClick={() => { setCursor(oi); handleSelect(q.question, opt.label, q.multiSelect); }}
                 >
-                  <span className="text-xs font-medium">{opt.label}</span>
-                  {opt.description && <span className="text-[10px] text-muted-foreground leading-tight">{opt.description}</span>}
+                  {oi < 9 && <span className="text-[10px] text-muted-foreground/70 tabular-nums mt-px w-2 shrink-0">{oi + 1}</span>}
+                  <span className="flex flex-col items-start min-w-0">
+                    <span className="text-xs font-medium">{opt.label}</span>
+                    {opt.description && <span className="text-[10px] text-muted-foreground leading-tight">{opt.description}</span>}
+                  </span>
                 </button>
               );
             })}
             <button
+              data-question-option={options.length}
+              aria-pressed={!!useOther[q.question]}
               className={cn(
-                'flex flex-col items-start px-2.5 py-1.5 rounded-md border text-left w-full transition-colors',
+                'flex items-start gap-2 px-2.5 py-1.5 rounded-md border text-left w-full transition-colors',
                 useOther[q.question]
                   ? 'border-primary bg-primary/10'
-                  : 'border-border bg-background hover:border-primary/50'
+                  : 'border-border bg-background hover:border-primary/50',
+                cursor === options.length && 'ring-1 ring-primary/60'
               )}
-              onClick={() => {
-                setUseOther(prev => ({ ...prev, [q.question]: true }));
-                setSelections(prev => ({ ...prev, [q.question]: '' }));
-              }}
+              onFocus={() => setCursor(options.length)}
+              onClick={() => { setCursor(options.length); choose(options.length); }}
             >
-              <span className="text-xs font-medium">Other</span>
-              <span className="text-[10px] text-muted-foreground">type your own answer</span>
+              {options.length < 9 && <span className="text-[10px] text-muted-foreground/70 tabular-nums mt-px w-2 shrink-0">{options.length + 1}</span>}
+              <span className="flex flex-col items-start min-w-0">
+                <span className="text-xs font-medium">Other</span>
+                <span className="text-[10px] text-muted-foreground">type your own answer</span>
+              </span>
             </button>
           </div>
           {useOther[q.question] && (
@@ -841,7 +909,10 @@ function AskUserQuestionPanel({
               placeholder="type your answer..."
               value={otherTexts[q.question] || ''}
               onChange={e => setOtherTexts(prev => ({ ...prev, [q.question]: e.target.value }))}
-              onKeyDown={e => { if (e.key === 'Enter' && isLast) handleSubmit(); else if (e.key === 'Enter') setStep(s => s + 1); }}
+              onKeyDown={e => {
+                if (e.key === 'Enter') { e.preventDefault(); confirm(); }
+                else if (e.key === 'Escape') { e.preventDefault(); panelRef.current?.focus(); }
+              }}
               autoFocus
             />
           )}
@@ -856,7 +927,7 @@ function AskUserQuestionPanel({
                 <span className="text-[10px] text-muted-foreground animate-pulse">loading...</span>
               ) : (
                 <>
-                  <Button variant="outline" size="sm" className="h-6 text-[11px] px-2" onClick={isLast ? handleSubmit : () => setStep(s => s + 1)}>skip</Button>
+                  <Button variant="outline" size="sm" className="h-6 text-[11px] px-2" onClick={skip}>skip</Button>
                   {isLast ? (
                     <Button size="sm" className="h-6 text-[11px] px-2" onClick={handleSubmit} disabled={!currentAnswered}>answer</Button>
                   ) : (
