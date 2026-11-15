@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'node:http';
-import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, chmodSync, unlinkSync, realpathSync, watch, cpSync, createWriteStream, type FSWatcher } from 'node:fs';
+import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, chmodSync, unlinkSync, realpathSync, watch, cpSync, createWriteStream, openSync, readSync, closeSync, type FSWatcher } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import * as nodePty from 'node-pty';
 import { resolve as pathResolve, join, dirname, sep } from 'node:path';
@@ -5450,6 +5450,33 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           try {
             const content = readFileSync(resolved, 'utf-8');
             return { id, result: { content, path: resolved } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        // read a growing file from an offset (background task output, agent transcripts)
+        case 'fs.tail': {
+          const filePath = params?.path as string;
+          const offset = Math.max(0, Number(params?.offset) || 0);
+          if (!filePath) return { id, error: 'path required' };
+          const resolved = resolve(filePath, config.cwd || homedir());
+          if (!isPathAllowed(resolved, config)) return { id, error: `path not allowed: ${resolved}` };
+          try {
+            const size = statSync(resolved).size;
+            if (offset >= size) return { id, result: { content: '', size } };
+            const len = Math.min(size - offset, 1024 * 1024);
+            const fd = openSync(resolved, 'r');
+            try {
+              const buf = Buffer.alloc(len);
+              readSync(fd, buf, 0, len, offset);
+              // a capped read ends on a newline so no line (or utf-8 char) is split across reads
+              const nl = offset + len < size ? buf.lastIndexOf(10) : -1;
+              const end = nl >= 0 ? nl + 1 : len;
+              return { id, result: { content: buf.subarray(0, end).toString('utf-8'), size, next: offset + end } };
+            } finally {
+              closeSync(fd);
+            }
           } catch (err) {
             return { id, error: err instanceof Error ? err.message : String(err) };
           }
