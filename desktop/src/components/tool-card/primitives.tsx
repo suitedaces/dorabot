@@ -34,7 +34,9 @@ export const ToolCard = memo(function ToolCard({ icon: Icon, verb, target, facts
   const running = status === 'running';
   const now = useNow(running);
   const ms = startedAt ? (endedAt ?? (running ? now : undefined)) : undefined;
-  const duration = startedAt && ms ? formatDuration(ms - startedAt) : '';
+  // time only matters while it runs or when it was slow
+  const elapsed = startedAt && ms ? ms - startedAt : 0;
+  const duration = elapsed && (running || elapsed >= 3000) ? formatDuration(elapsed) : '';
   const hasBody = !!children;
 
   return (
@@ -45,16 +47,17 @@ export const ToolCard = memo(function ToolCard({ icon: Icon, verb, target, facts
         aria-expanded={hasBody ? open : undefined}
         onClick={hasBody ? onToggle : undefined}
         onKeyDown={e => { if (hasBody && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onToggle(); } }}
-        className={cn('group/row flex items-start gap-2 px-2 py-[5px] rounded-md text-xs min-w-0', hasBody && 'cursor-pointer hover:bg-secondary/50')}
+        className={cn('group/row flex flex-wrap @[420px]:flex-nowrap items-start gap-x-2 gap-y-0.5 px-2 py-[5px] rounded-md text-xs min-w-0', hasBody && 'cursor-pointer hover:bg-secondary/50')}
       >
         <Icon className={cn('w-3.5 h-3.5 mt-[2px] shrink-0', status === 'error' ? 'text-destructive' : 'text-muted-foreground')} />
-        <span className={cn('font-medium shrink-0', dim ? 'text-muted-foreground font-normal' : 'text-foreground')}>{verb}</span>
-        <span className="text-muted-foreground text-[11.5px] min-w-0 flex-1 [overflow-wrap:anywhere] line-clamp-2" title={target}>
+        <span className={cn('font-medium shrink-0 flex-1 @[420px]:flex-none', dim ? 'text-muted-foreground font-normal' : 'text-foreground')}>{verb}</span>
+        <span className="text-muted-foreground text-[11.5px] min-w-0 flex-1 [overflow-wrap:anywhere] line-clamp-2 order-last basis-full pl-[22px] @[420px]:order-none @[420px]:basis-auto @[420px]:pl-0" title={target}>
           {first}
           {more > 0 && <span className="ml-1.5 text-[10px] px-1 py-px rounded border border-border/60 whitespace-nowrap">+{more} line{more === 1 ? '' : 's'}</span>}
         </span>
         {facts && <span className="text-muted-foreground text-[11px] whitespace-nowrap tabular-nums shrink-0 mt-px">{facts}</span>}
-        {actions && actions.length > 0 && (
+        {/* rows without a body keep their actions in the header; otherwise they sit on the body */}
+        {!hasBody && actions && actions.length > 0 && (
           <span className="hidden group-hover/row:flex group-focus-within/row:flex items-center gap-0.5 shrink-0 -my-0.5" onClick={e => e.stopPropagation()}>
             {actions.map(a => <ActionButton key={a.label} action={a} />)}
           </span>
@@ -64,7 +67,16 @@ export const ToolCard = memo(function ToolCard({ icon: Icon, verb, target, facts
         <ChevronRight className={cn('w-3 h-3 mt-[3px] shrink-0 text-muted-foreground/70 transition-transform', open && 'rotate-90', !hasBody && 'invisible')} />
       </div>
       {subline && <div className="pl-[30px] pr-2 -mt-0.5 pb-1 text-[11px] text-muted-foreground break-words">{subline}</div>}
-      {open && hasBody && <div className="border-t border-border/40 min-w-0">{children}</div>}
+      {open && hasBody && (
+        <div className="relative group/body border-t border-border/40 min-w-0">
+          {children}
+          {actions && actions.length > 0 && (
+            <div className="absolute top-1 right-9 z-10 flex items-center gap-0.5 rounded-md bg-background/85 backdrop-blur-sm opacity-0 group-hover/body:opacity-100 focus-within:opacity-100 transition-opacity">
+              {actions.map(a => <ActionButton key={a.label} action={a} />)}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 });
@@ -89,12 +101,12 @@ function ActionButton({ action: a }: { action: CardAction }) {
   );
 }
 
+// success is the default and needs no mark; only running and failed take space
 function StatusIcon({ status }: { status: CardStatus }) {
   const cls = 'w-3.5 h-3.5 shrink-0 mt-[2px]';
   if (status === 'running') return <Loader2 className={cn(cls, 'animate-spin text-muted-foreground')} />;
-  if (status === 'ok') return <Check className={cn(cls, 'text-success')} />;
   if (status === 'error') return <X className={cn(cls, 'text-destructive')} />;
-  return <span className={cls} />;
+  return null;
 }
 
 export function Tag({ tone = 'muted', children }: { tone?: 'muted' | 'run' | 'ok' | 'warn' | 'bad'; children: ReactNode }) {

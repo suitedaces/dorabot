@@ -19,7 +19,7 @@ describe('noticeFromSystem', () => {
   it('api retries share a key so repeats collapse into one row', () => {
     const n = noticeFromSystem({ type: 'system', subtype: 'api_retry', attempt: 2, max_retries: 10, retry_delay_ms: 4000, error_status: 529, error: 'overloaded' });
     expect(n?.key).toBe('api_retry');
-    expect(n?.text).toBe('API error 529 (overloaded): retrying, attempt 2 of 10, in 4s');
+    expect(n?.text).toBe('API overloaded (529), retrying');
   });
 
   it('informational notices show unless they are transcript-only', () => {
@@ -32,9 +32,9 @@ describe('noticeFromSystem', () => {
     expect(noticeFromSystem({ type: 'system', subtype: 'task_progress' })).toBeNull();
   });
 
-  it('compaction says how much context was dropped', () => {
+  it('compaction says it happened, without token numbers', () => {
     const n = noticeFromSystem({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 967665, post_tokens: 20982, duration_ms: 111057 } });
-    expect(n?.text).toBe('Context was full, so it was compacted: 968k → 21k tokens · 111s');
+    expect(n?.text).toBe('Context was full, so it was compacted');
   });
 
   it('shipped code links to the pull request', () => {
@@ -58,7 +58,7 @@ describe('noticeFromSystem', () => {
   it("a subagent's api retry comes from its progress heartbeat", () => {
     const n = noticeFromSystem({ type: 'tool_progress', tool_use_id: 't1', subagent_retry: { agent_id: 'a', attempt: 1, max_retries: 10, retry_delay_ms: 2000, error_status: 529 } });
     expect(n?.key).toBe('subagent_retry:t1');
-    expect(n?.text).toBe('Subagent API error 529: retrying, attempt 1 of 10, in 2s');
+    expect(n?.text).toBe('Subagent API error (529), retrying');
   });
 
   it('saved files and recalled memories', () => {

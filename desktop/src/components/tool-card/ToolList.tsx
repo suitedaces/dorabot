@@ -35,7 +35,7 @@ export function buildDisplay(items: ChatItem[]): DisplayItem[] {
   return out;
 }
 
-export type ListCtx = Omit<ToolCtx, 'live' | 'depth' | 'renderNested'> & { liveId: string | null; thinkingTokens?: number };
+export type ListCtx = Omit<ToolCtx, 'live' | 'depth' | 'renderNested'> & { liveId: string | null };
 
 const KIND_LABEL: Record<Kind, [string, string]> = {
   command: ['Ran 1 command', 'Ran % commands'],
@@ -108,7 +108,7 @@ export const NoticeRow = memo(function NoticeRow({ item }: { item: NoticeItem })
   );
 });
 
-export const ThinkingRow = memo(function ThinkingRow({ item, tokens }: { item: ThinkingItem; tokens?: number }) {
+export const ThinkingRow = memo(function ThinkingRow({ item }: { item: ThinkingItem }) {
   const [open, setOpen] = useState(false);
   const text = item.content?.trim() || '';
   if (!text && !item.streaming) return null;
@@ -120,7 +120,6 @@ export const ThinkingRow = memo(function ThinkingRow({ item, tokens }: { item: T
       icon={Brain}
       verb={item.streaming ? 'Thinking' : 'Thought'}
       target={target}
-      facts={item.streaming && tokens ? `~${tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : tokens} tokens` : undefined}
       status="none"
       dim
       open={open}
@@ -137,7 +136,7 @@ function ctxFor(base: ListCtx, item: ActivityItem, depth: number, renderNested: 
 }
 
 function renderRow(item: ActivityItem, base: ListCtx, depth: number, renderNested: ToolCtx['renderNested'], key: string | number) {
-  if (item.type === 'thinking') return <ThinkingRow key={key} item={item} tokens={item.streaming ? base.thinkingTokens : undefined} />;
+  if (item.type === 'thinking') return <ThinkingRow key={key} item={item} />;
   if (item.type === 'notice') return <NoticeRow key={key} item={item} />;
   return <ToolRow key={key} item={item} ctx={ctxFor(base, item, depth, renderNested)} />;
 }
@@ -173,6 +172,14 @@ export const ActivityGroup = memo(function ActivityGroup({ items, base, active }
   if (visible.length === 0) return null;
   if (visible.length === 1) return renderRow(visible[0], base, 0, nested, 0);
 
+  // stays open for the whole turn, but only says it is working while something in it runs
+  // background tasks keep running after their call returns; they are not this group's work
+  const busy = active && visible.some(it => {
+    if (it.type === 'thinking') return !!it.streaming;
+    if (it.type !== 'tool_use') return false;
+    const spec = specs.get(it.id);
+    return spec?.status === 'running' && !spec.background;
+  });
   const counts = new Map<Kind, number>();
   let failed = 0;
   for (const s of specs.values()) {
@@ -195,7 +202,8 @@ export const ActivityGroup = memo(function ActivityGroup({ items, base, active }
   if (stops) parts.unshift(<span key="s" className="text-warning">{stops} safety stop{stops === 1 ? '' : 's'}</span>);
   const first = visible[0].timestamp;
   const lastEnd = Math.max(...visible.map(it => (it.type === 'tool_use' ? it.endedAt ?? it.timestamp : it.timestamp)));
-  const duration = formatDuration((active ? now : lastEnd) - first);
+  const span = (busy ? now : lastEnd) - first;
+  const duration = busy || span >= 3000 ? formatDuration(span) : '';
   const open = manual ?? active;
   const showFilters = visible.length > 20;
   const shown = filter === 'all' ? visible : visible.filter(it => {
@@ -207,9 +215,9 @@ export const ActivityGroup = memo(function ActivityGroup({ items, base, active }
   return (
     <div className="rounded-lg border border-border/50 bg-[var(--stream-base)] min-w-0">
       <button type="button" data-activity-group onClick={() => setManual(!open)} aria-expanded={open} className="w-full flex items-start gap-2 px-2.5 py-1.5 text-xs text-left hover:bg-secondary/40 rounded-lg">
-        {active ? <Loader2 className="w-3.5 h-3.5 mt-[2px] animate-spin text-muted-foreground shrink-0" /> : <ChevronRight className={cn('w-3.5 h-3.5 mt-[2px] text-muted-foreground shrink-0 transition-transform', open && 'rotate-90')} />}
+        {busy ? <Loader2 className="w-3.5 h-3.5 mt-[2px] animate-spin text-muted-foreground shrink-0" /> : <ChevronRight className={cn('w-3.5 h-3.5 mt-[2px] text-muted-foreground shrink-0 transition-transform', open && 'rotate-90')} />}
         <span className="flex-1 min-w-0 leading-relaxed text-muted-foreground">
-          {active && <span className="compacting-sheen font-medium mr-2">Working</span>}
+          {busy && <span className="compacting-sheen font-medium mr-2">Working</span>}
           {parts.map((p, i) => <span key={i}>{i > 0 && <span className="mx-1.5 text-muted-foreground/50">·</span>}{p}</span>)}
         </span>
         <span className="text-[11px] text-muted-foreground tabular-nums shrink-0 mt-px">{duration}</span>

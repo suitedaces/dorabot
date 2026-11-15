@@ -1091,6 +1091,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   liveImagesRef.current = attachedImages;
   const isRunning = agentStatus !== 'idle';
   const [approvalsFolded, setApprovalsFolded] = useState(false);
+  const [queuedOpen, setQueuedOpen] = useState(false);
   const isEmpty = chatItems.length === 0;
 
   // Derive elicitation and worktree state from active session
@@ -1650,7 +1651,6 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   }, [chatItems, isRunning, lastUserIdx]);
   const bgTasks = (sessionKey && gateway.backgroundTasks[sessionKey]) || EMPTY_TASKS;
   const taskProgress = activeState?.taskProgress || EMPTY_PROGRESS;
-  const thinkingTokens = activeState?.thinkingTokens;
   const suggestion = activeState?.suggestion;
   const listBase = useMemo(() => {
     const progressByToolUse = new Map<string, TaskProgress>();
@@ -1670,8 +1670,8 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         tail: async (path: string, offset: number) => await gateway.rpc('fs.tail', { path, offset }) as { content: string; size: number; next?: number },
       },
     };
-    return { current: { ...base, turnRunning: true, thinkingTokens } as ListCtx, past: { ...base, liveId: null, turnRunning: false } as ListCtx };
-  }, [liveId, thinkingTokens, bgTasks, taskProgress, onOpenFile, onOpenDiff, onOpenResearch, onOpenTask, onOpenTerminal, sessionKey, gateway.stopTask, gateway.rpc]);
+    return { current: { ...base, turnRunning: true } as ListCtx, past: { ...base, liveId: null, turnRunning: false } as ListCtx };
+  }, [liveId, bgTasks, taskProgress, onOpenFile, onOpenDiff, onOpenResearch, onOpenTask, onOpenTerminal, sessionKey, gateway.stopTask, gateway.rpc]);
 
   const jumpToTool = useCallback((toolUseId: string) => {
     document.getElementById(`tool-${toolUseId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -1991,6 +1991,28 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             gateway.rpc('chat.dismissElicitation', { elicitationId: pendingElicitation.elicitationId, sessionKey }).catch(() => {});
           }}
         />
+      )}
+
+      {/* messages sent mid-turn: they start the next turn. one line, opens to show them */}
+      {sessionKey && (activeState?.queued?.length ?? 0) > 0 && (
+        <div className="px-4 pt-2 shrink-0">
+          <button type="button" onClick={() => setQueuedOpen(v => !v)} className="w-full flex items-center gap-2 px-2.5 py-1 rounded-md text-[11px] text-muted-foreground hover:bg-secondary/50">
+            <ChevronRight className={cn('w-3 h-3 transition-transform', queuedOpen && 'rotate-90')} />
+            {activeState!.queued!.length} queued
+            <span className="text-muted-foreground/70">· {isRunning ? 'starts after this turn' : 'not sent: the run stopped'}</span>
+          </button>
+          {queuedOpen && activeState!.queued!.map((q, i) => (
+            <div key={q.timestamp + ':' + i} className="flex items-start gap-2 pl-7 pr-2 py-1 text-[12px]">
+              <span className="flex-1 min-w-0 whitespace-pre-wrap break-words text-foreground/90">{q.content}</span>
+              {!isRunning && (
+                <>
+                  <button type="button" className="text-[11px] text-primary hover:underline shrink-0" onClick={() => { const t = gateway.takeQueued(sessionKey, i); if (t) gateway.sendMessage(t.content, sessionKey, undefined, t.images); }}>send</button>
+                  <button type="button" className="text-[11px] text-muted-foreground hover:text-foreground shrink-0" onClick={() => { const t = gateway.takeQueued(sessionKey, i); if (t) handleInputChange(t.content, t.content.length); }}>edit</button>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
       )}
 
       {/* approvals: they need an answer, so they stay above the composer, but fold to one line */}

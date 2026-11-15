@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ChatItem } from '@/hooks/useGateway';
-import { buildDisplay } from './ToolList';
+import { ActivityGroup, buildDisplay, type ListCtx } from './ToolList';
 import { describeTool, type ToolCtx, type ToolItem } from './tools';
 
 const ctx: ToolCtx = { live: false, turnRunning: false, backgroundRunning: new Set(), progressByToolUse: new Map(), depth: 0 };
@@ -52,11 +52,12 @@ describe('describeTool', () => {
     expect(describeTool(item, ctx).status).toBe('stopped');
   });
 
-  it('keeps every websearch source, from meta or from the result text', () => {
+  it('keeps every websearch source, from meta or from the result text, in the body', () => {
     const links = Array.from({ length: 19 }, (_, i) => ({ title: `t${i}`, url: `https://s${i}.example.com/a` }));
-    expect(facts(tool('WebSearch', { query: 'q' }, { output: 'summary', meta: { links } }))).toBe('19 sources');
+    const body = (item: ToolItem) => renderToStaticMarkup(<>{describeTool(item, ctx).body!()}</>);
+    expect(body(tool('WebSearch', { query: 'q' }, { output: 'summary', meta: { links } })).match(/<a /g)).toHaveLength(19);
     const text = `Web search results for query: "q"\n\nLinks: ${JSON.stringify(links.slice(0, 12))}\n\nsummary`;
-    expect(facts(tool('WebSearch', { query: 'q' }, { output: text }))).toBe('12 sources');
+    expect(body(tool('WebSearch', { query: 'q' }, { output: text })).match(/<a /g)).toHaveLength(12);
   });
 
   it('counts edit lines from the sdk patch', () => {
@@ -67,11 +68,11 @@ describe('describeTool', () => {
     expect(facts(item)).toBe('+2 −1');
   });
 
-  it('shows the read range and total from the file facts', () => {
+  it('shows the read range in the target and no line-count noise', () => {
     const item = tool('Read', { file_path: '/a.ts' }, { output: '40\tx\n41\ty', meta: { type: 'text', file: { filePath: '/a.ts', startLine: 40, numLines: 2, totalLines: 90 } } });
     const spec = describeTool(item, ctx);
     expect(spec.target).toBe('/a.ts  lines 40-41');
-    expect(facts(item)).toBe('2 of 90 lines');
+    expect(facts(item)).toBe('');
   });
 
   it('a background command is running while its task is', () => {
@@ -87,3 +88,28 @@ describe('describeTool', () => {
     expect(renderToStaticMarkup(<>{spec.body!()}</>)).toContain('<table');
   });
 });
+
+describe('ActivityGroup header', () => {
+  const base: ListCtx = { liveId: null, turnRunning: true, backgroundRunning: new Set(['b1']), progressByToolUse: new Map() };
+  const header = (items: any[], active: boolean) => renderToStaticMarkup(<ActivityGroup items={items} base={base} active={active} />).split('</button>')[0];
+
+  it('does not say working when the last thing is a finished thought, even with a background task still running', () => {
+    const items = [
+      tool('Bash', { command: 'sleep 600', run_in_background: true }, { output: 'Command running in background with ID: b1.', meta: { backgroundTaskId: 'b1' } }),
+      tool('Read', { file_path: '/a.ts' }, { output: '1\tx' }),
+      { type: 'thinking', content: 'Done reading.', streaming: false, timestamp: 2 },
+    ];
+    expect(header(items, true)).not.toContain('Working');
+  });
+
+  it('says working while a tool in it runs', () => {
+    const items = [tool('Read', { file_path: '/a.ts' }, { output: '1\tx' }), tool('Bash', { command: 'make' })];
+    expect(header(items, true)).toContain('Working');
+  });
+
+  it('says working while it is thinking', () => {
+    const items = [tool('Read', { file_path: '/a.ts' }, { output: '1\tx' }), { type: 'thinking', content: 'hm', streaming: true, timestamp: 2 }];
+    expect(header(items, true)).toContain('Working');
+  });
+});
+

@@ -42,13 +42,13 @@ export type CardSpec = {
   dim?: boolean;
   kind: Kind;
   endedAt?: number;       // overrides the tool's own end (background tasks end long after the call)
+  background?: boolean;   // runs past its turn; the "N running" pill tracks it, not the group
 };
 
 // what the turn summary counts
 export type Kind = 'command' | 'read' | 'edit' | 'write' | 'search' | 'fetch' | 'agent' | 'browser' | 'plan' | 'other';
 
 const copy = (text: string) => { navigator.clipboard?.writeText(text).catch(() => {}); };
-const countLines = (s: string) => (s ? s.split('\n').length : 0);
 
 function firstLine(s: string) { return (s || '').split('\n')[0]; }
 
@@ -287,11 +287,12 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       const prog = ctx.progressByToolUse.get(item.id);
       const ended = (prog && prog.status !== 'running' ? prog.status : undefined) ?? (item.meta?.bgStatus as string | undefined);
       const bgRunning = bg && !ended && (prog ? prog.status === 'running' : !!bgId && ctx.backgroundRunning.has(bgId));
-      const endTag = ended === 'failed' ? <Tag tone="bad">failed</Tag> : ended === 'killed' || ended === 'stopped' ? <Tag tone="warn">stopped</Tag> : <Tag tone="ok">done</Tag>;
+      // success needs no label
+      const endTag = ended === 'failed' ? <Tag tone="bad">failed</Tag> : ended === 'killed' || ended === 'stopped' ? <Tag tone="warn">stopped</Tag> : undefined;
       const desc = input.description ? String(input.description) : '';
       if (bg) {
         return {
-          kind: 'command', icon: SquareTerminal, verb: 'Background', target: desc ? `${desc}\n${command}` : command,
+          kind: 'command', background: true, icon: SquareTerminal, verb: 'Background', target: desc ? `${desc}\n${command}` : command,
           facts: running ? undefined : bgRunning ? <Tag tone="run">running</Tag> : tag ?? endTag,
           status: bgRunning ? 'running' : ended === 'failed' ? 'error' : ended === 'killed' || ended === 'stopped' ? 'stopped' : o.status,
           endedAt: bgRunning ? undefined : prog?.endedAt ?? (item.meta?.bgEndedAt as number | undefined),
@@ -304,7 +305,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       }
       return {
         kind: 'command', icon: Terminal, verb: verbFor(running, 'Running', 'Ran'), target: command,
-        facts: tag ?? (out && !running ? `${countLines(out)} lines` : undefined),
+        facts: tag,
         status: o.status,
         actions: [
           { icon: Copy, label: 'copy command', onClick: () => copy(command) },
@@ -321,8 +322,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       const parsed = !err ? parseReadOutput(out) : null;
       const isImage = !!item.imageData || f?.type === 'image' || item.meta?.type === 'image';
       const range = f?.startLine && f?.numLines ? `lines ${f.startLine}-${f.startLine + f.numLines - 1}` : input.offset ? `from line ${input.offset}` : '';
-      const dims = f?.dimensions || (f as any)?.originalSize;
-      const facts = tag ?? (isImage ? (dims?.originalWidth ? `${dims.originalWidth}×${dims.originalHeight}` : 'image') : f?.totalLines ? `${f.numLines ?? parsed?.lines.length} of ${f.totalLines} lines` : parsed ? `${parsed.lines.length} lines` : undefined);
+      const facts = tag;
       return {
         kind: 'read', icon: isImage ? ImageIcon : FileText, verb: verbFor(running, 'Reading', 'Read'), target: range ? `${path}  ${range}` : path, facts, status: o.status,
         actions: open?.file && path ? [{ icon: ExternalLink, label: 'open file', onClick: () => open.file!(path) }] : [],
@@ -361,7 +361,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       const replaced = item.meta?.type === 'update';
       return {
         kind: 'write', icon: FilePlus, verb: verbFor(running, 'Writing', err ? 'Write failed' : replaced ? 'Rewrote' : 'Wrote'), target: path,
-        facts: tag ?? `${lines.length} lines`, status: o.status,
+        facts: tag, status: o.status,
         actions: open?.file && path && !running ? [{ icon: ExternalLink, label: 'open file', onClick: () => open.file!(path) }] : [],
         body: () => (
           <ScrollBox live={ctx.live} follow={content}>
@@ -382,7 +382,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       const chips = ['glob', 'type', 'output_mode', '-i', '-n', 'multiline'].filter(k => input[k] != null && input[k] !== false).map(k => `${k}${input[k] === true ? '' : `: ${input[k]}`}`);
       return {
         kind: 'search', icon: isGlob ? FolderSearch : Search, verb: verbFor(running, 'Searching', isGlob ? 'Found' : 'Searched'), target: pattern + where,
-        facts: tag ?? (header ? `${header[1]} ${header[2]}` : items.length ? `${items.length} ${isGlob ? 'files' : 'lines'}` : 'nothing'),
+        facts: tag ?? (!running && !items.length ? <Tag>no matches</Tag> : undefined),
         status: o.status,
         body: out ? () => (
           <ScrollBox follow={0}>
@@ -406,21 +406,19 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
 
     case 'WebSearch': {
       const links = linksFrom(item);
-      const dur = typeof item.meta?.durationSeconds === 'number' ? item.meta.durationSeconds : undefined;
       return {
         kind: 'search', icon: Globe, verb: verbFor(running, 'Searching web', 'Searched web'), target: String(input.query || ''),
-        facts: tag ?? (links.length ? `${links.length} sources` : dur ? undefined : undefined), status: o.status,
+        facts: tag, status: o.status,
         body: out ? () => <SearchBody output={out} links={links} /> : undefined,
       };
     }
 
     case 'WebFetch': {
       const url = String(input.url || item.meta?.url || '');
-      const code = item.meta?.code, bytes = item.meta?.bytes;
-      const kb = typeof bytes === 'number' ? (bytes > 1024 * 1024 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`) : '';
+      const code = item.meta?.code;
       return {
         kind: 'fetch', icon: Globe, verb: verbFor(running, 'Fetching', err ? 'Fetch failed' : 'Fetched'), target: url.replace(/^https?:\/\/(www\.)?/, ''),
-        facts: tag ?? (code ? `${code}${kb ? ` · ${kb}` : ''}` : undefined), status: o.status,
+        facts: tag ?? (typeof code === 'number' && (code < 200 || code >= 300) ? <Tag tone="bad">HTTP {code}</Tag> : undefined), status: o.status,
         actions: url && open?.url ? [{ icon: ExternalLink, label: 'open page', onClick: () => open.url!(url) }] : [],
         body: out || input.prompt ? () => (
           <ScrollBox follow={0} className="max-h-[460px]">
@@ -581,20 +579,18 @@ function describeAgent(item: ToolItem, input: Record<string, any>, ctx: ToolCtx,
   const meta = item.meta || {};
   const bg = !!input.run_in_background || meta.isAsync === true;
   const subs = (item.subItems || []).filter(s => s.type === 'tool_use' || s.type === 'text' || s.type === 'thinking');
-  const calls = progress?.toolCount ?? subs.filter(s => s.type === 'tool_use').length;
   const ended = (progress && progress.status !== 'running' ? progress.status : undefined) ?? (meta.bgStatus as string | undefined);
   const bgRunning = bg && !ended && (progress ? progress.status === 'running' : ctx.backgroundRunning.has(String(meta.agentId || '')));
   const status: CardStatus = bg
     ? (bgRunning ? 'running' : ended === 'failed' ? 'error' : ended === 'killed' || ended === 'stopped' ? 'stopped' : o.status === 'running' ? 'running' : o.status)
     : o.status;
   const endTag = bg && !bgRunning && ended ? (ended === 'failed' ? <Tag tone="bad">failed</Tag> : ended === 'killed' || ended === 'stopped' ? <Tag tone="warn">stopped</Tag> : null) : null;
-  const tokens = progress && progress.inputTokens + progress.outputTokens > 0 ? `${Math.round((progress.inputTokens + progress.outputTokens) / 1000)}k tokens` : '';
-  const facts = tag ?? endTag ?? [calls ? `${calls} calls` : '', tokens].filter(Boolean).join(' · ');
+  const facts = tag ?? endTag;
   const outputFile = typeof meta.outputFile === 'string' ? meta.outputFile : undefined;
   const taskId = progress?.taskId || (typeof meta.agentId === 'string' ? meta.agentId : undefined);
   return {
-    kind: 'agent', icon: Bot, verb: bg ? 'Background agent' : 'Agent', target: description,
-    facts: facts || undefined, status,
+    kind: 'agent', background: bg, icon: Bot, verb: bg ? 'Background agent' : 'Agent', target: description,
+    facts, status,
     endedAt: bg && !bgRunning ? progress?.endedAt ?? (meta.bgEndedAt as number | undefined) : undefined,
     actions: [
       ...(outputFile && ctx.open?.file ? [{ icon: ExternalLink, label: 'open transcript', onClick: () => ctx.open!.file!(outputFile) }] : []),

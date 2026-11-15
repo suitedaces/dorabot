@@ -92,7 +92,6 @@ export function RunningPill({ tasks, progress, onStop, onJump }: {
                     <div className="text-[11.5px] text-foreground break-words">{t.description}</div>
                     {p?.summary && <div className="text-[10.5px] text-muted-foreground break-words">now: {p.summary}</div>}
                   </button>
-                  {p && p.toolCount > 0 && <span className="text-[10.5px] text-muted-foreground tabular-nums whitespace-nowrap mt-0.5">{p.toolCount} calls</span>}
                   <button type="button" title="stop" onClick={() => onStop(t.taskId)} className="p-0.5 mt-0.5 rounded text-muted-foreground opacity-0 group-hover/task:opacity-100 hover:text-destructive hover:bg-destructive/10">
                     <X className="w-3 h-3" />
                   </button>

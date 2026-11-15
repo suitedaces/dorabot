@@ -2088,10 +2088,11 @@ export class CodexProvider implements Provider {
       if (opts.fastMode && !fastTier) console.log(`[codex] fast mode requested but ${model} has no fast tier`);
       const turnTier = opts.fastMode === false ? 'default' : fastTier;
 
-      const startTurn = async () => {
+      const queuedInputs: Array<{ text: string; images?: ProviderRunOptions['images']; inputItems?: ProviderInputItem[] }> = [];
+      const startTurn = async (turnInput = input) => {
         const turnResult = await client!.request('turn/start', {
           threadId: sessionId,
-          input,
+          input: turnInput,
           cwd: opts.cwd,
           approvalPolicy: approvalPolicy as any,
           sandboxPolicy,
@@ -2111,20 +2112,8 @@ export class CodexProvider implements Provider {
         get active() { return active; },
         inject(text: string, images?: ProviderRunOptions['images'], inputItems?: ProviderInputItem[]): boolean {
           if (!active || !client || !currentTurnId) return false;
-          resolveCodexStructuredInputItems(client, text, opts.cwd, inputItems)
-            .then(items => prepareCodexInput(text, images, items))
-            .then(({ input: steerInput, cleanup: steerCleanup }) => {
-              pendingInputCleanups.add(steerCleanup);
-              return client!.request('turn/steer', {
-                threadId: sessionId,
-                expectedTurnId: currentTurnId,
-                input: steerInput,
-              }).finally(() => {
-                steerCleanup();
-                pendingInputCleanups.delete(steerCleanup);
-              });
-            })
-            .catch(err => console.error('[codex] failed to steer turn:', err));
+          // a message sent while a turn runs waits for it to end and starts the next turn
+          queuedInputs.push({ text, images, inputItems });
           return true;
         },
         close() {
@@ -2168,6 +2157,20 @@ export class CodexProvider implements Provider {
               break;
             }
           }
+          if (queuedInputs.length && !abort.signal.aborted) {
+            const batch = queuedInputs.splice(0);
+            const text = batch.map(b => b.text).join('\n\n');
+            const images = batch.flatMap(b => b.images || []);
+            const items = await resolveCodexStructuredInputItems(client, text, opts.cwd, batch.flatMap(b => b.inputItems || []));
+            const next = await prepareCodexInput(text, images.length ? images : undefined, items);
+            pendingInputCleanups.add(next.cleanup);
+            turnDone = false;
+            lastAgentMessage = '';
+            await startTurn(next.input);
+            continue;
+          }
+          // nothing queued: this run is over, later messages start a new one
+          active = false;
           break;
         }
       }
