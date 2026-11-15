@@ -361,19 +361,28 @@ export function SettingsView({ gateway }: Props) {
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="text-xs font-medium">Thinking Display</div>
-                    <div className="text-[10px] text-muted-foreground">Show reasoning summaries (Opus 4.7, adaptive thinking only)</div>
+                    <div className="text-[10px] text-muted-foreground">Readable summaries of the model's reasoning. Same cost either way.</div>
                   </div>
                   <Select
-                    value={cfg?.thinkingDisplay || 'omitted'}
-                    onValueChange={v => set('thinkingDisplay', v === 'omitted' ? null : v)}
+                    value={cfg?.thinkingDisplay || 'summarized'}
+                    onValueChange={v => set('thinkingDisplay', v === 'summarized' ? null : v)}
                     disabled={disabled}
                   >
                     <SelectTrigger className="w-[140px] h-7 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="omitted">Hidden (default)</SelectItem>
-                      <SelectItem value="summarized">Summarized</SelectItem>
+                      <SelectItem value="summarized">Summarized (default)</SelectItem>
+                      <SelectItem value="omitted">Hidden</SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+
+                {/* Prompt suggestions */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs font-medium">Suggest my next message</div>
+                    <div className="text-[10px] text-muted-foreground">After each turn, guess what you will ask next. Tab accepts it. One extra model call per turn.</div>
+                  </div>
+                  <Switch size="sm" checked={!!cfg?.promptSuggestions} onCheckedChange={v => set('promptSuggestions', v)} disabled={disabled} />
                 </div>
 
                 {/* Max Budget */}

@@ -41,6 +41,7 @@ export type CardSpec = {
   body?: () => ReactNode;
   dim?: boolean;
   kind: Kind;
+  endedAt?: number;       // overrides the tool's own end (background tasks end long after the call)
 };
 
 // what the turn summary counts
@@ -283,13 +284,17 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       const bgId = item.meta?.backgroundTaskId as string | undefined;
       const bg = !!input.run_in_background || !!bgId;
       const outPath = /Output is being written to: (\S+)/.exec(out)?.[1];
-      const bgRunning = bg && !!bgId && ctx.backgroundRunning.has(bgId);
+      const prog = ctx.progressByToolUse.get(item.id);
+      const ended = (prog && prog.status !== 'running' ? prog.status : undefined) ?? (item.meta?.bgStatus as string | undefined);
+      const bgRunning = bg && !ended && (prog ? prog.status === 'running' : !!bgId && ctx.backgroundRunning.has(bgId));
+      const endTag = ended === 'failed' ? <Tag tone="bad">failed</Tag> : ended === 'killed' || ended === 'stopped' ? <Tag tone="warn">stopped</Tag> : <Tag tone="ok">done</Tag>;
       const desc = input.description ? String(input.description) : '';
       if (bg) {
         return {
           kind: 'command', icon: SquareTerminal, verb: 'Background', target: desc ? `${desc}\n${command}` : command,
-          facts: running ? undefined : bgRunning ? <Tag tone="run">running</Tag> : tag ?? <Tag tone="ok">finished</Tag>,
-          status: bgRunning ? 'running' : o.status,
+          facts: running ? undefined : bgRunning ? <Tag tone="run">running</Tag> : tag ?? endTag,
+          status: bgRunning ? 'running' : ended === 'failed' ? 'error' : ended === 'killed' || ended === 'stopped' ? 'stopped' : o.status,
+          endedAt: bgRunning ? undefined : prog?.endedAt ?? (item.meta?.bgEndedAt as number | undefined),
           actions: [
             { icon: Copy, label: 'copy command', onClick: () => copy(command) },
             ...(bgRunning && bgId && open?.stopTask ? [{ icon: Square, label: 'stop', onClick: () => open.stopTask!(bgId) }] : []),
@@ -577,15 +582,20 @@ function describeAgent(item: ToolItem, input: Record<string, any>, ctx: ToolCtx,
   const bg = !!input.run_in_background || meta.isAsync === true;
   const subs = (item.subItems || []).filter(s => s.type === 'tool_use' || s.type === 'text' || s.type === 'thinking');
   const calls = progress?.toolCount ?? subs.filter(s => s.type === 'tool_use').length;
-  const bgRunning = bg && (progress ? progress.status === 'running' : ctx.backgroundRunning.has(String(meta.agentId || '')));
-  const status: CardStatus = bg ? (bgRunning ? 'running' : o.status === 'running' ? 'running' : o.status) : o.status;
+  const ended = (progress && progress.status !== 'running' ? progress.status : undefined) ?? (meta.bgStatus as string | undefined);
+  const bgRunning = bg && !ended && (progress ? progress.status === 'running' : ctx.backgroundRunning.has(String(meta.agentId || '')));
+  const status: CardStatus = bg
+    ? (bgRunning ? 'running' : ended === 'failed' ? 'error' : ended === 'killed' || ended === 'stopped' ? 'stopped' : o.status === 'running' ? 'running' : o.status)
+    : o.status;
+  const endTag = bg && !bgRunning && ended ? (ended === 'failed' ? <Tag tone="bad">failed</Tag> : ended === 'killed' || ended === 'stopped' ? <Tag tone="warn">stopped</Tag> : null) : null;
   const tokens = progress && progress.inputTokens + progress.outputTokens > 0 ? `${Math.round((progress.inputTokens + progress.outputTokens) / 1000)}k tokens` : '';
-  const facts = tag ?? [calls ? `${calls} calls` : '', tokens].filter(Boolean).join(' · ');
+  const facts = tag ?? endTag ?? [calls ? `${calls} calls` : '', tokens].filter(Boolean).join(' · ');
   const outputFile = typeof meta.outputFile === 'string' ? meta.outputFile : undefined;
   const taskId = progress?.taskId || (typeof meta.agentId === 'string' ? meta.agentId : undefined);
   return {
     kind: 'agent', icon: Bot, verb: bg ? 'Background agent' : 'Agent', target: description,
     facts: facts || undefined, status,
+    endedAt: bg && !bgRunning ? progress?.endedAt ?? (meta.bgEndedAt as number | undefined) : undefined,
     actions: [
       ...(outputFile && ctx.open?.file ? [{ icon: ExternalLink, label: 'open transcript', onClick: () => ctx.open!.file!(outputFile) }] : []),
       ...(status === 'running' && taskId && ctx.open?.stopTask ? [{ icon: Square, label: 'stop', onClick: () => ctx.open!.stopTask!(taskId) }] : []),

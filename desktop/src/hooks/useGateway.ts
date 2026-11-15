@@ -141,13 +141,16 @@ export type ProviderInputItem =
 
 export type ChatItem =
   | { type: 'user'; content: string; images?: ImageAttachment[]; timestamp: number }
-  | { type: 'text'; content: string; streaming?: boolean; timestamp: number }
-  | { type: 'tool_use'; id: string; name: string; input: string; output?: string; imageData?: string; is_error?: boolean; streaming?: boolean; subItems?: ChatItem[]; meta?: ToolMeta; endedAt?: number; timestamp: number }
-  | { type: 'thinking'; content: string; streaming?: boolean; timestamp: number }
-  | { type: 'result'; cost?: number; timestamp: number }
+  | { type: 'text'; content: string; streaming?: boolean; uuid?: string; withdrawn?: boolean; timestamp: number }
+  | { type: 'tool_use'; id: string; name: string; input: string; output?: string; imageData?: string; is_error?: boolean; streaming?: boolean; subItems?: ChatItem[]; meta?: ToolMeta; endedAt?: number; uuid?: string; withdrawn?: boolean; timestamp: number }
+  | { type: 'thinking'; content: string; streaming?: boolean; uuid?: string; withdrawn?: boolean; timestamp: number }
+  | { type: 'result'; cost?: number; end?: TurnEnd; timestamp: number }
   | { type: 'error'; content: string; timestamp: number }
   | { type: 'compacting'; timestamp: number }
-  | { type: 'notice'; kind: string; level: NoticeLevel; text: string; detail?: string; key?: string; timestamp: number };
+  | { type: 'notice'; kind: string; level: NoticeLevel; text: string; detail?: string; key?: string; url?: string; timestamp: number };
+
+// how a turn ended, from the sdk result message
+export type TurnEnd = { subtype?: string; stopReason?: string | null; isError?: boolean; errors?: string[]; denied?: number; turns?: number; durationMs?: number; message?: string };
 
 export type ProgressItem = { content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm: string };
 
@@ -351,7 +354,8 @@ export type TaskProgress = {
   outputTokens: number;
   durationMs: number;
   summary?: string;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'completed' | 'failed' | 'killed' | 'stopped';
+  endedAt?: number;
   updatedAt: number;
 };
 
@@ -384,6 +388,8 @@ export type SessionState = {
   sessionId?: string;
   pendingQuestion: AskUserQuestion | null;
   taskProgress: Record<string, TaskProgress>;
+  thinkingTokens?: number;
+  suggestion?: string;
   pendingElicitation: PendingElicitation | null;
   activeWorktrees: ActiveWorktree[];
 };
@@ -419,6 +425,17 @@ type SessionMessage = {
 function pushNotice(items: ChatItem[], raw: unknown, timestamp: number): ChatItem[] {
   const n = noticeFromSystem(raw);
   if (!n) return items;
+  const r = raw as any;
+  // live text has no message uuid yet; the stopped response is the unfinished tail of the turn
+  if (r?.subtype === 'model_refusal_fallback' && r.retracted_message_uuids?.length) {
+    items = [...items];
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      const unfinished = it.type === 'text' || it.type === 'thinking' || (it.type === 'tool_use' && it.output == null);
+      if (!unfinished) break;
+      items[i] = { ...it, withdrawn: true };
+    }
+  }
   const item: ChatItem = { type: 'notice', ...n, timestamp };
   const last = items[items.length - 1];
   if (n.key && last?.type === 'notice' && last.key === n.key) return [...items.slice(0, -1), item];
@@ -430,6 +447,7 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
   // Track active Task tool scopes — messages between a Task tool_use and its
   // matching tool_result are subagent content that should be nested as subItems.
   const activeTaskIds = new Set<string>();
+  const taskToolUse = new Map<string, string>();
   const taskSubItems = new Map<string, ChatItem[]>();
 
   const extractResultText = (block: any): string => {
@@ -448,6 +466,27 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
     const ts = new Date(msg.timestamp).getTime();
 
     if (msg.type === 'system') {
+      // background task endings: stored as system events, attached to the tool that started them
+      const sc = c as any;
+      if (sc.subtype === 'task_started' && sc.tool_use_id) taskToolUse.set(sc.task_id, sc.tool_use_id);
+      const endStatus = sc.subtype === 'task_updated' ? sc.patch?.status : sc.subtype === 'task_notification' ? sc.status : undefined;
+      if (endStatus && endStatus !== 'running') {
+        const toolUseId = taskToolUse.get(sc.task_id) || sc.tool_use_id;
+        for (let i = items.length - 1; i >= 0; i--) {
+          const it = items[i];
+          if (it.type === 'tool_use' && it.id === toolUseId) {
+            items[i] = { ...it, meta: { ...(it.meta || {}), bgStatus: endStatus, bgEndedAt: sc.patch?.end_time ?? it.meta?.bgEndedAt ?? ts } };
+            break;
+          }
+        }
+      }
+      if (sc.subtype === 'model_refusal_fallback' && Array.isArray(sc.retracted_message_uuids)) {
+        const gone = new Set<string>(sc.retracted_message_uuids);
+        for (let i = 0; i < items.length; i++) {
+          const it = items[i];
+          if ((it.type === 'text' || it.type === 'thinking' || it.type === 'tool_use') && it.uuid && gone.has(it.uuid)) items[i] = { ...it, withdrawn: true };
+        }
+      }
       const n = noticeFromSystem(c);
       if (n) {
         const last = items[items.length - 1];
@@ -612,8 +651,9 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
 
       if (Array.isArray(blocks)) {
         for (const block of blocks) {
+          const uuid = (c as any).uuid as string | undefined;
           if (block.type === 'text' && block.text) {
-            items.push({ type: 'text', content: block.text, timestamp: ts });
+            items.push({ type: 'text', content: block.text, uuid, timestamp: ts });
           } else if (block.type === 'tool_use') {
             const name = cleanToolName(block.name || 'unknown');
             const item: ChatItem = {
@@ -621,6 +661,7 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
               id: block.id || '',
               name,
               input: typeof block.input === 'string' ? block.input : JSON.stringify(block.input || {}),
+              uuid,
               timestamp: ts,
             };
             items.push(item);
@@ -631,7 +672,7 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
               taskSubItems.set(block.id, []);
             }
           } else if (block.type === 'thinking' && block.thinking) {
-            items.push({ type: 'thinking', content: block.thinking, timestamp: ts });
+            items.push({ type: 'thinking', content: block.thinking, uuid, timestamp: ts });
           }
         }
       }
@@ -639,9 +680,19 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
     }
 
     if (msg.type === 'result') {
+      const r = c as any;
+      // codex tool results are stored as result rows too; they are not the end of a turn
+      if (r.subtype === 'tool_result' || r.subtype === 'tool_output_delta') continue;
       items.push({
         type: 'result',
-        cost: (c as any).total_cost_usd,
+        cost: r.total_cost_usd,
+        end: {
+          subtype: r.subtype, stopReason: r.stop_reason ?? null, isError: !!r.is_error,
+          errors: Array.isArray(r.errors) ? r.errors.map(String) : undefined,
+          denied: Array.isArray(r.permission_denials) ? r.permission_denials.length : undefined,
+          turns: r.num_turns, durationMs: r.duration_ms,
+          message: r.is_error && r.subtype === 'success' && typeof r.result === 'string' ? r.result : undefined,
+        },
         timestamp: ts,
       });
     }
@@ -1045,7 +1096,7 @@ export function useGateway() {
       }
 
       case 'agent.result': {
-        const d = data as { sessionKey?: string; sessionId: string; result: string; usage?: { totalCostUsd?: number } };
+        const d = data as { sessionKey?: string; sessionId: string; result: string; usage?: { totalCostUsd?: number }; end?: TurnEnd };
         const sk = d.sessionKey;
         if (!sk || !trackedSessionsRef.current.has(sk)) break;
         // flush any pending stream deltas before marking streaming:false
@@ -1070,10 +1121,10 @@ export function useGateway() {
           });
           // Remove compacting indicator and add result
           const cleaned = updated.filter(i => i.type !== 'compacting');
-          cleaned.push({ type: 'result', cost: d.usage?.totalCostUsd, timestamp: Date.now() });
+          cleaned.push({ type: 'result', cost: d.usage?.totalCostUsd, end: d.end, timestamp: Date.now() });
           return {
             ...prev,
-            [sk]: { ...state, chatItems: cleaned, agentStatus: 'idle', pendingQuestion: null, sessionId: d.sessionId || state.sessionId },
+            [sk]: { ...state, chatItems: cleaned, agentStatus: 'idle', pendingQuestion: null, thinkingTokens: undefined, sessionId: d.sessionId || state.sessionId },
           };
         });
         // Notify tab system of sessionId assignment
@@ -1223,6 +1274,22 @@ export function useGateway() {
             return updated;
           }));
         }
+        break;
+      }
+
+      case 'agent.prompt_suggestion': {
+        const d = data as { sessionKey?: string; suggestion?: string };
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk) || !d.suggestion) break;
+        setSessionStates(prev => prev[sk] ? { ...prev, [sk]: { ...prev[sk], suggestion: d.suggestion } } : prev);
+        break;
+      }
+
+      case 'agent.thinking_tokens': {
+        const d = data as { sessionKey?: string; tokens?: number };
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk) || typeof d.tokens !== 'number') break;
+        setSessionStates(prev => prev[sk] ? { ...prev, [sk]: { ...prev[sk], thinkingTokens: d.tokens } } : prev);
         break;
       }
 
@@ -1462,7 +1529,7 @@ export function useGateway() {
       }
 
       case 'agent.task_notification': {
-        const d = data as { sessionKey: string; taskId: string; toolUseId: string };
+        const d = data as { sessionKey: string; taskId: string; toolUseId: string; status?: TaskProgress['status'] };
         const sk = d.sessionKey;
         if (!sk || !trackedSessionsRef.current.has(sk)) break;
         setSessionStates(prev => {
@@ -1471,8 +1538,23 @@ export function useGateway() {
           const existing = state.taskProgress[d.taskId];
           if (!existing) return prev;
           const tp = { ...state.taskProgress };
-          tp[d.taskId] = { ...existing, status: 'completed', updatedAt: Date.now() };
+          tp[d.taskId] = { ...existing, status: d.status || 'completed', endedAt: existing.endedAt ?? Date.now(), updatedAt: Date.now() };
           return { ...prev, [sk]: { ...state, taskProgress: tp } };
+        });
+        break;
+      }
+
+      // how a task really ended (killed, failed) and when
+      case 'agent.task_updated': {
+        const d = data as { sessionKey: string; taskId: string; patch?: { status?: string; end_time?: number } };
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk) || !d.patch?.status) break;
+        setSessionStates(prev => {
+          const state = prev[sk];
+          const existing = state?.taskProgress[d.taskId];
+          if (!state || !existing) return prev;
+          const status = (['running', 'completed', 'failed', 'killed', 'stopped'].includes(d.patch!.status!) ? d.patch!.status : existing.status) as TaskProgress['status'];
+          return { ...prev, [sk]: { ...state, taskProgress: { ...state.taskProgress, [d.taskId]: { ...existing, status, endedAt: d.patch!.end_time ?? existing.endedAt, updatedAt: Date.now() } } } };
         });
         break;
       }
@@ -2003,6 +2085,7 @@ export function useGateway() {
         [sk]: {
           ...state,
           chatItems: [...state.chatItems, { type: 'user', content: prompt, images: images?.length ? images : undefined, timestamp: Date.now() }],
+          suggestion: undefined,
           agentStatus: state.agentStatus === 'idle' ? 'thinking...' : state.agentStatus,
         },
       };

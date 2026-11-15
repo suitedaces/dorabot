@@ -1,9 +1,9 @@
 import { memo, useMemo, useState, type ReactNode } from 'react';
-import { Brain, ChevronRight, Info, Loader2, RotateCw, ShieldAlert, TriangleAlert } from 'lucide-react';
+import { Brain, ChevronRight, ExternalLink, GitPullRequest, Info, Loader2, Minimize2, RotateCw, ShieldAlert, TriangleAlert } from 'lucide-react';
 import type { ChatItem } from '@/hooks/useGateway';
 import { cn } from '@/lib/utils';
 import { formatDuration, useNow } from './hooks';
-import { Md, ScrollBox, ToolCard } from './primitives';
+import { Md, ScrollBox, Tag, ToolCard } from './primitives';
 import { describeTool, type Kind, type ToolCtx, type ToolItem } from './tools';
 
 type ThinkingItem = Extract<ChatItem, { type: 'thinking' }>;
@@ -35,7 +35,7 @@ export function buildDisplay(items: ChatItem[]): DisplayItem[] {
   return out;
 }
 
-export type ListCtx = Omit<ToolCtx, 'live' | 'depth' | 'renderNested'> & { liveId: string | null };
+export type ListCtx = Omit<ToolCtx, 'live' | 'depth' | 'renderNested'> & { liveId: string | null; thinkingTokens?: number };
 
 const KIND_LABEL: Record<Kind, [string, string]> = {
   command: ['Ran 1 command', 'Ran % commands'],
@@ -60,15 +60,15 @@ export const ToolRow = memo(function ToolRow({ item, ctx }: { item: ToolItem; ct
     ? (ctx.progressByToolUse.get(item.id)?.summary ? `now: ${ctx.progressByToolUse.get(item.id)!.summary}` : undefined)
     : undefined;
   return (
-    <div id={`tool-${item.id}`}>
+    <div id={`tool-${item.id}`} className={item.withdrawn ? 'opacity-50' : undefined}>
       <ToolCard
         icon={spec.icon}
         verb={spec.verb}
         target={spec.target}
-        facts={spec.facts}
+        facts={item.withdrawn ? <Tag tone="warn">withdrawn</Tag> : spec.facts}
         status={spec.status}
         startedAt={item.timestamp}
-        endedAt={item.endedAt}
+        endedAt={spec.endedAt ?? item.endedAt}
         actions={spec.actions}
         dim={spec.dim}
         subline={subline}
@@ -81,7 +81,7 @@ export const ToolRow = memo(function ToolRow({ item, ctx }: { item: ToolItem; ct
   );
 });
 
-const NOTICE_ICON = { refusal: ShieldAlert, retry: RotateCw, info: Info, error: TriangleAlert } as const;
+const NOTICE_ICON = { refusal: ShieldAlert, retry: RotateCw, info: Info, error: TriangleAlert, compact: Minimize2, ship: GitPullRequest } as const;
 
 export const NoticeRow = memo(function NoticeRow({ item }: { item: NoticeItem }) {
   const [open, setOpen] = useState(false);
@@ -96,6 +96,11 @@ export const NoticeRow = memo(function NoticeRow({ item }: { item: NoticeItem })
       >
         <Icon className={cn('w-3.5 h-3.5 mt-[2px] shrink-0', tone)} />
         <span className={cn('flex-1 min-w-0 [overflow-wrap:anywhere]', tone)}>{item.text}</span>
+        {item.url && (
+          <button type="button" onClick={e => { e.stopPropagation(); const api = (window as any).electronAPI; api?.openExternal ? api.openExternal(item.url) : window.open(item.url, '_blank'); }} className="flex items-center gap-1 text-[10.5px] text-muted-foreground hover:text-foreground shrink-0">
+            <ExternalLink className="w-3 h-3" />open
+          </button>
+        )}
         {item.detail && <ChevronRight className={cn('w-3 h-3 mt-[3px] shrink-0 text-muted-foreground/70 transition-transform', open && 'rotate-90')} />}
       </div>
       {open && item.detail && <div className="pl-[30px] pr-3 pb-2 text-[11px] text-muted-foreground whitespace-pre-wrap">{item.detail}</div>}
@@ -103,17 +108,19 @@ export const NoticeRow = memo(function NoticeRow({ item }: { item: NoticeItem })
   );
 });
 
-export const ThinkingRow = memo(function ThinkingRow({ item }: { item: ThinkingItem }) {
+export const ThinkingRow = memo(function ThinkingRow({ item, tokens }: { item: ThinkingItem; tokens?: number }) {
   const [open, setOpen] = useState(false);
   const text = item.content?.trim() || '';
   if (!text && !item.streaming) return null;
   const sentences = text.split(/(?<=[.!?])\s+/);
   const target = item.streaming ? sentences[sentences.length - 1] : sentences[0];
   return (
+    <div className={item.withdrawn ? 'opacity-50' : undefined}>
     <ToolCard
       icon={Brain}
       verb={item.streaming ? 'Thinking' : 'Thought'}
       target={target}
+      facts={item.streaming && tokens ? `~${tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : tokens} tokens` : undefined}
       status="none"
       dim
       open={open}
@@ -121,6 +128,7 @@ export const ThinkingRow = memo(function ThinkingRow({ item }: { item: ThinkingI
     >
       {text ? <ScrollBox follow={text} live={!!item.streaming && open}><Md text={text} className="text-muted-foreground" /></ScrollBox> : null}
     </ToolCard>
+    </div>
   );
 });
 
@@ -129,7 +137,7 @@ function ctxFor(base: ListCtx, item: ActivityItem, depth: number, renderNested: 
 }
 
 function renderRow(item: ActivityItem, base: ListCtx, depth: number, renderNested: ToolCtx['renderNested'], key: string | number) {
-  if (item.type === 'thinking') return <ThinkingRow key={key} item={item} />;
+  if (item.type === 'thinking') return <ThinkingRow key={key} item={item} tokens={item.streaming ? base.thinkingTokens : undefined} />;
   if (item.type === 'notice') return <NoticeRow key={key} item={item} />;
   return <ToolRow key={key} item={item} ctx={ctxFor(base, item, depth, renderNested)} />;
 }
