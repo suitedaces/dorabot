@@ -28,8 +28,11 @@ function PillPanel({ label, children, title }: { label: ReactNode; children: Rea
         {label}
       </button>
       {open && (
-        <div className="absolute bottom-full right-0 mb-2 z-50 w-[min(520px,calc(100vw-48px))] max-h-[min(60vh,520px)] overflow-auto rounded-xl border border-border bg-popover shadow-xl">
+        <div className="absolute bottom-full right-0 mb-2 z-50 w-[min(520px,calc(100vw-48px))] max-h-[min(60vh,520px)] overflow-auto rounded-xl border border-border shadow-2xl backdrop-blur-2xl bg-background">
+          {/* both theme colors are translucent; stacked they read as solid in every palette */}
+          <div className="bg-popover min-h-full">
           {children}
+          </div>
         </div>
       )}
     </div>
