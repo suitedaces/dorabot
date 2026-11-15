@@ -1049,6 +1049,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   const liveImagesRef = useRef(attachedImages);
   liveImagesRef.current = attachedImages;
   const isRunning = agentStatus !== 'idle';
+  const [approvalsFolded, setApprovalsFolded] = useState(false);
   const isEmpty = chatItems.length === 0;
 
   // Derive elicitation and worktree state from active session
@@ -1940,14 +1941,24 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         />
       )}
 
-      {/* approvals */}
+      {/* approvals: they need an answer, so they stay above the composer, but fold to one line */}
       {sessionApprovals.length > 0 && (
         <div className="px-4 pt-2 shrink-0">
-          <ApprovalList
-            approvals={sessionApprovals}
-            onApprove={gateway.approveToolUse}
-            onDeny={gateway.denyToolUse}
-          />
+          <button
+            type="button"
+            onClick={() => setApprovalsFolded(v => !v)}
+            className="w-full flex items-center gap-2 px-2.5 py-1 mb-1 rounded-md text-[11px] text-warning hover:bg-warning/10"
+          >
+            <ChevronRight className={cn('w-3 h-3 transition-transform', !approvalsFolded && 'rotate-90')} />
+            {sessionApprovals.length} approval{sessionApprovals.length === 1 ? '' : 's'} waiting
+          </button>
+          {!approvalsFolded && (
+            <ApprovalList
+              approvals={sessionApprovals}
+              onApprove={gateway.approveToolUse}
+              onDeny={gateway.denyToolUse}
+            />
+          )}
         </div>
       )}
 

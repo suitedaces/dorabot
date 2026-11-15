@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import type { EditorGroup } from '../hooks/useLayout';
 import type { Tab } from '../hooks/useTabs';
 import { isChatTab, isFileTab, isDiffTab, isTerminalTab, isTaskTab, isPrTab } from '../hooks/useTabs';
@@ -215,6 +216,12 @@ export function EditorGroupPanel({
     }
   };
 
+  const backgroundBySession = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(gateway.backgroundTasks || {})) if (v?.length) out[k] = v.length;
+    return out;
+  }, [gateway.backgroundTasks]);
+
   return (
     <div
       data-group-id={group.id}
@@ -231,6 +238,7 @@ export function EditorGroupPanel({
         activeTabId={group.activeTabId || ''}
         sessionStates={gateway.sessionStates}
         unreadBySession={tabState.unreadBySession}
+        backgroundBySession={backgroundBySession}
         dirtyTabs={tabState.dirtyTabs}
         isActiveGroup={isActive}
         isMultiPane={isMultiPane}
