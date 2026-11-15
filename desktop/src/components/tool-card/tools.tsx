@@ -232,9 +232,9 @@ function SmartOutput({ text, error }: { text: string; error?: boolean }) {
       if (cols.length <= 12) {
         return (
           <div className="overflow-auto max-h-[300px]">
-            <table className="w-full text-[11px] border-collapse">
-              <thead><tr>{cols.map(c => <th key={c} className="text-left font-medium text-muted-foreground px-3 py-1 border-b border-border/50 sticky top-0 bg-[var(--stream-deep)]">{c}</th>)}</tr></thead>
-              <tbody>{rows.map((r: any, i: number) => <tr key={i}>{cols.map(c => <td key={c} className="px-3 py-1 border-b border-border/20 text-foreground whitespace-nowrap">{typeof r[c] === 'object' ? JSON.stringify(r[c]) : String(r[c] ?? '')}</td>)}</tr>)}</tbody>
+            <table className="tool-table w-full text-[11px] border-collapse">
+              <thead><tr>{cols.map(c => <th key={c} className="text-left font-semibold text-foreground px-3 py-1 sticky top-0 bg-[var(--stream-deep)]">{c}</th>)}</tr></thead>
+              <tbody>{rows.map((r: any, i: number) => <tr key={i}>{cols.map(c => <td key={c} className="px-3 py-1 text-foreground whitespace-nowrap">{typeof r[c] === 'object' ? JSON.stringify(r[c]) : String(r[c] ?? '')}</td>)}</tr>)}</tbody>
             </table>
           </div>
         );
