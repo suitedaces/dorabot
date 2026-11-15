@@ -167,13 +167,14 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
   return (
     <div className="flex items-center gap-1 min-w-0 shrink">
       <Select value={currentValue} onValueChange={handleChange} disabled={disabled}>
-        <SelectTrigger size="sm" className="h-7 gap-1.5 text-[11px] rounded-lg shadow-none w-auto min-w-[72px] max-w-[200px] @max-[400px]:px-2 @max-[400px]:[&>svg:last-child]:hidden">
+        <SelectTrigger size="sm" title={currentLabel} className="h-7 gap-1.5 text-[11px] rounded-lg shadow-none w-auto shrink-0 @[360px]:shrink @[360px]:min-w-[72px] max-w-[200px] @max-[400px]:px-2 @max-[400px]:[&>svg:last-child]:hidden">
           <img
             src={providerName === 'codex' ? './openai-icon.svg' : './claude-icon.svg'}
             alt=""
             className="w-3 h-3 shrink-0"
           />
-          <span className="truncate min-w-0">{currentLabel}</span>
+          {/* too tight for the name: the provider icon alone, name on hover */}
+          <span className="hidden @[360px]:inline truncate min-w-0">{currentLabel}</span>
         </SelectTrigger>
         <SelectContent position="popper" align="start" className="min-w-[180px]">
           <div className="px-2 py-1 text-[9px] font-semibold text-muted-foreground uppercase tracking-wider">Anthropic</div>
