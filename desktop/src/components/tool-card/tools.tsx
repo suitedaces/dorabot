@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  Activity, Bell, BookOpen, Bot, Camera, Clock, Copy, ExternalLink, FileDiff, FilePlus, FileText, FolderSearch, Globe,
+  Activity, Bell, BookOpen, Bot, Camera, ClipboardList, Clock, Copy, ExternalLink, FileDiff, FilePlus, FileText, FolderSearch, Globe,
   HelpCircle, Image as ImageIcon, ListChecks, ListTodo, MessageSquare, MousePointer2, Pencil, Plug, Search, Square,
   SquareTerminal, Terminal, Wrench, type LucideIcon,
 } from 'lucide-react';
@@ -308,7 +308,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
         status: o.status,
         actions: [
           { icon: Copy, label: 'copy command', onClick: () => copy(command) },
-          ...(out ? [{ icon: Copy, label: 'copy output', onClick: () => copy(out) }] : []),
+          ...(out ? [{ icon: ClipboardList, label: 'copy output', onClick: () => copy(out) }] : []),
           ...(open?.terminal ? [{ icon: SquareTerminal, label: 'open terminal', onClick: () => open.terminal!() }] : []),
         ],
         body: () => <CommandBody command={command} output={out} error={!!err} live={ctx.live} item={item} ctx={ctx} />,

@@ -55,17 +55,8 @@ export const ToolCard = memo(function ToolCard({ icon: Icon, verb, target, facts
         </span>
         {facts && <span className="text-muted-foreground text-[11px] whitespace-nowrap tabular-nums shrink-0 mt-px">{facts}</span>}
         {actions && actions.length > 0 && (
-          <span className="hidden group-hover/row:flex group-focus-within/row:flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
-            {actions.map(a => (
-              <button
-                key={a.label}
-                type="button"
-                onClick={a.onClick}
-                className="flex items-center gap-1 text-[10.5px] text-muted-foreground hover:text-foreground px-1.5 py-px rounded border border-border/60 bg-[var(--stream-deep)] hover:bg-secondary whitespace-nowrap"
-              >
-                <a.icon className="w-3 h-3" />{a.label}
-              </button>
-            ))}
+          <span className="hidden group-hover/row:flex group-focus-within/row:flex items-center gap-0.5 shrink-0 -my-0.5" onClick={e => e.stopPropagation()}>
+            {actions.map(a => <ActionButton key={a.label} action={a} />)}
           </span>
         )}
         <StatusIcon status={status} />
@@ -77,6 +68,26 @@ export const ToolCard = memo(function ToolCard({ icon: Icon, verb, target, facts
     </div>
   );
 });
+
+// icon only; the label is the tooltip. copy actions flash a check so you know it worked.
+function ActionButton({ action: a }: { action: CardAction }) {
+  const [done, setDone] = useState(false);
+  const Icon = done ? Check : a.icon;
+  return (
+    <button
+      type="button"
+      title={a.label}
+      aria-label={a.label}
+      onClick={() => {
+        a.onClick();
+        if (a.label.startsWith('copy')) { setDone(true); setTimeout(() => setDone(false), 1000); }
+      }}
+      className={cn('w-[22px] h-[22px] flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-secondary', done && 'text-success hover:text-success')}
+    >
+      <Icon className="w-3.5 h-3.5" />
+    </button>
+  );
+}
 
 function StatusIcon({ status }: { status: CardStatus }) {
   const cls = 'w-3.5 h-3.5 shrink-0 mt-[2px]';
