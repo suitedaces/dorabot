@@ -441,6 +441,8 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
             if (block.type !== 'tool_result') continue;
             const resultText = extractResultText(block);
             const toolUseId = block.tool_use_id as string;
+            const img = Array.isArray(block.content) ? block.content.find((b: any) => b.type === 'image') : null;
+            const imageData = img?.source?.data ? `data:${img.source.media_type || 'image/png'};base64,${img.source.data}` : undefined;
             const meta = blocks.length === 1 ? slimToolMeta((c as any).tool_use_result) : undefined;
 
             // Check if this is the final result for a Task tool
@@ -465,7 +467,7 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
                 for (let i = subs.length - 1; i >= 0; i--) {
                   const si = subs[i];
                   if (si.type === 'tool_use' && si.id === toolUseId) {
-                    subs[i] = { ...si, output: resultText, is_error: block.is_error || false, meta, endedAt: ts };
+                    subs[i] = { ...si, output: resultText, imageData, is_error: block.is_error || false, meta, endedAt: ts };
                     break;
                   }
                 }
@@ -477,7 +479,7 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
             for (let i = items.length - 1; i >= 0; i--) {
               const it = items[i];
               if (it.type === 'tool_use' && it.id === toolUseId) {
-                items[i] = { ...it, output: resultText, is_error: block.is_error || false, meta, endedAt: ts };
+                items[i] = { ...it, output: resultText, imageData, is_error: block.is_error || false, meta, endedAt: ts };
                 break;
               }
             }
