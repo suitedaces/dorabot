@@ -1,3 +1,4 @@
+import { noticeFromSystem, type NoticeLevel } from '../lib/system-notice';
 import { slimToolMeta, type ToolMeta } from '../lib/tool-meta';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { jsonrepair } from 'jsonrepair';
@@ -145,7 +146,8 @@ export type ChatItem =
   | { type: 'thinking'; content: string; streaming?: boolean; timestamp: number }
   | { type: 'result'; cost?: number; timestamp: number }
   | { type: 'error'; content: string; timestamp: number }
-  | { type: 'compacting'; timestamp: number };
+  | { type: 'compacting'; timestamp: number }
+  | { type: 'notice'; kind: string; level: NoticeLevel; text: string; detail?: string; key?: string; timestamp: number };
 
 export type ProgressItem = { content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm: string };
 
@@ -405,6 +407,16 @@ type SessionMessage = {
   content: Record<string, unknown>;
 };
 
+// a notice with the same key as the item right before it replaces it (repeated api retries)
+function pushNotice(items: ChatItem[], raw: unknown, timestamp: number): ChatItem[] {
+  const n = noticeFromSystem(raw);
+  if (!n) return items;
+  const item: ChatItem = { type: 'notice', ...n, timestamp };
+  const last = items[items.length - 1];
+  if (n.key && last?.type === 'notice' && last.key === n.key) return [...items.slice(0, -1), item];
+  return [...items, item];
+}
+
 function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
   const items: ChatItem[] = [];
   // Track active Task tool scopes — messages between a Task tool_use and its
@@ -427,7 +439,16 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
     const c = msg.content;
     const ts = new Date(msg.timestamp).getTime();
 
-    if (msg.type === 'system') continue;
+    if (msg.type === 'system') {
+      const n = noticeFromSystem(c);
+      if (n) {
+        const last = items[items.length - 1];
+        const item: ChatItem = { type: 'notice', ...n, timestamp: ts };
+        if (n.key && last?.type === 'notice' && last.key === n.key) items[items.length - 1] = item;
+        else items.push(item);
+      }
+      continue;
+    }
 
     if (msg.type === 'user') {
       const userMsg = (c as any).message;
@@ -1193,6 +1214,15 @@ export function useGateway() {
             return updated;
           }));
         }
+        break;
+      }
+
+      case 'agent.notice': {
+        const d = data as { sessionKey?: string; message: unknown; timestamp?: number };
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk)) break;
+        flushStreamQueue();
+        setSessionStates(prev => updateSessionChatItems(prev, sk, items => pushNotice(items, d.message, d.timestamp || Date.now())));
         break;
       }
 

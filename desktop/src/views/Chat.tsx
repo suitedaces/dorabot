@@ -1643,6 +1643,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         );
       case 'tool_use':
       case 'thinking':
+      case 'notice':
         return null; // drawn by ActivityGroup
       case 'compacting':
         return (

@@ -56,6 +56,8 @@ import {
 import { loadResearch, saveResearch, readResearchContent, writeResearchFile, nextId as nextResearchId, type ResearchItem } from '../tools/research.js';
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
 import { slimToolMeta } from './tool-meta.js';
+
+const NOTICE_SUBTYPES = new Set(['model_refusal_fallback', 'model_refusal_no_fallback', 'api_retry', 'informational', 'notification', 'session_writes_lost', 'mirror_error']);
 import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, onClaudeAuthRequired } from '../providers/claude.js';
 import { isCodexInstalled, hasCodexAuth, onCodexAuthRequired, getCodexModelCatalog, getCodexAppServerSnapshot, callCodexAppServer, closeCodexAppServerRpcClient } from '../providers/codex.js';
 import type { ProviderName } from '../config.js';
@@ -2747,6 +2749,10 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
 
           // ── SDK task system messages (subagent progress) ──────────────
+          // safety stops, api retries and cli notices: the desktop shows them in the chat
+          if (m.type === 'system' && NOTICE_SUBTYPES.has(String(m.subtype))) {
+            broadcast({ event: 'agent.notice', data: { source, sessionKey, message: m, timestamp: Date.now() } });
+          }
           if (m.type === 'system' && m.subtype === 'task_started') {
             const taskId = m.task_id as string;
             const toolUseId = m.tool_use_id as string;

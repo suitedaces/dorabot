@@ -1,5 +1,5 @@
 import { memo, useMemo, useState, type ReactNode } from 'react';
-import { Brain, ChevronRight, Loader2 } from 'lucide-react';
+import { Brain, ChevronRight, Info, Loader2, RotateCw, ShieldAlert, TriangleAlert } from 'lucide-react';
 import type { ChatItem } from '@/hooks/useGateway';
 import { cn } from '@/lib/utils';
 import { formatDuration, useNow } from './hooks';
@@ -7,14 +7,15 @@ import { Md, ScrollBox, ToolCard } from './primitives';
 import { describeTool, type Kind, type ToolCtx, type ToolItem } from './tools';
 
 type ThinkingItem = Extract<ChatItem, { type: 'thinking' }>;
-export type ActivityItem = ToolItem | ThinkingItem;
+type NoticeItem = Extract<ChatItem, { type: 'notice' }>;
+export type ActivityItem = ToolItem | ThinkingItem | NoticeItem;
 
 export type DisplayItem =
   | { type: 'item'; item: ChatItem; index: number }
   | { type: 'activity'; items: ActivityItem[]; index: number; lastIndex: number };
 
 const isActivity = (it: ChatItem): it is ActivityItem =>
-  (it.type === 'tool_use' && !(it.name === 'AskUserQuestion' && it.output == null)) || it.type === 'thinking';
+  (it.type === 'tool_use' && !(it.name === 'AskUserQuestion' && it.output == null)) || it.type === 'thinking' || it.type === 'notice';
 
 // back-to-back tool calls and thinking become one activity group; anything else breaks it.
 // groups only ever grow at the end, so list indices stay stable while a turn streams.
@@ -80,6 +81,28 @@ export const ToolRow = memo(function ToolRow({ item, ctx }: { item: ToolItem; ct
   );
 });
 
+const NOTICE_ICON = { refusal: ShieldAlert, retry: RotateCw, info: Info, error: TriangleAlert } as const;
+
+export const NoticeRow = memo(function NoticeRow({ item }: { item: NoticeItem }) {
+  const [open, setOpen] = useState(false);
+  const Icon = NOTICE_ICON[item.kind as keyof typeof NOTICE_ICON] || Info;
+  const tone = item.level === 'error' ? 'text-destructive' : item.level === 'warning' ? 'text-warning' : 'text-muted-foreground';
+  return (
+    <div className="rounded-md min-w-0">
+      <div
+        role={item.detail ? 'button' : undefined}
+        onClick={item.detail ? () => setOpen(v => !v) : undefined}
+        className={cn('flex items-start gap-2 px-2 py-[5px] text-xs rounded-md', item.detail && 'cursor-pointer hover:bg-secondary/50')}
+      >
+        <Icon className={cn('w-3.5 h-3.5 mt-[2px] shrink-0', tone)} />
+        <span className={cn('flex-1 min-w-0 [overflow-wrap:anywhere]', tone)}>{item.text}</span>
+        {item.detail && <ChevronRight className={cn('w-3 h-3 mt-[3px] shrink-0 text-muted-foreground/70 transition-transform', open && 'rotate-90')} />}
+      </div>
+      {open && item.detail && <div className="pl-[30px] pr-3 pb-2 text-[11px] text-muted-foreground whitespace-pre-wrap">{item.detail}</div>}
+    </div>
+  );
+});
+
 export const ThinkingRow = memo(function ThinkingRow({ item }: { item: ThinkingItem }) {
   const [open, setOpen] = useState(false);
   const text = item.content?.trim() || '';
@@ -107,6 +130,7 @@ function ctxFor(base: ListCtx, item: ActivityItem, depth: number, renderNested: 
 
 function renderRow(item: ActivityItem, base: ListCtx, depth: number, renderNested: ToolCtx['renderNested'], key: string | number) {
   if (item.type === 'thinking') return <ThinkingRow key={key} item={item} />;
+  if (item.type === 'notice') return <NoticeRow key={key} item={item} />;
   return <ToolRow key={key} item={item} ctx={ctxFor(base, item, depth, renderNested)} />;
 }
 
@@ -127,7 +151,7 @@ function makeNestedRenderer(base: ListCtx, parentRunning: boolean): NonNullable<
 }
 
 export const ActivityGroup = memo(function ActivityGroup({ items, base, active }: { items: ActivityItem[]; base: ListCtx; active: boolean }) {
-  const visible = items.filter(it => it.type === 'tool_use' || it.content?.trim() || it.streaming);
+  const visible = items.filter(it => it.type !== 'thinking' || it.content?.trim() || it.streaming);
   const [manual, setManual] = useState<boolean | null>(null);
   const [filter, setFilter] = useState<'all' | 'failed' | Kind>('all');
   const nested = useMemo(() => makeNestedRenderer(base, base.turnRunning), [base]);
@@ -158,6 +182,9 @@ export const ActivityGroup = memo(function ActivityGroup({ items, base, active }
   const agentsRunning = [...specs.values()].filter(s => s.kind === 'agent' && s.status === 'running').length;
   if (agentsRunning) parts.push(<span key="ar" className="text-primary">{agentsRunning} running</span>);
 
+  const notices = visible.filter((it): it is NoticeItem => it.type === 'notice');
+  const stops = notices.filter(n => n.kind === 'refusal').length;
+  if (stops) parts.unshift(<span key="s" className="text-warning">{stops} safety stop{stops === 1 ? '' : 's'}</span>);
   const first = visible[0].timestamp;
   const lastEnd = Math.max(...visible.map(it => (it.type === 'tool_use' ? it.endedAt ?? it.timestamp : it.timestamp)));
   const duration = formatDuration((active ? now : lastEnd) - first);
