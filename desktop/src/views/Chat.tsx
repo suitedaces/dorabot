@@ -3,12 +3,14 @@ import { createPortal } from 'react-dom';
 import { DorabotSprite } from '../components/DorabotSprite';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { useGateway, ChatItem, AskUserQuestion, ImageAttachment, PendingElicitation, CodexModelCatalog, ProviderInputItem } from '../hooks/useGateway';
+import type { useGateway, ChatItem, AskUserQuestion, ImageAttachment, PendingElicitation, CodexModelCatalog, ClaudeModelCatalog, ProviderInputItem, ProviderUsage } from '../hooks/useGateway';
 import type { ChatDraftStore } from '../hooks/useTabs';
 import { ElicitationForm } from '../components/ElicitationForm';
 import { ApprovalList } from '@/components/approval-ui';
-import { ToolUI } from '@/components/tool-ui';
-import { ToolStreamCard, hasStreamCard } from '@/components/tool-stream';
+import { ActivityGroup, buildDisplay, type DisplayItem, type ListCtx } from '@/components/tool-card/ToolList';
+import { PlanPill, RunningPill } from '@/components/tool-card/StatusPills';
+import type { TaskProgress, TurnEnd } from '../hooks/useGateway';
+import { focusResearch } from '@/lib/research-focus';
 import { InlineErrorBoundary } from '@/components/ErrorBoundary';
 import { AuroraBackground } from '@/components/aceternity/aurora-background';
 import { Button } from '@/components/ui/button';
@@ -22,25 +24,25 @@ import { cn } from '@/lib/utils';
 import { safeParse } from '@/lib/safe-parse';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
-  Square, ChevronDown, ChevronUp, ChevronRight, Sparkles,
+  Square, ChevronDown, ChevronUp, ChevronRight,
   FileText, FilePlus, Pencil, FolderSearch, FileSearch, Terminal,
   Globe, Search, Bot, MessageCircle, ListChecks, FileCode,
   MessageSquare, Camera, Monitor, Clock, Wrench, ArrowUp, LayoutGrid,
   Smile, Image, Brain, MapPin, PenLine, GitPullRequest, Radio,
   Paperclip, X, ExternalLink, Check, Circle, Loader2, Keyboard, Copy,
-  Quote, Reply,
+  Quote, Reply, Zap,
   type LucideIcon,
 } from 'lucide-react';
 import { SHORTCUTS as ALL_SHORTCUTS } from '@/components/ShortcutHelp';
 import { jsonrepair } from 'jsonrepair';
 import {
-  CLAUDE_AGENT_SDK_REASONING_EFFORTS,
-  CLAUDE_MODELS,
-  CODEX_MODELS,
   DEFAULT_CLAUDE_MODEL,
   DEFAULT_CODEX_MODEL,
-  codexModelsForAuth,
+  claudeModelsFromCatalog,
+  claudeReasoningEffortOptions,
+  codexModelsFromCatalog,
   codexReasoningEffortOptions,
+  type ModelOption,
   labelForModel,
   reasoningEffortIsSupported,
   reasoningEffortLabel,
@@ -69,100 +71,54 @@ type Props = {
   onNavigateSettings?: () => void;
   onOpenFile?: (filePath: string) => void;
   onOpenDiff?: (opts: { filePath: string; oldContent: string; newContent: string; label?: string }) => void;
+  onOpenResearch?: () => void;
+  onOpenTask?: (taskId: string, title: string) => void;
+  onOpenTerminal?: () => void;
   onClearChat?: () => void;
   onNewTab?: () => void;
 };
 
-type ToolActions = {
-  onOpenFile?: (filePath: string) => void;
-  onOpenDiff?: (opts: { filePath: string; oldContent: string; newContent: string; label?: string }) => void;
-};
 
-const ToolActionsContext = createContext<ToolActions>({});
 
-const TOOL_TEXT: Record<string, { pending: string; done: string }> = {
-  Read: { pending: 'Reading file', done: 'Read file' },
-  Write: { pending: 'Writing file', done: 'Wrote file' },
-  Edit: { pending: 'Editing file', done: 'Edited file' },
-  Glob: { pending: 'Searching files', done: 'Searched files' },
-  Grep: { pending: 'Searching code', done: 'Searched code' },
-  Bash: { pending: 'Running command', done: 'Ran command' },
-  WebFetch: { pending: 'Fetching URL', done: 'Fetched URL' },
-  WebSearch: { pending: 'Searching web', done: 'Searched web' },
-  Task: { pending: 'Running task', done: 'Completed task' },
-  AskUserQuestion: { pending: 'Asking question', done: 'Got answer' },
-  TodoWrite: { pending: 'Updating tasks', done: 'Updated tasks' },
-  NotebookEdit: { pending: 'Editing notebook', done: 'Edited notebook' },
-  message: { pending: 'Sending message', done: 'Sent message' },
-  screenshot: { pending: 'Taking screenshot', done: 'Took screenshot' },
-  imageView: { pending: 'Viewing image', done: 'Viewed image' },
-  imageGeneration: { pending: 'Generating image', done: 'Generated image' },
-  schedule: { pending: 'Scheduling event', done: 'Scheduled event' },
-  list_schedule: { pending: 'Listing schedule', done: 'Listed schedule' },
-  update_schedule: { pending: 'Updating schedule', done: 'Updated schedule' },
-  cancel_schedule: { pending: 'Cancelling schedule', done: 'Cancelled schedule' },
-  browser: { pending: 'Using browser', done: 'Used browser' },
-  projects_view: { pending: 'Viewing projects', done: 'Viewed projects' },
-  projects_add: { pending: 'Adding project', done: 'Added project' },
-  projects_update: { pending: 'Updating project', done: 'Updated project' },
-  projects_delete: { pending: 'Deleting project', done: 'Deleted project' },
-  tasks_view: { pending: 'Viewing tasks', done: 'Viewed tasks' },
-  tasks_add: { pending: 'Adding task', done: 'Added task' },
-  tasks_update: { pending: 'Updating task', done: 'Updated task' },
-  tasks_done: { pending: 'Completing task', done: 'Completed task' },
-  tasks_delete: { pending: 'Deleting task', done: 'Deleted task' },
-  research_view: { pending: 'Viewing research', done: 'Viewed research' },
-  research_add: { pending: 'Adding research', done: 'Added research' },
-  research_update: { pending: 'Updating research', done: 'Updated research' },
-  memory_search: { pending: 'Searching memory', done: 'Searched memory' },
-  memory_read: { pending: 'Reading memory', done: 'Read memory' },
-};
+const LIVE_TOOLS = new Set(['Bash', 'Edit', 'Write', 'Agent', 'Task', 'MultiEdit']);
+const EMPTY_TASKS: never[] = [];
+const EMPTY_PROGRESS: Record<string, TaskProgress> = {};
 
-function humanizeToolName(name: string): string {
-  return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+function UsageMeter({ usage }: { usage?: ProviderUsage }) {
+  if (!usage?.windows.length) return null;
+  const top = usage.windows.reduce((a, b) => (b.usedPercent > a.usedPercent ? b : a));
+  const resets = (ms?: number) => (ms ? new Date(ms).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'unknown');
+  const title = ['Plan usage', ...usage.windows.map(w => `${w.label}: ${w.usedPercent}% used, resets ${resets(w.resetsAt)}`)].join('\n');
+  return (
+    <span
+      title={title}
+      className={cn(
+        'h-7 px-1.5 hidden @[520px]:flex items-center text-[11px] tabular-nums rounded-lg shrink-0',
+        top.usedPercent >= 95 ? 'text-destructive' : top.usedPercent >= 80 ? 'text-amber-500' : 'text-muted-foreground',
+      )}
+    >
+      {top.label} {top.usedPercent}%
+    </span>
+  );
 }
-
-function toolText(name: string, state: 'pending' | 'done'): string {
-  const t = TOOL_TEXT[name];
-  if (t) return t[state];
-  const h = humanizeToolName(name);
-  return state === 'pending' ? `Running ${h}` : `Completed ${h}`;
-}
-
-const TOOL_ICONS: Record<string, LucideIcon> = {
-  Read: FileText, Write: FilePlus, Edit: Pencil,
-  Glob: FolderSearch, Grep: FileSearch, Bash: Terminal,
-  WebFetch: Globe, WebSearch: Search, Task: Bot,
-  AskUserQuestion: MessageCircle, TodoWrite: ListChecks, NotebookEdit: FileCode,
-  message: MessageSquare, screenshot: Camera, browser: Monitor,
-  imageView: Camera, imageGeneration: Camera,
-  schedule: Clock, list_schedule: Clock,
-  update_schedule: Clock, cancel_schedule: Clock,
-  projects_view: LayoutGrid, projects_add: LayoutGrid,
-  projects_update: LayoutGrid, projects_delete: LayoutGrid,
-  tasks_view: ListChecks, tasks_add: ListChecks,
-  tasks_update: ListChecks, tasks_done: ListChecks, tasks_delete: ListChecks,
-  research_view: FileSearch, research_add: FilePlus, research_update: Pencil,
-  memory_search: Search, memory_read: FileText,
-};
 
 function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: ReturnType<typeof useGateway>; disabled: boolean; sessionId?: string; sessionKey?: string }) {
   const providerName = (gateway.configData as any)?.provider?.name || 'claude';
+  const isClaude = providerName !== 'codex';
   // this session's model: saved pick, unsent pick, or the last model picked anywhere
   const claudeModel = gateway.getSessionModel(sessionId, sessionKey) || DEFAULT_CLAUDE_MODEL;
   const codexModel = (gateway.configData as any)?.provider?.codex?.model || DEFAULT_CODEX_MODEL;
-  const [codexAuthMethod, setCodexAuthMethod] = useState<string | undefined>(undefined);
   const [codexCatalog, setCodexCatalog] = useState<CodexModelCatalog | null>(null);
-  const codexOptions = codexModelsForAuth(codexAuthMethod, codexModel, codexCatalog?.models);
-  const selectedCodexOption = codexOptions.find(option => option.value === codexModel) || null;
-  const currentValue = providerName === 'codex' ? `codex:${codexModel}` : `claude:${claudeModel}`;
+  const [claudeCatalog, setClaudeCatalog] = useState<ClaudeModelCatalog | null>(null);
+  const codexOptions = codexModelsFromCatalog(codexCatalog?.models, codexModel);
+  const claudeOptions = claudeModelsFromCatalog(claudeCatalog?.models, claudeModel);
+  const selected = isClaude
+    ? claudeOptions.find(option => option.value === claudeModel) || null
+    : codexOptions.find(option => option.value === codexModel) || null;
+  const currentValue = isClaude ? `claude:${claudeModel}` : `codex:${codexModel}`;
   const reasoningEffort = (gateway.configData as any)?.reasoningEffort || null;
-
-  useEffect(() => {
-    gateway.getProviderAuth('codex')
-      .then((auth) => setCodexAuthMethod(auth.method))
-      .catch(() => {});
-  }, [gateway.getProviderAuth]);
+  const effortOptionsFor = (provider: string, option: ModelOption | null) =>
+    provider === 'claude' ? claudeReasoningEffortOptions(option) : codexReasoningEffortOptions(option);
 
   useEffect(() => {
     if (gateway.connectionState !== 'connected') return;
@@ -176,89 +132,87 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
   }, [gateway.connectionState, gateway.getCodexModels]);
 
   useEffect(() => {
-    if (providerName === 'codex' && gateway.providerInfo?.auth?.method) {
-      setCodexAuthMethod(gateway.providerInfo.auth.method);
-    }
-  }, [gateway.providerInfo, providerName]);
+    if (gateway.connectionState !== 'connected') return;
+    let cancelled = false;
+    gateway.getClaudeModels()
+      .then((catalog) => {
+        if (!cancelled) setClaudeCatalog(catalog);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [gateway.connectionState, gateway.getClaudeModels]);
+
+  useEffect(() => {
+    if (gateway.connectionState !== 'connected') return;
+    gateway.loadProviderUsage(isClaude ? 'claude' : 'codex').catch(() => {});
+  }, [gateway.connectionState, gateway.loadProviderUsage, isClaude]);
 
   const handleChange = async (encoded: string) => {
     const [provider, model] = encoded.split(':') as [string, string];
+    const option = (provider === 'claude' ? claudeOptions : codexOptions).find(candidate => candidate.value === model) || null;
+    if (provider !== providerName) await gateway.setProvider(provider);
     if (provider === 'claude') {
-      if (providerName !== 'claude') await gateway.setProvider('claude');
-      if (reasoningEffort && !reasoningEffortIsSupported(CLAUDE_AGENT_SDK_REASONING_EFFORTS, reasoningEffort)) {
-        await gateway.setConfig('reasoningEffort', null);
-      }
       // always scoped to this chat. with no session row yet it rides along with the next message.
       gateway.selectModel(sessionKey || '', sessionId, model);
     } else {
-      if (providerName !== 'codex') await gateway.setProvider('codex');
       await gateway.setConfig('provider.codex.model', model);
-      const option = codexOptions.find(candidate => candidate.value === model) || null;
-      const efforts = codexReasoningEffortOptions(option);
-      if (reasoningEffort && !reasoningEffortIsSupported(efforts, reasoningEffort)) {
-        await gateway.setConfig('reasoningEffort', null);
-      }
     }
+    if (reasoningEffort && !reasoningEffortIsSupported(effortOptionsFor(provider, option), reasoningEffort)) {
+      await gateway.setConfig('reasoningEffort', null);
+    }
+    if (sessionKey && !option?.supportsFastMode) gateway.setSessionFastMode(sessionKey, false);
   };
 
-  const currentLabel = providerName === 'codex'
-    ? labelForModel(codexOptions, codexModel) || labelForModel(CODEX_MODELS, codexModel)
-    : labelForModel(CLAUDE_MODELS, claudeModel);
+  const currentLabel = labelForModel(isClaude ? claudeOptions : codexOptions, isClaude ? claudeModel : codexModel);
 
   const handleEffortChange = async (value: string) => {
     const v = value === 'off' ? null : value;
     await gateway.setConfig('reasoningEffort', v);
   };
 
+  const providerGroups = [
+    { provider: 'claude', heading: 'Anthropic', icon: './claude-icon.svg', options: claudeOptions },
+    { provider: 'codex', heading: 'OpenAI', icon: './openai-icon.svg', options: codexOptions },
+  ];
+
   return (
     <div className="flex items-center gap-1 min-w-0 shrink">
       <Select value={currentValue} onValueChange={handleChange} disabled={disabled}>
-        <SelectTrigger size="sm" className="h-7 gap-1.5 text-[11px] rounded-lg shadow-none w-auto min-w-0">
-          <img
-            src={providerName === 'codex' ? './openai-icon.svg' : './claude-icon.svg'}
-            alt=""
-            className="w-3 h-3"
-          />
-          <span>{currentLabel}</span>
+        <SelectTrigger size="sm" title={currentLabel} className="h-7 gap-1.5 text-[11px] rounded-lg shadow-none w-auto shrink-0 @[360px]:shrink @[360px]:min-w-[72px] max-w-[200px] @max-[400px]:px-2 @max-[400px]:[&>svg:last-child]:hidden">
+          <img src={isClaude ? './claude-icon.svg' : './openai-icon.svg'} alt="" className="w-3 h-3 shrink-0" />
+          {/* too tight for the name: the provider icon alone, name on hover */}
+          <span className="hidden @[360px]:inline truncate min-w-0">{currentLabel}</span>
         </SelectTrigger>
         <SelectContent position="popper" align="start" className="min-w-[180px]">
-          <div className="px-2 py-1 text-[9px] font-semibold text-muted-foreground uppercase tracking-wider">Anthropic</div>
-          {CLAUDE_MODELS.map(m => (
-            <SelectItem key={m.value} value={`claude:${m.value}`} className="text-xs">
-              <span className="flex items-center gap-1.5">
-                <img src="./claude-icon.svg" alt="" className="w-3 h-3" />
-                {m.label}
-              </span>
-            </SelectItem>
-          ))}
-          <div className="px-2 py-1 mt-1 text-[9px] font-semibold text-muted-foreground uppercase tracking-wider border-t border-border">OpenAI</div>
-          {codexOptions.map(m => (
-            <SelectItem key={m.value} value={`codex:${m.value}`} className="text-xs">
-              <div className="flex flex-col gap-0.5 min-w-0">
-                <span className="flex items-center gap-1.5">
-                  <img src="./openai-icon.svg" alt="" className="w-3 h-3" />
-                  {m.label}
-                  {m.isDefault && <span className="text-[9px] text-primary">default</span>}
-                  {m.researchPreview && <span className="text-[9px] text-amber-500">preview</span>}
-                  {m.deprecated && <span className="text-[9px] text-muted-foreground">legacy</span>}
-                </span>
-                {m.description && <span className="text-[10px] text-muted-foreground truncate max-w-72">{m.description}</span>}
-              </div>
-            </SelectItem>
+          {providerGroups.map((group, i) => (
+            <div key={group.provider}>
+              <div className={cn('px-2 py-1 text-[9px] font-semibold text-muted-foreground uppercase tracking-wider', i > 0 && 'mt-1 border-t border-border')}>{group.heading}</div>
+              {group.options.map(m => (
+                <SelectItem key={m.value} value={`${group.provider}:${m.value}`} className="text-xs">
+                  <div className="flex flex-col gap-0.5 min-w-0">
+                    <span className="flex items-center gap-1.5">
+                      <img src={group.icon} alt="" className="w-3 h-3" />
+                      {m.label}
+                      {m.isDefault && <span className="text-[9px] text-primary">default</span>}
+                    </span>
+                    {m.description && <span className="text-[10px] text-muted-foreground truncate max-w-72">{m.description}</span>}
+                  </div>
+                </SelectItem>
+              ))}
+            </div>
           ))}
         </SelectContent>
       </Select>
-      {/* Effort selector — provider-aware icon and levels */}
       {(() => {
-        const isClaude = providerName === 'claude';
-        const effortLevels = isClaude ? CLAUDE_AGENT_SDK_REASONING_EFFORTS : codexReasoningEffortOptions(selectedCodexOption);
+        const effortLevels = effortOptionsFor(providerName, selected);
+        if (effortLevels.length === 0) return null;
         const effortValue = reasoningEffortIsSupported(effortLevels, reasoningEffort) ? reasoningEffort : 'off';
-        const EffortIcon = isClaude ? Brain : Sparkles;
         return (
           <Select value={effortValue} onValueChange={handleEffortChange} disabled={disabled}>
-            <SelectTrigger size="sm" className="h-7 gap-1 text-[11px] rounded-lg shadow-none w-auto text-muted-foreground">
-              <EffortIcon className="w-3 h-3" />
-              <span>{effortValue === 'off' ? 'auto' : reasoningEffortLabel(effortLevels, effortValue)}</span>
+            <SelectTrigger size="sm" className="h-7 gap-1 text-[11px] rounded-lg shadow-none w-auto shrink-0 text-muted-foreground @max-[400px]:px-2 @max-[400px]:[&>svg:last-child]:hidden" title={`effort: ${effortValue === 'off' ? 'auto' : reasoningEffortLabel(effortLevels, effortValue)}`}>
+              <Brain className="w-3 h-3" />
+              {/* narrow panes keep the icon; the label comes back from 480px */}
+              <span className="hidden @[480px]:inline">{effortValue === 'off' ? 'auto' : reasoningEffortLabel(effortLevels, effortValue)}</span>
             </SelectTrigger>
             <SelectContent position="popper" align="start" className="min-w-[120px]">
               <SelectItem value="off" className="text-xs">auto</SelectItem>
@@ -271,202 +225,36 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
           </Select>
         );
       })()}
+      {(() => {
+        // desktop chats only: the gateway ignores fast mode for channel and calendar sessions
+        if (!selected?.supportsFastMode) return null;
+        if (!sessionKey?.startsWith('desktop:')) return null;
+        const fastOn = gateway.getSessionFastMode(sessionKey);
+        const available = !isClaude || claudeCatalog?.fastMode.available !== false;
+        const what = isClaude
+          ? 'up to 2.5x faster at 2x the price, billed to usage credits'
+          : selected.fastModeDescription || 'faster, uses more of your plan';
+        const title = !available
+          ? `Fast mode unavailable${claudeCatalog?.fastMode.reason ? ` (${claudeCatalog.fastMode.reason.replace(/_/g, ' ')})` : ''}`
+          : `Fast mode ${fastOn ? 'on' : 'off'}: ${what}. Applies from your next message.`;
+        return (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            title={title}
+            aria-label={title}
+            aria-pressed={fastOn}
+            disabled={disabled || !available}
+            onClick={() => gateway.setSessionFastMode(sessionKey, !fastOn)}
+            className={cn('h-7 w-7 rounded-lg shrink-0', fastOn ? 'text-amber-500 bg-amber-500/10 hover:bg-amber-500/20 hover:text-amber-500' : 'text-muted-foreground')}
+          >
+            <Zap className="w-3 h-3" fill={fastOn ? 'currentColor' : 'none'} />
+          </Button>
+        );
+      })()}
+      <UsageMeter usage={gateway.usageByProvider[isClaude ? 'claude' : 'codex']} />
     </div>
-  );
-}
-
-function ThinkingItem({ item }: { item: Extract<ChatItem, { type: 'thinking' }> }) {
-  const [open, setOpen] = useState(true);
-  const wasStreaming = useRef(true);
-  const bodyRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (wasStreaming.current && !item.streaming) setOpen(false);
-    wasStreaming.current = !!item.streaming;
-  }, [item.streaming]);
-
-  useEffect(() => {
-    if (item.streaming && bodyRef.current) {
-      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
-    }
-  }, [item.content, item.streaming]);
-
-  // Empty thinking block = display: 'omitted' (Claude thought but didn't share).
-  // No expandable content, no chevron, just a sweep while streaming / static pill when done.
-  const hasContent = !!item.content?.trim();
-  if (!hasContent) {
-    return (
-      <div className="flex items-center gap-1.5 text-[11px] py-0.5 my-1">
-        <Brain className="w-3 h-3 text-muted-foreground" />
-        {item.streaming ? (
-          <span className="compacting-sheen font-medium">Thinking</span>
-        ) : (
-          <span className="text-muted-foreground/70 italic">Thought</span>
-        )}
-      </div>
-    );
-  }
-
-  const label = item.streaming ? 'Thinking...' : 'Thought';
-
-  return (
-    <Collapsible open={open} onOpenChange={setOpen} className="thinking-container my-1">
-      <CollapsibleTrigger className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors py-0.5 group">
-        <Brain className="w-3 h-3" />
-        <span className={item.streaming ? 'compacting-sheen font-medium' : undefined}>{label}</span>
-        <ChevronRight className="w-3 h-3 transition-transform group-data-[state=open]:rotate-90" />
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div ref={bodyRef} className="thinking-body thinking-body-faded prose-chat text-muted-foreground text-xs">
-          <Markdown remarkPlugins={[remarkGfm]}>{item.content}</Markdown>
-          {item.streaming && <span className="streaming-cursor" />}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
-  );
-}
-
-function ToolUseItem({ item }: { item: Extract<ChatItem, { type: 'tool_use' }> }) {
-  const [manualOpen, setManualOpen] = useState<boolean | null>(null);
-  const { onOpenFile, onOpenDiff } = useContext(ToolActionsContext);
-  const hasOutput = item.output != null;
-  const isPending = item.streaming || !hasOutput;
-  const displayName = toolText(item.name, isPending ? 'pending' : 'done');
-  const useStreamCard = hasStreamCard(item.name);
-
-  // Read/Grep/Glob are fast, AskUserQuestion shows answered state collapsed
-  const startCollapsed = item.name === 'Read' || item.name === 'Grep' || item.name === 'Glob' || item.name === 'AskUserQuestion';
-  const isOpen = manualOpen !== null ? manualOpen : (isPending && !startCollapsed);
-
-  const parsed = safeParse(item.input);
-  const inputDetail = (() => {
-    if (item.name === 'AskUserQuestion' && item.output) return item.output;
-    return parsed.command?.split('\n')[0] || parsed.file_path || parsed.pattern || parsed.url || parsed.query || parsed.description || '';
-  })();
-
-  const canOpenInTab = !isPending && !item.is_error &&
-    (item.name === 'Edit' || item.name === 'Write') &&
-    onOpenFile && parsed.file_path;
-
-  const handleOpenInTab = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (onOpenFile && parsed.file_path) {
-      onOpenFile(parsed.file_path);
-    }
-  };
-
-  // screenshot: show image inline after collapse
-  const isScreenshot = item.name === 'screenshot';
-  const screenshotSrc = isScreenshot
-    ? (item.imageData || (item.output && item.output.startsWith('data:') ? item.output : undefined))
-    : undefined;
-
-  if (useStreamCard) {
-    return (
-      <div className="max-w-md">
-        <Collapsible open={isOpen} onOpenChange={v => setManualOpen(v)}>
-          {/* collapsed header — only visible when collapsed */}
-          {!isOpen && (
-            <div className="flex items-center gap-0">
-              <CollapsibleTrigger className="flex items-center gap-2 flex-1 min-w-0 px-3 py-1.5 text-xs hover:bg-secondary/50 transition-colors rounded-md border border-border/40">
-                {(() => {
-                  const Icon = TOOL_ICONS[item.name] || Wrench;
-                  return <Icon className={item.is_error ? 'w-3 h-3 text-destructive' : 'w-3 h-3 text-muted-foreground'} />;
-                })()}
-                <span className="text-muted-foreground font-medium">{displayName}</span>
-                <span className="text-muted-foreground/60 flex-1 truncate text-left text-[11px]">{inputDetail}</span>
-                {!canOpenInTab && <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
-              </CollapsibleTrigger>
-              {canOpenInTab && (
-                <button
-                  className="ml-1 p-1.5 rounded-md border border-border/40 text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors shrink-0"
-                  onClick={handleOpenInTab}
-                  title="Open file in tab"
-                >
-                  <ExternalLink className="w-3 h-3" />
-                </button>
-              )}
-            </div>
-          )}
-          <CollapsibleContent forceMount={isOpen ? true : undefined}>
-            {isOpen && (
-              <div className="relative">
-                {/* action buttons when done */}
-                {!isPending && (
-                  <div className="absolute top-1 right-1 z-10 flex items-center gap-0.5">
-                    {canOpenInTab && (
-                      <button
-                        className="p-0.5 rounded bg-background/80 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-                        onClick={handleOpenInTab}
-                        title="Open file in tab"
-                      >
-                        <ExternalLink className="w-3 h-3" />
-                      </button>
-                    )}
-                    <button
-                      className="p-0.5 rounded bg-background/80 hover:bg-secondary text-muted-foreground"
-                      onClick={() => setManualOpen(false)}
-                      title="collapse"
-                    >
-                      <ChevronDown className="w-3 h-3" />
-                    </button>
-                  </div>
-                )}
-                <ToolStreamCard
-                  name={item.name}
-                  input={item.input}
-                  output={item.output}
-                  imageData={item.imageData}
-                  isError={item.is_error}
-                  streaming={item.streaming}
-                  subItems={item.subItems}
-                />
-              </div>
-            )}
-          </CollapsibleContent>
-        </Collapsible>
-        {/* screenshot: show image inline in chat after card collapses */}
-        {isScreenshot && !isOpen && screenshotSrc && (
-          <img
-            src={screenshotSrc}
-            alt="screenshot"
-            className="mt-1.5 rounded-md border border-border/40 w-full cursor-pointer hover:opacity-90 transition-opacity"
-            onClick={() => setManualOpen(true)}
-          />
-        )}
-      </div>
-    );
-  }
-
-  // fallback: old collapsible style for unmapped tools
-  return (
-    <Collapsible open={isOpen} onOpenChange={v => setManualOpen(v)}>
-      <Card className="my-1 overflow-hidden border-border/50 max-w-md">
-        <CollapsibleTrigger className="flex items-center gap-2 w-full px-3 py-1.5 text-xs hover:bg-secondary/50 transition-colors">
-          {(() => {
-            const Icon = TOOL_ICONS[item.name] || Wrench;
-            if (item.streaming) return <Icon className="w-3 h-3 text-muted-foreground animate-pulse" />;
-            if (hasOutput) return <Icon className={item.is_error ? 'w-3 h-3 text-destructive' : 'w-3 h-3 text-foreground'} />;
-            return <Icon className="w-3 h-3 text-muted-foreground" />;
-          })()}
-          <span className="text-warning font-semibold">{displayName}</span>
-          <span className="text-muted-foreground flex-1 truncate text-left">{inputDetail}</span>
-          {isOpen ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" /> : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <div className="border-t border-border/50 px-3 py-2 bg-background">
-            <ToolUI
-              name={item.name}
-              input={item.input}
-              output={item.output}
-              imageData={item.imageData}
-              isError={item.is_error}
-              streaming={item.streaming}
-            />
-          </div>
-        </CollapsibleContent>
-      </Card>
-    </Collapsible>
   );
 }
 
@@ -666,7 +454,7 @@ function UserMessageItem({
   );
 }
 
-function AskUserQuestionPanel({
+export function AskUserQuestionPanel({
   question,
   onAnswer,
   onDismiss,
@@ -685,6 +473,16 @@ function AskUserQuestionPanel({
   const total = question.questions.length;
   const q = question.questions[step];
   const options = q?.options || [];
+
+  // keyboard: the panel takes focus when it appears and hands it back when it goes away
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [cursor, setCursor] = useState(0);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    panelRef.current?.focus();
+    return () => { if (previous?.isConnected) previous.focus(); };
+  }, [question.requestId]);
+  useEffect(() => { setCursor(0); }, [step]);
 
   const handleSelect = (questionText: string, label: string, multiSelect: boolean) => {
     if (multiSelect) {
@@ -721,6 +519,53 @@ function AskUserQuestionPanel({
     (useOther[q.question] && otherTexts[q.question]) || selections[q.question];
   const isLast = step === total - 1;
 
+  // option index options.length is "Other"
+  const choose = (index: number) => {
+    if (index < options.length) handleSelect(q.question, options[index].label, q.multiSelect);
+    else {
+      setUseOther(prev => ({ ...prev, [q.question]: true }));
+      setSelections(prev => ({ ...prev, [q.question]: '' }));
+    }
+  };
+  const confirm = () => {
+    if (streaming || !currentAnswered) return;
+    if (isLast) handleSubmit();
+    else setStep(s => s + 1);
+  };
+  const skip = () => {
+    if (streaming) return;
+    if (isLast) handleSubmit();
+    else setStep(s => s + 1);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    // typing in "Other", or the header/footer buttons, keep their own keys
+    if (target !== panelRef.current && target.dataset.questionOption == null) return;
+    const count = options.length + 1;
+    if (/^[1-9]$/.test(e.key) && Number(e.key) <= count) {
+      e.preventDefault();
+      setCursor(Number(e.key) - 1);
+      choose(Number(e.key) - 1);
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      setCursor(c => (c + (e.key === 'ArrowDown' ? 1 : count - 1)) % count);
+    } else if (e.key === ' ') {
+      e.preventDefault();
+      choose(cursor);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      confirm();
+    } else if ((e.key === 'Tab' && e.shiftKey) || e.key === 'ArrowLeft') {
+      if (step === 0) return;
+      e.preventDefault();
+      setStep(s => s - 1);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      skip();
+    }
+  };
+
   // Countdown timer (5 min timeout from gateway)
   const [secondsLeft, setSecondsLeft] = useState(300);
   const [collapsed, setCollapsed] = useState(false);
@@ -732,7 +577,7 @@ function AskUserQuestionPanel({
   const secs = secondsLeft % 60;
 
   return (
-    <div className="border-t border-primary bg-card shrink-0">
+    <div ref={panelRef} tabIndex={-1} onKeyDown={handleKeyDown} className="border-t border-primary bg-card shrink-0 outline-none">
       {/* Collapsible header - always visible */}
       <button
         className="flex items-center justify-between w-full px-3 py-1.5 hover:bg-secondary/30 transition-colors"
@@ -764,33 +609,44 @@ function AskUserQuestionPanel({
               return (
                 <button
                   key={oi}
+                  data-question-option={oi}
+                  aria-pressed={selected}
                   className={cn(
-                    'flex flex-col items-start px-2.5 py-1.5 rounded-md border text-left w-full transition-colors',
+                    'flex items-start gap-2 px-2.5 py-1.5 rounded-md border text-left w-full transition-colors',
                     selected
                       ? 'border-primary bg-primary/10'
-                      : 'border-border bg-background hover:border-primary/50'
+                      : 'border-border bg-background hover:border-primary/50',
+                    cursor === oi && 'ring-1 ring-primary/60'
                   )}
-                  onClick={() => handleSelect(q.question, opt.label, q.multiSelect)}
+                  onFocus={() => setCursor(oi)}
+                  onClick={() => { setCursor(oi); handleSelect(q.question, opt.label, q.multiSelect); }}
                 >
-                  <span className="text-xs font-medium">{opt.label}</span>
-                  {opt.description && <span className="text-[10px] text-muted-foreground leading-tight">{opt.description}</span>}
+                  {oi < 9 && <span className="text-[10px] text-muted-foreground/70 tabular-nums mt-px w-2 shrink-0">{oi + 1}</span>}
+                  <span className="flex flex-col items-start min-w-0">
+                    <span className="text-xs font-medium">{opt.label}</span>
+                    {opt.description && <span className="text-[10px] text-muted-foreground leading-tight">{opt.description}</span>}
+                  </span>
                 </button>
               );
             })}
             <button
+              data-question-option={options.length}
+              aria-pressed={!!useOther[q.question]}
               className={cn(
-                'flex flex-col items-start px-2.5 py-1.5 rounded-md border text-left w-full transition-colors',
+                'flex items-start gap-2 px-2.5 py-1.5 rounded-md border text-left w-full transition-colors',
                 useOther[q.question]
                   ? 'border-primary bg-primary/10'
-                  : 'border-border bg-background hover:border-primary/50'
+                  : 'border-border bg-background hover:border-primary/50',
+                cursor === options.length && 'ring-1 ring-primary/60'
               )}
-              onClick={() => {
-                setUseOther(prev => ({ ...prev, [q.question]: true }));
-                setSelections(prev => ({ ...prev, [q.question]: '' }));
-              }}
+              onFocus={() => setCursor(options.length)}
+              onClick={() => { setCursor(options.length); choose(options.length); }}
             >
-              <span className="text-xs font-medium">Other</span>
-              <span className="text-[10px] text-muted-foreground">type your own answer</span>
+              {options.length < 9 && <span className="text-[10px] text-muted-foreground/70 tabular-nums mt-px w-2 shrink-0">{options.length + 1}</span>}
+              <span className="flex flex-col items-start min-w-0">
+                <span className="text-xs font-medium">Other</span>
+                <span className="text-[10px] text-muted-foreground">type your own answer</span>
+              </span>
             </button>
           </div>
           {useOther[q.question] && (
@@ -799,7 +655,10 @@ function AskUserQuestionPanel({
               placeholder="type your answer..."
               value={otherTexts[q.question] || ''}
               onChange={e => setOtherTexts(prev => ({ ...prev, [q.question]: e.target.value }))}
-              onKeyDown={e => { if (e.key === 'Enter' && isLast) handleSubmit(); else if (e.key === 'Enter') setStep(s => s + 1); }}
+              onKeyDown={e => {
+                if (e.key === 'Enter') { e.preventDefault(); confirm(); }
+                else if (e.key === 'Escape') { e.preventDefault(); panelRef.current?.focus(); }
+              }}
               autoFocus
             />
           )}
@@ -814,7 +673,7 @@ function AskUserQuestionPanel({
                 <span className="text-[10px] text-muted-foreground animate-pulse">loading...</span>
               ) : (
                 <>
-                  <Button variant="outline" size="sm" className="h-6 text-[11px] px-2" onClick={isLast ? handleSubmit : () => setStep(s => s + 1)}>skip</Button>
+                  <Button variant="outline" size="sm" className="h-6 text-[11px] px-2" onClick={skip}>skip</Button>
                   {isLast ? (
                     <Button size="sm" className="h-6 text-[11px] px-2" onClick={handleSubmit} disabled={!currentAnswered}>answer</Button>
                   ) : (
@@ -872,52 +731,40 @@ function ImagePreviewStrip({ images, onRemove }: { images: ImageAttachment[]; on
   );
 }
 
-function ChatProgress({ items }: { items: { content: string; status: string; activeForm: string }[] }) {
-  const [expanded, setExpanded] = useState(false);
-  const done = items.filter(i => i.status === 'completed').length;
-  const total = items.length;
-  const inProgress = items.find(i => i.status === 'in_progress');
-  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-  const allDone = total > 0 && done === total;
+// say why a turn stopped, only when it was not a normal ending
+const STOP_REASONS: Record<string, string> = {
+  max_tokens: 'stopped at the output limit',
+  refusal: 'stopped by the safety classifier',
+  pause_turn: 'paused by the server',
+  model_context_window_exceeded: 'ran out of context',
+};
+const END_SUBTYPES: Record<string, string> = {
+  error_max_turns: 'stopped: hit the turn limit',
+  error_during_execution: 'stopped before it finished',
+  error_max_budget_usd: 'stopped: hit the budget limit',
+  error_max_structured_output_retries: 'stopped: could not produce the required output',
+};
+function turnEndNote(end?: TurnEnd) {
+  if (!end) return null;
+  const notes: Array<{ text: string; bad?: boolean; title?: string }> = [];
+  if (end.message) notes.push({ text: end.message, bad: true });
+  else if (end.subtype && END_SUBTYPES[end.subtype]) notes.push({ text: END_SUBTYPES[end.subtype], bad: end.subtype !== 'error_during_execution', title: end.errors?.join('\n') });
+  else if (end.isError) notes.push({ text: 'ended with an error', bad: true, title: end.errors?.join('\n') });
+  if (end.stopReason && STOP_REASONS[end.stopReason]) notes.push({ text: STOP_REASONS[end.stopReason], bad: end.stopReason !== 'pause_turn' });
+  if (end.denied) notes.push({ text: `${end.denied} tool call${end.denied === 1 ? '' : 's'} denied` });
+  return notes.map((n, k) => <span key={k} title={n.title} className={n.bad ? 'text-destructive' : 'text-warning'}>{n.text}</span>);
+}
 
+// text the safety classifier stopped and another model redid: kept, but folded and marked
+function WithdrawnText({ content }: { content: string }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="px-4 shrink-0">
-      <div className="rounded-lg bg-secondary/40 overflow-hidden">
-        <button
-          className="flex items-center gap-2 w-full px-3 py-1.5 hover:bg-secondary/60 transition-colors text-left"
-          onClick={() => setExpanded(v => !v)}
-        >
-          {allDone
-            ? <Check className="w-3 h-3 text-success shrink-0" />
-            : <Loader2 className="w-3 h-3 text-primary shrink-0 animate-spin" />}
-          <span className="text-[11px] text-muted-foreground truncate flex-1">
-            {inProgress ? inProgress.activeForm : `${done}/${total} tasks`}
-          </span>
-          <div className="w-12 h-1 bg-secondary rounded-full overflow-hidden shrink-0">
-            <div className="h-full bg-primary rounded-full transition-all duration-300" style={{ width: `${pct}%` }} />
-          </div>
-          <span className="text-[10px] text-muted-foreground shrink-0">{done}/{total}</span>
-          {expanded ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" /> : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
-        </button>
-        {expanded && (
-          <div className="px-3 pb-2 space-y-0.5">
-            {items.map((item, i) => (
-              <div key={i} className="flex items-center gap-1.5 text-[11px]">
-                {item.status === 'completed' ? (
-                  <Check className="w-3 h-3 text-success shrink-0" />
-                ) : item.status === 'in_progress' ? (
-                  <Loader2 className="w-3 h-3 text-primary shrink-0 animate-spin" />
-                ) : (
-                  <Circle className="w-3 h-3 text-muted-foreground/40 shrink-0" />
-                )}
-                <span className={item.status === 'completed' ? 'text-muted-foreground/50' : item.status === 'in_progress' ? 'text-foreground' : 'text-muted-foreground'}>
-                  {item.status === 'in_progress' ? item.activeForm : item.content}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+    <div className="my-1">
+      <button type="button" onClick={() => setOpen(v => !v)} className="flex items-center gap-1.5 text-[11px] text-warning/90 hover:text-warning">
+        <ChevronRight className={cn('w-3 h-3 transition-transform', open && 'rotate-90')} />
+        withdrawn by the safety classifier, redone below
+      </button>
+      {open && <div className="mt-1 pl-4 border-l-2 border-warning/30 opacity-60 line-through decoration-muted-foreground/40 prose-chat text-sm"><Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown></div>}
     </div>
   );
 }
@@ -1209,7 +1056,7 @@ function AssistantTextWithReply({
   );
 }
 
-export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, sessionKey, drafts, onNavigateSettings, onOpenFile, onOpenDiff, onClearChat, onNewTab }: Props) {
+export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, sessionKey, drafts, onNavigateSettings, onOpenFile, onOpenDiff, onOpenResearch, onOpenTask, onOpenTerminal, onClearChat, onNewTab }: Props) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [attachedImages, setAttachedImages] = useState<ImageAttachment[]>([]);
@@ -1243,6 +1090,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   const liveImagesRef = useRef(attachedImages);
   liveImagesRef.current = attachedImages;
   const isRunning = agentStatus !== 'idle';
+  const [approvalsFolded, setApprovalsFolded] = useState(false);
   const isEmpty = chatItems.length === 0;
 
   // Derive elicitation and worktree state from active session
@@ -1670,6 +1518,12 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   }, []);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // tab takes the suggested next message
+    if (e.key === 'Tab' && !e.shiftKey && !input && suggestion && !isRunning) {
+      e.preventDefault();
+      handleInputChange(suggestion, suggestion.length);
+      return;
+    }
     // Slash command navigation
     if (slashOpen && filteredSlashCommands.length > 0) {
       if (e.key === 'ArrowUp') {
@@ -1780,11 +1634,55 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     }, 0);
   }, []);
 
+  // tool calls and thinking become activity groups; the newest command/edit/write/agent holds the live slot
+  const display = useMemo(() => buildDisplay(chatItems), [chatItems]);
+  const lastUserIdx = useMemo(() => {
+    for (let i = chatItems.length - 1; i >= 0; i--) if (chatItems[i].type === 'user') return i;
+    return -1;
+  }, [chatItems]);
+  const liveId = useMemo(() => {
+    if (!isRunning) return null;
+    for (let i = chatItems.length - 1; i > lastUserIdx; i--) {
+      const it = chatItems[i];
+      if (it.type === 'tool_use' && LIVE_TOOLS.has(it.name)) return it.id;
+    }
+    return null;
+  }, [chatItems, isRunning, lastUserIdx]);
+  const bgTasks = (sessionKey && gateway.backgroundTasks[sessionKey]) || EMPTY_TASKS;
+  const taskProgress = activeState?.taskProgress || EMPTY_PROGRESS;
+  const thinkingTokens = activeState?.thinkingTokens;
+  const suggestion = activeState?.suggestion;
+  const listBase = useMemo(() => {
+    const progressByToolUse = new Map<string, TaskProgress>();
+    for (const p of Object.values(taskProgress)) if (p.toolUseId) progressByToolUse.set(p.toolUseId, p);
+    const base: Omit<ListCtx, 'turnRunning'> = {
+      liveId,
+      backgroundRunning: new Set(bgTasks.map(t => t.taskId)),
+      progressByToolUse,
+      open: {
+        file: onOpenFile,
+        diff: onOpenDiff,
+        research: onOpenResearch ? (id: string) => { focusResearch(id); onOpenResearch(); } : undefined,
+        task: onOpenTask,
+        terminal: onOpenTerminal,
+        url: (url: string) => { (window as any).electronAPI?.openExternal ? (window as any).electronAPI.openExternal(url) : window.open(url, '_blank'); },
+        stopTask: sessionKey ? (taskId: string) => { gateway.stopTask(sessionKey, taskId).catch(() => {}); } : undefined,
+        tail: async (path: string, offset: number) => await gateway.rpc('fs.tail', { path, offset }) as { content: string; size: number; next?: number },
+      },
+    };
+    return { current: { ...base, turnRunning: true, thinkingTokens } as ListCtx, past: { ...base, liveId: null, turnRunning: false } as ListCtx };
+  }, [liveId, thinkingTokens, bgTasks, taskProgress, onOpenFile, onOpenDiff, onOpenResearch, onOpenTask, onOpenTerminal, sessionKey, gateway.stopTask, gateway.rpc]);
+
+  const jumpToTool = useCallback((toolUseId: string) => {
+    document.getElementById(`tool-${toolUseId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, []);
+
   const renderItemBase = (item: ChatItem, i: number) => {
     switch (item.type) {
       case 'user':
         return <UserMessageItem key={i} item={item} onReply={handleReply} />;
       case 'text':
+        if (item.withdrawn) return <WithdrawnText key={i} content={item.content} />;
         return (
           <AssistantTextWithReply
             key={i}
@@ -1794,20 +1692,9 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
           />
         );
       case 'tool_use':
-        if (item.name === 'TodoWrite') {
-          const todos = safeParse(item.input).todos || [];
-          const done = todos.filter((t: any) => t.status === 'completed').length;
-          return (
-            <div key={i} className="flex items-center gap-2 text-[10px] text-muted-foreground py-0.5">
-              <ListChecks className="w-3 h-3" />
-              <span>tasks {done}/{todos.length}</span>
-            </div>
-          );
-        }
-        if (item.name === 'AskUserQuestion' && !item.output) return <div key={i} style={{ height: 0, overflow: 'hidden' }} />;
-        return <div key={i} className="my-1.5"><InlineErrorBoundary><ToolUseItem item={item} /></InlineErrorBoundary></div>;
       case 'thinking':
-        return <ThinkingItem key={i} item={item} />;
+      case 'notice':
+        return null; // drawn by ActivityGroup
       case 'compacting':
         return (
           <div key={i} className="flex items-center gap-2 py-2 my-1">
@@ -1817,9 +1704,10 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         );
       case 'result':
         return (
-          <div key={i} className="flex gap-2 text-[10px] text-muted-foreground py-1 mt-1 border-t border-border">
+          <div key={i} className="flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground py-1 mt-1 border-t border-border">
             {item.cost != null && <span>${item.cost.toFixed(4)}</span>}
             <span>{formatTime(item.timestamp)}</span>
+            {turnEndNote(item.end)}
           </div>
         );
       case 'error':
@@ -1868,6 +1756,28 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     return hasText;
   };
 
+  const renderDisplay = (d: DisplayItem) => {
+    if (d.type === 'item') return renderItem(d.item, d.index);
+    // everything in the current turn stays open until the turn ends, then folds at once
+    const current = isRunning && d.index > lastUserIdx;
+    const group = (
+      <div key={d.index} className="my-1.5">
+        <InlineErrorBoundary>
+          <ActivityGroup items={d.items} base={current ? listBase.current : listBase.past} active={current} />
+        </InlineErrorBoundary>
+      </div>
+    );
+    if (!isAssistantThreadEnd(d.lastIndex)) return group;
+    return (
+      <Fragment key={d.index}>
+        {group}
+        <div className="flex items-center justify-start -mt-0.5 mb-1.5 pl-0.5 opacity-70 hover:opacity-100 transition-opacity">
+          <CopyMessageButton getText={() => getThreadCopyText(d.lastIndex)} />
+        </div>
+      </Fragment>
+    );
+  };
+
   const renderItem = (item: ChatItem, i: number) => {
     const base = renderItemBase(item, i);
     if (!isAssistantThreadEnd(i)) return base;
@@ -1881,7 +1791,6 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     );
   };
 
-  const toolActions = useMemo(() => ({ onOpenFile, onOpenDiff }), [onOpenFile, onOpenDiff]);
 
   const connected = gateway.connectionState === 'connected';
   const authenticated = gateway.providerInfo?.auth?.authenticated ?? true; // assume true until loaded
@@ -1954,11 +1863,11 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                   className="hidden"
                   onChange={e => { if (e.target.files) addImagesFromFiles(e.target.files); e.target.value = ''; }}
                 />
-                <div className="flex items-center px-3 pb-3">
+                <div className="flex items-center gap-0.5 px-3 pb-3 min-w-0">
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-8 w-8 p-0 rounded-lg mr-1"
+                    className="h-8 w-8 p-0 rounded-lg mr-1 shrink-0"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={!isReady}
                     title="Attach image"
@@ -1969,10 +1878,10 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                   {input.trim() && (
                     <span className="text-[9px] text-muted-foreground/60 ml-2 select-none hidden @sm:inline">{'\u21E7\u21B5 new line'}</span>
                   )}
-                  <span className="flex-1" />
+                  <span className="flex-1 min-w-1" />
                   <Button
                     size="sm"
-                    className="h-8 w-8 p-0 rounded-lg"
+                    className="h-8 w-8 p-0 rounded-lg shrink-0"
                     onClick={() => { handleSend(); }}
                     disabled={(!input.trim() && attachedImages.length === 0) || sending || !isReady}
                   >
@@ -2041,12 +1950,11 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
 
   // conversation view — messages + bottom input
   return (
-    <ToolActionsContext.Provider value={toolActions}>
     <div className="flex flex-col h-full min-h-0 min-w-0">
       {/* messages */}
       <VirtualChatList
-        items={chatItems}
-        renderItem={renderItem}
+        items={display}
+        renderItem={renderDisplay}
         className="flex-1 min-h-0 min-w-0 overflow-auto"
         itemClassName="px-4 min-w-0 overflow-hidden"
         scrollBehavior={nextAutoScrollBehaviorRef.current}
@@ -2085,44 +1993,27 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         />
       )}
 
-      {/* approvals */}
+      {/* approvals: they need an answer, so they stay above the composer, but fold to one line */}
       {sessionApprovals.length > 0 && (
         <div className="px-4 pt-2 shrink-0">
-          <ApprovalList
-            approvals={sessionApprovals}
-            onApprove={gateway.approveToolUse}
-            onDeny={gateway.denyToolUse}
-          />
+          <button
+            type="button"
+            onClick={() => setApprovalsFolded(v => !v)}
+            className="w-full flex items-center gap-2 px-2.5 py-1 mb-1 rounded-md text-[11px] text-warning hover:bg-warning/10"
+          >
+            <ChevronRight className={cn('w-3 h-3 transition-transform', !approvalsFolded && 'rotate-90')} />
+            {sessionApprovals.length} approval{sessionApprovals.length === 1 ? '' : 's'} waiting
+          </button>
+          {!approvalsFolded && (
+            <ApprovalList
+              approvals={sessionApprovals}
+              onApprove={gateway.approveToolUse}
+              onDeny={gateway.denyToolUse}
+            />
+          )}
         </div>
       )}
 
-      {/* progress */}
-      {progress.length > 0 && <ChatProgress items={progress} />}
-
-      {/* sdk background tasks */}
-      {sessionKey && (gateway.backgroundTasks[sessionKey]?.length ?? 0) > 0 && (
-        <div className="px-4 pt-1 shrink-0 flex flex-wrap gap-1.5">
-          {gateway.backgroundTasks[sessionKey].map(t => (
-            <span
-              key={t.taskId}
-              className="group inline-flex items-center gap-1 rounded-full border border-border/40 bg-muted/30 pl-2 pr-1 py-0.5 text-[10px] font-mono text-muted-foreground"
-              title={t.description}
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              {t.taskType}: {t.description.slice(0, 48)}{t.description.length > 48 ? '…' : ''}
-              <button
-                type="button"
-                aria-label={`Stop task ${t.description.slice(0, 40)}`}
-                title="Stop this task"
-                className="ml-0.5 rounded-full p-0.5 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-destructive/20 hover:text-destructive transition-opacity"
-                onClick={() => { gateway.stopTask(sessionKey, t.taskId).catch(() => {}); }}
-              >
-                <X className="w-2.5 h-2.5" />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
 
       {/* input area */}
       <div className="px-4 py-3 shrink-0 min-w-0">
@@ -2147,7 +2038,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             onChange={e => handleInputChange(e.target.value, e.target.selectionStart ?? undefined)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            placeholder={connected ? 'type a message...' : 'waiting for gateway...'}
+            placeholder={!connected ? 'waiting for gateway...' : suggestion && !isRunning ? `${suggestion}   (tab)` : 'type a message...'}
             disabled={!connected || !!pendingQuestion}
             className="w-full min-h-[64px] max-h-[200px] resize-none text-[13px] border-0 rounded-2xl bg-transparent shadow-none focus-visible:ring-0 pt-3"
             style={inputHeight ? { height: inputHeight, minHeight: 64, maxHeight: 400 } : undefined}
@@ -2161,11 +2052,11 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             className="hidden"
             onChange={e => { if (e.target.files) addImagesFromFiles(e.target.files); e.target.value = ''; }}
           />
-          <div className="flex items-center px-3 pb-3">
+          <div className="flex items-center gap-0.5 px-3 pb-3 min-w-0">
             <Button
               variant="ghost"
               size="sm"
-              className="h-8 w-8 p-0 rounded-lg mr-1"
+              className="h-8 w-8 p-0 rounded-lg mr-1 shrink-0"
               onClick={() => fileInputRef.current?.click()}
               disabled={!connected}
               title="Attach image"
@@ -2173,16 +2064,25 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
               <Paperclip className="w-4 h-4 text-muted-foreground" />
             </Button>
             <ModelSelector gateway={gateway} disabled={!connected} sessionId={activeState?.sessionId} sessionKey={sessionKey} />
-            <ContextWheel getContextUsage={gateway.getContextUsage} sessionKey={sessionKey} isRunning={isRunning} />
+            <span className="hidden @[400px]:flex shrink-0"><ContextWheel getContextUsage={gateway.getContextUsage} sessionKey={sessionKey} isRunning={isRunning} /></span>
             {input.trim() && (
               <span className="text-[9px] text-muted-foreground/60 ml-2 select-none hidden @sm:inline">{'\u21E7\u21B5 new line'}</span>
             )}
-            <span className="flex-1" />
+            <span className="flex-1 min-w-1" />
+            <PlanPill items={progress} />
+            {sessionKey && (
+              <RunningPill
+                tasks={bgTasks}
+                progress={taskProgress}
+                onStop={taskId => { gateway.stopTask(sessionKey, taskId).catch(() => {}); }}
+                onJump={jumpToTool}
+              />
+            )}
             {isRunning ? (
               <Button
                 size="sm"
                 variant="destructive"
-                className="h-8 w-8 p-0 rounded-lg"
+                className="h-8 w-8 p-0 rounded-lg shrink-0"
                 onClick={() => gateway.abortAgent(sessionKey)}
               >
                 <Square className="w-3.5 h-3.5" />
@@ -2190,7 +2090,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             ) : (
               <Button
                 size="sm"
-                className="h-8 w-8 p-0 rounded-lg"
+                className="h-8 w-8 p-0 rounded-lg shrink-0"
                 onClick={() => { handleSend(); }}
                 disabled={(!input.trim() && attachedImages.length === 0) || sending || !connected}
               >
@@ -2201,6 +2101,5 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         </Card>
       </div>
     </div>
-    </ToolActionsContext.Provider>
   );
 }

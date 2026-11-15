@@ -214,6 +214,8 @@ export type Config = {
   thinking?: ThinkingMode;
   /** Control thinking visibility: "summarized" shows reasoning, "omitted" (default) hides it */
   thinkingDisplay?: ThinkingDisplay;
+  // after each turn the sdk predicts the user's next message (an extra model call per turn)
+  promptSuggestions?: boolean;
   maxBudgetUsd?: number;
   permissionMode: PermissionMode;
   autonomy?: AutonomyMode;
@@ -369,6 +371,8 @@ export function isPathAllowed(
   const allowedRaw = channelOverride?.allowedPaths?.length
     ? channelOverride.allowedPaths
     : (config.gateway?.allowedPaths || [home, '/tmp']);
-  const allowed = allowedRaw.map(p => resolve(p.replace(/^~/, home)));
-  return allowed.some(a => resolved.startsWith(a));
+  // compare real paths on both sides: /tmp is a symlink to /private/tmp on macOS
+  const real = (p: string) => { try { return realpathSync(p); } catch { return p; } };
+  const allowed = allowedRaw.map(p => real(resolve(p.replace(/^~/, home))));
+  return allowed.some(a => resolved === a || resolved.startsWith(a.endsWith('/') ? a : a + '/'));
 }

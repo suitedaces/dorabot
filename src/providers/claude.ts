@@ -3,12 +3,14 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'n
 import { execFile, execSync, spawn } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
 import { dirname } from 'node:path';
-import type { Provider, ProviderRunOptions, ProviderMessage, ProviderAuthStatus, ProviderQueryResult, RunHandle } from './types.js';
+import { homedir } from 'node:os';
+import type { Provider, ProviderRunOptions, ProviderMessage, ProviderAuthStatus, ProviderQueryResult, RunHandle, ClaudeModelCatalog } from './types.js';
 import { guardImages } from './image-guard.js';
 import { DORABOT_DIR, CLAUDE_KEY_PATH, CLAUDE_OAUTH_PATH } from '../workspace.js';
 import { cleanEnvForSdk } from '../sdk-env.js';
 import { getSecretStorageBackend, keychainDelete, keychainLoad, keychainStore, type SecretStorageBackend } from '../auth/keychain.js';
 import { canReuseAccessTokenAfterRefreshFailure } from './oauth-refresh.js';
+import { claudeUsageFromRateLimitInfo, getProviderUsage, setProviderUsage } from './usage.js';
 
 // ── Node binary resolution ──────────────────────────────────────────
 // Electron apps get a minimal PATH. Resolve the full path to node once at startup
@@ -745,6 +747,42 @@ export class ClaudeProvider implements Provider {
    * This is the most definitive check — if the model responds, auth is valid.
    * Uses the same pattern as automaker's verify-claude-auth endpoint.
    */
+  // starts the cli without sending a prompt: no tokens spent. the fastMode opt-in
+  // makes init report real availability instead of sdk_opt_in_required.
+  async getModelCatalog(): Promise<ClaudeModelCatalog> {
+    const method = getActiveAuthMethod();
+    const oauthToken = method === 'dorabot_oauth' ? await ensureOAuthToken() : null;
+    const env = cleanEnvForSdk();
+    applyAuthEnv(env, method, oauthToken);
+
+    let release!: () => void;
+    const held = new Promise<void>(r => { release = r; });
+    async function* idle(): AsyncGenerator<never, void, unknown> { await held; }
+
+    const q = query({
+      prompt: idle() as any,
+      options: { env, cwd: homedir(), persistSession: false, settings: { fastMode: true } },
+    });
+    try {
+      const init = await q.initializationResult();
+      const models = await q.supportedModels();
+      return {
+        models: models.map(m => ({
+          value: m.value,
+          resolvedModel: m.resolvedModel,
+          displayName: m.displayName,
+          description: m.description,
+          supportedEffortLevels: m.supportedEffortLevels,
+          supportsFastMode: m.supportsFastMode,
+        })),
+        fastMode: { available: init.fast_mode_state !== 'off', reason: init.fast_mode_disabled_reason },
+      };
+    } finally {
+      release();
+      q.close();
+    }
+  }
+
   async verifyAuth(): Promise<{ authenticated: boolean; authType?: string; error?: string }> {
     const AUTH_ERROR_PATTERNS = [
       'oauth token revoked', 'please run /login', 'token revoked',
@@ -979,6 +1017,7 @@ export class ClaudeProvider implements Provider {
         }
       },
       async setModel(model: string) { await queryRef?.setModel(model); },
+      async setFastMode(on: boolean) { await queryRef?.applyFlagSettings({ fastMode: on }); },
       async setPermissionMode(mode: string) { await queryRef?.setPermissionMode(mode as any); },
       async stopTask(taskId: string) { await (queryRef as any)?.stopTask?.(taskId); },
       async mcpServerStatus() { return queryRef?.mcpServerStatus() ?? []; },
@@ -1045,9 +1084,11 @@ export class ClaudeProvider implements Provider {
       thinking = thinkingCfg as any;
     }
 
-    // Apply thinking display preference (4.7+ defaults to omitted)
-    if (thinking && thinking.type === 'adaptive' && opts.config.thinkingDisplay) {
-      thinking.display = opts.config.thinkingDisplay;
+    // the api defaults display to omitted on 4.7+ (empty thinking blocks). ask for summaries unless the
+    // config says otherwise: same billing, and the chat has something to show.
+    if (!thinking && modelNeedAdaptive) thinking = { type: 'adaptive' };
+    if (thinking && thinking.type === 'adaptive') {
+      thinking.display = opts.config.thinkingDisplay || 'summarized';
     }
 
     // ── SDK query with async generator prompt ───────────────────────
@@ -1078,6 +1119,9 @@ export class ClaudeProvider implements Provider {
         effort,
         thinking,
         betas: opts.config.betas,
+        // fast mode needs an explicit sdk opt-in, it bills to usage credits on subscriptions
+        settings: opts.fastMode ? { fastMode: true } : undefined,
+        promptSuggestions: !!opts.config.promptSuggestions,
         settingSources: opts.config.settingSources,
         agentProgressSummaries: opts.config.agentProgressSummaries ?? true,
         includePartialMessages: true,
@@ -1125,6 +1169,9 @@ export class ClaudeProvider implements Provider {
         yield msg as ProviderMessage;
 
         const m = msg as Record<string, unknown>;
+        if (m.type === 'rate_limit_event') {
+          setProviderUsage(claudeUsageFromRateLimitInfo(m.rate_limit_info, getProviderUsage('claude')));
+        }
         if (m.type === 'system' && m.subtype === 'init' && m.session_id) {
           sessionId = m.session_id as string;
         }

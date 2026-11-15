@@ -1,3 +1,5 @@
+import { noticeFromSystem, type NoticeLevel } from '../lib/system-notice';
+import { slimToolMeta, type ToolMeta } from '../lib/tool-meta';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { jsonrepair } from 'jsonrepair';
 import { getGatewayClient } from '../gateway/client';
@@ -139,12 +141,16 @@ export type ProviderInputItem =
 
 export type ChatItem =
   | { type: 'user'; content: string; images?: ImageAttachment[]; timestamp: number }
-  | { type: 'text'; content: string; streaming?: boolean; timestamp: number }
-  | { type: 'tool_use'; id: string; name: string; input: string; output?: string; imageData?: string; is_error?: boolean; streaming?: boolean; subItems?: ChatItem[]; timestamp: number }
-  | { type: 'thinking'; content: string; streaming?: boolean; timestamp: number }
-  | { type: 'result'; cost?: number; timestamp: number }
+  | { type: 'text'; content: string; streaming?: boolean; uuid?: string; withdrawn?: boolean; timestamp: number }
+  | { type: 'tool_use'; id: string; name: string; input: string; output?: string; imageData?: string; is_error?: boolean; streaming?: boolean; subItems?: ChatItem[]; meta?: ToolMeta; endedAt?: number; uuid?: string; withdrawn?: boolean; timestamp: number }
+  | { type: 'thinking'; content: string; streaming?: boolean; uuid?: string; withdrawn?: boolean; timestamp: number }
+  | { type: 'result'; cost?: number; end?: TurnEnd; timestamp: number }
   | { type: 'error'; content: string; timestamp: number }
-  | { type: 'compacting'; timestamp: number };
+  | { type: 'compacting'; timestamp: number }
+  | { type: 'notice'; kind: string; level: NoticeLevel; text: string; detail?: string; key?: string; url?: string; timestamp: number };
+
+// how a turn ended, from the sdk result message
+export type TurnEnd = { subtype?: string; stopReason?: string | null; isError?: boolean; errors?: string[]; denied?: number; turns?: number; durationMs?: number; message?: string };
 
 export type ProgressItem = { content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm: string };
 
@@ -305,6 +311,14 @@ export type CodexCatalogModel = {
   upgradeInfo?: unknown;
   availabilityNux?: unknown;
   additionalSpeedTiers?: unknown[];
+  serviceTiers?: Array<{ id: string; name?: string; description?: string }>;
+};
+
+export type ProviderUsage = {
+  provider: 'claude' | 'codex';
+  windows: Array<{ label: string; usedPercent: number; resetsAt?: number }>;
+  plan?: string;
+  updatedAt: number;
 };
 
 export type CodexModelCatalog = {
@@ -312,6 +326,11 @@ export type CodexModelCatalog = {
   requiresOpenaiAuth: boolean;
   models: CodexCatalogModel[];
   source: 'app-server';
+};
+
+export type ClaudeModelCatalog = {
+  models: import('../lib/modelCatalog').ClaudeCatalogModelLike[];
+  fastMode: { available: boolean; reason?: string };
 };
 
 export type CodexAppServerSnapshot = CodexModelCatalog & {
@@ -335,7 +354,8 @@ export type TaskProgress = {
   outputTokens: number;
   durationMs: number;
   summary?: string;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'completed' | 'failed' | 'killed' | 'stopped';
+  endedAt?: number;
   updatedAt: number;
 };
 
@@ -368,6 +388,8 @@ export type SessionState = {
   sessionId?: string;
   pendingQuestion: AskUserQuestion | null;
   taskProgress: Record<string, TaskProgress>;
+  thinkingTokens?: number;
+  suggestion?: string;
   pendingElicitation: PendingElicitation | null;
   activeWorktrees: ActiveWorktree[];
 };
@@ -399,11 +421,33 @@ type SessionMessage = {
   content: Record<string, unknown>;
 };
 
+// a notice with the same key as the item right before it replaces it (repeated api retries)
+function pushNotice(items: ChatItem[], raw: unknown, timestamp: number): ChatItem[] {
+  const n = noticeFromSystem(raw);
+  if (!n) return items;
+  const r = raw as any;
+  // live text has no message uuid yet; the stopped response is the unfinished tail of the turn
+  if (r?.subtype === 'model_refusal_fallback' && r.retracted_message_uuids?.length) {
+    items = [...items];
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      const unfinished = it.type === 'text' || it.type === 'thinking' || (it.type === 'tool_use' && it.output == null);
+      if (!unfinished) break;
+      items[i] = { ...it, withdrawn: true };
+    }
+  }
+  const item: ChatItem = { type: 'notice', ...n, timestamp };
+  const last = items[items.length - 1];
+  if (n.key && last?.type === 'notice' && last.key === n.key) return [...items.slice(0, -1), item];
+  return [...items, item];
+}
+
 function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
   const items: ChatItem[] = [];
   // Track active Task tool scopes — messages between a Task tool_use and its
   // matching tool_result are subagent content that should be nested as subItems.
   const activeTaskIds = new Set<string>();
+  const taskToolUse = new Map<string, string>();
   const taskSubItems = new Map<string, ChatItem[]>();
 
   const extractResultText = (block: any): string => {
@@ -421,7 +465,37 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
     const c = msg.content;
     const ts = new Date(msg.timestamp).getTime();
 
-    if (msg.type === 'system') continue;
+    if (msg.type === 'system') {
+      // background task endings: stored as system events, attached to the tool that started them
+      const sc = c as any;
+      if (sc.subtype === 'task_started' && sc.tool_use_id) taskToolUse.set(sc.task_id, sc.tool_use_id);
+      const endStatus = sc.subtype === 'task_updated' ? sc.patch?.status : sc.subtype === 'task_notification' ? sc.status : undefined;
+      if (endStatus && endStatus !== 'running') {
+        const toolUseId = taskToolUse.get(sc.task_id) || sc.tool_use_id;
+        for (let i = items.length - 1; i >= 0; i--) {
+          const it = items[i];
+          if (it.type === 'tool_use' && it.id === toolUseId) {
+            items[i] = { ...it, meta: { ...(it.meta || {}), bgStatus: endStatus, bgEndedAt: sc.patch?.end_time ?? it.meta?.bgEndedAt ?? ts } };
+            break;
+          }
+        }
+      }
+      if (sc.subtype === 'model_refusal_fallback' && Array.isArray(sc.retracted_message_uuids)) {
+        const gone = new Set<string>(sc.retracted_message_uuids);
+        for (let i = 0; i < items.length; i++) {
+          const it = items[i];
+          if ((it.type === 'text' || it.type === 'thinking' || it.type === 'tool_use') && it.uuid && gone.has(it.uuid)) items[i] = { ...it, withdrawn: true };
+        }
+      }
+      const n = noticeFromSystem(c);
+      if (n) {
+        const last = items[items.length - 1];
+        const item: ChatItem = { type: 'notice', ...n, timestamp: ts };
+        if (n.key && last?.type === 'notice' && last.key === n.key) items[items.length - 1] = item;
+        else items.push(item);
+      }
+      continue;
+    }
 
     if (msg.type === 'user') {
       const userMsg = (c as any).message;
@@ -435,18 +509,19 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
             if (block.type !== 'tool_result') continue;
             const resultText = extractResultText(block);
             const toolUseId = block.tool_use_id as string;
+            const img = Array.isArray(block.content) ? block.content.find((b: any) => b.type === 'image') : null;
+            const imageData = img?.source?.data ? `data:${img.source.media_type || 'image/png'};base64,${img.source.data}` : undefined;
+            const meta = blocks.length === 1 ? slimToolMeta((c as any).tool_use_result) : undefined;
 
             // Check if this is the final result for a Task tool
             if (activeTaskIds.has(toolUseId)) {
               activeTaskIds.delete(toolUseId);
               const subs = taskSubItems.get(toolUseId) || [];
               taskSubItems.delete(toolUseId);
-              const trimmed = resultText.slice(0, 2000);
-
               for (let i = items.length - 1; i >= 0; i--) {
                 const it = items[i];
                 if (it.type === 'tool_use' && it.id === toolUseId) {
-                  items[i] = { ...it, output: trimmed, is_error: block.is_error || false, subItems: subs.length > 0 ? subs : trimmed ? [{ type: 'text' as const, content: trimmed, timestamp: it.timestamp }] : undefined };
+                  items[i] = { ...it, output: resultText, is_error: block.is_error || false, meta, endedAt: ts, subItems: subs.length > 0 ? subs : resultText ? [{ type: 'text' as const, content: resultText, timestamp: it.timestamp }] : undefined };
                   break;
                 }
               }
@@ -460,7 +535,7 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
                 for (let i = subs.length - 1; i >= 0; i--) {
                   const si = subs[i];
                   if (si.type === 'tool_use' && si.id === toolUseId) {
-                    subs[i] = { ...si, output: resultText.slice(0, 1000), is_error: block.is_error || false };
+                    subs[i] = { ...si, output: resultText, imageData, is_error: block.is_error || false, meta, endedAt: ts };
                     break;
                   }
                 }
@@ -472,7 +547,7 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
             for (let i = items.length - 1; i >= 0; i--) {
               const it = items[i];
               if (it.type === 'tool_use' && it.id === toolUseId) {
-                items[i] = { ...it, output: resultText.slice(0, 2000), is_error: block.is_error || false };
+                items[i] = { ...it, output: resultText, imageData, is_error: block.is_error || false, meta, endedAt: ts };
                 break;
               }
             }
@@ -502,6 +577,9 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
           continue;
         }
       }
+      // the sdk flags model-facing context as synthetic: image size notes, compaction summaries,
+      // resume instructions, loaded skill text. none of it is something the user typed.
+      if ((c as any).isSynthetic === true) continue;
       // real user message (or recovered after orphan cleanup)
       {
         // real user message
@@ -573,8 +651,9 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
 
       if (Array.isArray(blocks)) {
         for (const block of blocks) {
+          const uuid = (c as any).uuid as string | undefined;
           if (block.type === 'text' && block.text) {
-            items.push({ type: 'text', content: block.text, timestamp: ts });
+            items.push({ type: 'text', content: block.text, uuid, timestamp: ts });
           } else if (block.type === 'tool_use') {
             const name = cleanToolName(block.name || 'unknown');
             const item: ChatItem = {
@@ -582,6 +661,7 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
               id: block.id || '',
               name,
               input: typeof block.input === 'string' ? block.input : JSON.stringify(block.input || {}),
+              uuid,
               timestamp: ts,
             };
             items.push(item);
@@ -592,7 +672,7 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
               taskSubItems.set(block.id, []);
             }
           } else if (block.type === 'thinking' && block.thinking) {
-            items.push({ type: 'thinking', content: block.thinking, timestamp: ts });
+            items.push({ type: 'thinking', content: block.thinking, uuid, timestamp: ts });
           }
         }
       }
@@ -600,9 +680,19 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
     }
 
     if (msg.type === 'result') {
+      const r = c as any;
+      // codex tool results are stored as result rows too; they are not the end of a turn
+      if (r.subtype === 'tool_result' || r.subtype === 'tool_output_delta') continue;
       items.push({
         type: 'result',
-        cost: (c as any).total_cost_usd,
+        cost: r.total_cost_usd,
+        end: {
+          subtype: r.subtype, stopReason: r.stop_reason ?? null, isError: !!r.is_error,
+          errors: Array.isArray(r.errors) ? r.errors.map(String) : undefined,
+          denied: Array.isArray(r.permission_denials) ? r.permission_denials.length : undefined,
+          turns: r.num_turns, durationMs: r.duration_ms,
+          message: r.is_error && r.subtype === 'success' && typeof r.result === 'string' ? r.result : undefined,
+        },
         timestamp: ts,
       });
     }
@@ -649,6 +739,10 @@ export function useGateway() {
   // the two values the user writes are authoritative in refs, updated synchronously on pick,
   // so a send in the same react batch still sees the pick. state above only drives rendering.
   const pendingModelRef = useRef<Record<string, string>>(pendingModelByKey);
+  // per-chat fast mode, in memory only: off again after a restart since it bills 2x
+  const [fastModeByKey, setFastModeByKey] = useState<Record<string, boolean>>({});
+  const [usageByProvider, setUsageByProvider] = useState<Record<string, ProviderUsage>>({});
+  const fastModeRef = useRef<Record<string, boolean>>(fastModeByKey);
   const lastPickedRef = useRef<string>(lastPickedModel);
   // server-driven values, safe to mirror on render (nothing writes them synchronously)
   const modelSelectionRef = useRef({ modelsBySession, model });
@@ -833,7 +927,7 @@ export function useGateway() {
   const streamQueueMaxDepthRef = useRef<number>(0);
 
   // stash for tool results that arrive before their tool_use (server batching race)
-  type PendingToolResult = { toolUseId: string; content: string; imageData?: string; is_error?: boolean; toolName?: string; parentToolUseId?: string | null };
+  type PendingToolResult = { toolUseId: string; content: string; imageData?: string; is_error?: boolean; toolName?: string; parentToolUseId?: string | null; meta?: ToolMeta; endedAt?: number };
   const pendingToolResultsRef = useRef<Map<string, PendingToolResult>>(new Map());
   const pendingToolOutputDeltasRef = useRef<Map<string, string>>(new Map());
   const STREAM_FLUSH_INTERVAL_MS = 16;
@@ -900,7 +994,7 @@ export function useGateway() {
               const it = items[i];
               if (it.type === 'tool_use' && it.id === toolUseId) {
                 if (!changed) items = [...items];
-                items[i] = { ...it, output: result.content, imageData: result.imageData, is_error: result.is_error, streaming: false };
+                items[i] = { ...it, output: result.content, imageData: result.imageData, is_error: result.is_error, meta: result.meta, endedAt: result.endedAt, streaming: false };
                 changed = true;
                 applied.add(toolUseId);
                 break;
@@ -1002,7 +1096,7 @@ export function useGateway() {
       }
 
       case 'agent.result': {
-        const d = data as { sessionKey?: string; sessionId: string; result: string; usage?: { totalCostUsd?: number } };
+        const d = data as { sessionKey?: string; sessionId: string; result: string; usage?: { totalCostUsd?: number }; end?: TurnEnd };
         const sk = d.sessionKey;
         if (!sk || !trackedSessionsRef.current.has(sk)) break;
         // flush any pending stream deltas before marking streaming:false
@@ -1027,10 +1121,10 @@ export function useGateway() {
           });
           // Remove compacting indicator and add result
           const cleaned = updated.filter(i => i.type !== 'compacting');
-          cleaned.push({ type: 'result', cost: d.usage?.totalCostUsd, timestamp: Date.now() });
+          cleaned.push({ type: 'result', cost: d.usage?.totalCostUsd, end: d.end, timestamp: Date.now() });
           return {
             ...prev,
-            [sk]: { ...state, chatItems: cleaned, agentStatus: 'idle', pendingQuestion: null, sessionId: d.sessionId || state.sessionId },
+            [sk]: { ...state, chatItems: cleaned, agentStatus: 'idle', pendingQuestion: null, thinkingTokens: undefined, sessionId: d.sessionId || state.sessionId },
           };
         });
         // Notify tab system of sessionId assignment
@@ -1183,6 +1277,31 @@ export function useGateway() {
         break;
       }
 
+      case 'agent.prompt_suggestion': {
+        const d = data as { sessionKey?: string; suggestion?: string };
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk) || !d.suggestion) break;
+        setSessionStates(prev => prev[sk] ? { ...prev, [sk]: { ...prev[sk], suggestion: d.suggestion } } : prev);
+        break;
+      }
+
+      case 'agent.thinking_tokens': {
+        const d = data as { sessionKey?: string; tokens?: number };
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk) || typeof d.tokens !== 'number') break;
+        setSessionStates(prev => prev[sk] ? { ...prev, [sk]: { ...prev[sk], thinkingTokens: d.tokens } } : prev);
+        break;
+      }
+
+      case 'agent.notice': {
+        const d = data as { sessionKey?: string; message: unknown; timestamp?: number };
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk)) break;
+        flushStreamQueue();
+        setSessionStates(prev => updateSessionChatItems(prev, sk, items => pushNotice(items, d.message, d.timestamp || Date.now())));
+        break;
+      }
+
       case 'agent.tool_output_delta': {
         const d = data as { sessionKey?: string; tool_use_id: string; delta: string };
         const sk = d.sessionKey;
@@ -1201,7 +1320,8 @@ export function useGateway() {
       }
 
       case 'agent.tool_result': {
-        const d = data as { sessionKey?: string; tool_use_id: string; toolName?: string; content: string; imageData?: string; is_error?: boolean; parentToolUseId?: string | null };
+        const d = data as { sessionKey?: string; tool_use_id: string; toolName?: string; content: string; imageData?: string; is_error?: boolean; parentToolUseId?: string | null; meta?: ToolMeta; timestamp?: number };
+        const endedAt = d.timestamp || Date.now();
         const sk = d.sessionKey;
         if (!sk || !trackedSessionsRef.current.has(sk)) break;
         setSessionStates(prev => updateSessionChatItems(prev, sk, items => {
@@ -1217,7 +1337,7 @@ export function useGateway() {
                   if (sub.type === 'tool_use' && sub.id === d.tool_use_id) {
                     const updated = [...items];
                     const newSubs = [...subs];
-                    newSubs[j] = { ...sub, output: d.content, imageData: d.imageData, is_error: d.is_error, streaming: false };
+                    newSubs[j] = { ...sub, output: d.content, imageData: d.imageData, is_error: d.is_error, meta: d.meta, endedAt, streaming: false };
                     updated[i] = { ...it, subItems: newSubs };
                     return updated;
                   }
@@ -1227,7 +1347,7 @@ export function useGateway() {
                 const newSub: ChatItem = {
                   type: 'tool_use', id: d.tool_use_id, name: d.toolName || 'tool',
                   input: '', output: d.content, imageData: d.imageData,
-                  is_error: d.is_error, streaming: false, timestamp: Date.now(),
+                  is_error: d.is_error, meta: d.meta, endedAt, streaming: false, timestamp: Date.now(),
                 };
                 updated[i] = { ...it, subItems: [...subs, newSub] };
                 return updated;
@@ -1245,13 +1365,13 @@ export function useGateway() {
             const item = updated[idx] as Extract<ChatItem, { type: 'tool_use' }>;
             // For AskUserQuestion, keep our pre-set answer summary instead of the SDK's generic result
             const output = (item.name === 'AskUserQuestion' && item.output) ? item.output : d.content;
-            updated[idx] = { ...item, output, imageData: d.imageData, is_error: d.is_error, streaming: false };
+            updated[idx] = { ...item, output, imageData: d.imageData, is_error: d.is_error, meta: d.meta, endedAt, streaming: false };
             return updated;
           }
           // tool_use not created yet (stream batch race) — stash for later
           pendingToolResultsRef.current.set(d.tool_use_id, {
             toolUseId: d.tool_use_id, content: d.content, imageData: d.imageData,
-            is_error: d.is_error, toolName: d.toolName, parentToolUseId: d.parentToolUseId,
+            is_error: d.is_error, toolName: d.toolName, parentToolUseId: d.parentToolUseId, meta: d.meta, endedAt,
           });
           return items;
         }));
@@ -1409,7 +1529,7 @@ export function useGateway() {
       }
 
       case 'agent.task_notification': {
-        const d = data as { sessionKey: string; taskId: string; toolUseId: string };
+        const d = data as { sessionKey: string; taskId: string; toolUseId: string; status?: TaskProgress['status'] };
         const sk = d.sessionKey;
         if (!sk || !trackedSessionsRef.current.has(sk)) break;
         setSessionStates(prev => {
@@ -1418,8 +1538,23 @@ export function useGateway() {
           const existing = state.taskProgress[d.taskId];
           if (!existing) return prev;
           const tp = { ...state.taskProgress };
-          tp[d.taskId] = { ...existing, status: 'completed', updatedAt: Date.now() };
+          tp[d.taskId] = { ...existing, status: d.status || 'completed', endedAt: existing.endedAt ?? Date.now(), updatedAt: Date.now() };
           return { ...prev, [sk]: { ...state, taskProgress: tp } };
+        });
+        break;
+      }
+
+      // how a task really ended (killed, failed) and when
+      case 'agent.task_updated': {
+        const d = data as { sessionKey: string; taskId: string; patch?: { status?: string; end_time?: number } };
+        const sk = d.sessionKey;
+        if (!sk || !trackedSessionsRef.current.has(sk) || !d.patch?.status) break;
+        setSessionStates(prev => {
+          const state = prev[sk];
+          const existing = state?.taskProgress[d.taskId];
+          if (!state || !existing) return prev;
+          const status = (['running', 'completed', 'failed', 'killed', 'stopped'].includes(d.patch!.status!) ? d.patch!.status : existing.status) as TaskProgress['status'];
+          return { ...prev, [sk]: { ...state, taskProgress: { ...state.taskProgress, [d.taskId]: { ...existing, status, endedAt: d.patch!.end_time ?? existing.endedAt, updatedAt: Date.now() } } } };
         });
         break;
       }
@@ -1689,6 +1824,12 @@ export function useGateway() {
         break;
       }
 
+      case 'provider.usage': {
+        const u = data as ProviderUsage;
+        if (u?.provider) setUsageByProvider(prev => ({ ...prev, [u.provider]: u }));
+        break;
+      }
+
       case 'provider.auth_required': {
         const d = data as { provider: string; reason: string };
         onNotifiableEventRef.current?.({
@@ -1944,6 +2085,7 @@ export function useGateway() {
         [sk]: {
           ...state,
           chatItems: [...state.chatItems, { type: 'user', content: prompt, images: images?.length ? images : undefined, timestamp: Date.now() }],
+          suggestion: undefined,
           agentStatus: state.agentStatus === 'idle' ? 'thinking...' : state.agentStatus,
         },
       };
@@ -1961,6 +2103,7 @@ export function useGateway() {
         chatId: cid,
         sessionKey: sk,
         model: effectiveModel || undefined,
+        fastMode: !!fastModeRef.current[sk],
       }) as { sessionKey?: string } | undefined;
       // the server pinned it to the session row; the pending pick has done its job
       if (pending[sk]) {
@@ -2142,6 +2285,13 @@ export function useGateway() {
     return lastPickedModel || model;
   }, [modelsBySession, pendingModelByKey, lastPickedModel, model]);
 
+  const setSessionFastMode = useCallback((sessionKey: string, on: boolean) => {
+    fastModeRef.current = { ...fastModeRef.current, [sessionKey]: on };
+    setFastModeByKey(fastModeRef.current);
+  }, []);
+
+  const getSessionFastMode = useCallback((sessionKey?: string) => !!(sessionKey && fastModeByKey[sessionKey]), [fastModeByKey]);
+
   const setConfig = useCallback(async (key: string, value: unknown) => {
     // optimistic local update
     setConfigData(prev => prev ? setNestedKey(prev, key, value) : prev);
@@ -2316,8 +2466,17 @@ export function useGateway() {
     return await rpc('provider.auth.status', { provider }) as ProviderAuthInfo;
   }, [rpc]);
 
+  const getClaudeModels = useCallback(async () => {
+    return await rpc('provider.claude.models') as ClaudeModelCatalog;
+  }, [rpc]);
+
   const getCodexModels = useCallback(async () => {
     return await rpc('provider.codex.models') as CodexModelCatalog;
+  }, [rpc]);
+
+  const loadProviderUsage = useCallback(async (provider: string) => {
+    const u = await rpc('provider.usage', { provider }) as ProviderUsage | null;
+    if (u?.provider) setUsageByProvider(prev => ({ ...prev, [u.provider]: u }));
   }, [rpc]);
 
   const getCodexAppServerSnapshot = useCallback(async (cwd?: string) => {
@@ -2529,6 +2688,11 @@ export function useGateway() {
     checkProvider,
     getProviderAuth,
     getCodexModels,
+    getClaudeModels,
+    usageByProvider,
+    loadProviderUsage,
+    setSessionFastMode,
+    getSessionFastMode,
     getCodexAppServerSnapshot,
     codexAppServerRpc,
     detectProviders,

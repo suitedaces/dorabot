@@ -1,6 +1,6 @@
 {
   "name": "dorabot",
-  "version": "0.3.4",
+  "version": "0.3.7",
   "type": "module",
   "description": "Open-source personal AI agent. Persistent memory, multi-channel messaging, browser automation, and proactive goal management.",
   "main": "dist/index.js",
@@ -25,7 +25,9 @@
     "test:scheduler-run": "tsx scripts/test-scheduler-run-item.ts",
     "test:codex-auth-state": "node scripts/test-codex-auth-state.mjs",
     "test:gateway-auth-state": "node scripts/test-gateway-auth-state.mjs",
-    "test:codex-provider": "node scripts/smoke-codex-145.mjs",
+    "test:codex-provider": "node scripts/smoke-codex.mjs",
+    "test:codex-legacy-oauth": "tsx scripts/test-codex-legacy-oauth.ts",
+    "test:provider-usage": "tsx scripts/test-provider-usage.ts",
     "test:claude-provider": "node scripts/smoke-claude-sdk.mjs",
     "test:context-usage": "node scripts/smoke-context-usage.mjs",
     "test:model-switch": "node scripts/smoke-model-switch.mjs",
@@ -36,19 +38,19 @@
     "test:fs-ops": "tsx scripts/test-fs-ops.ts"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.290",
+    "@anthropic-ai/claude-agent-sdk": "0.3.325",
     "@anthropic-ai/sdk": "0.97.1",
     "@grammyjs/runner": "2.0.3",
     "@grammyjs/transformer-throttler": "1.2.1",
-    "@modelcontextprotocol/sdk": "1.29.0",
-    "@openai/codex": "0.145.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@openai/codex": "0.169.0",
     "@types/luxon": "3.7.1",
     "@whiskeysockets/baileys": "6.7.23",
-    "better-sqlite3": "12.6.2",
+    "better-sqlite3": "13.0.3",
     "dotenv": "17.2.4",
     "grammy": "1.39.3",
-    "gray-matter": "4.0.3",
     "ical-generator": "10.0.0",
+    "js-yaml": "4.3.2",
     "luxon": "3.7.2",
     "marked": "18.0.2",
     "mime-types": "3.0.2",
@@ -56,12 +58,13 @@
     "playwright-core": "1.58.2",
     "qrcode-terminal": "0.12.0",
     "rrule": "2.8.1",
-    "sharp": "0.35.4",
+    "sharp": "0.35.5",
     "ws": "8.21.1",
-    "zod": "4.3.6"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/better-sqlite3": "7.6.13",
+    "@types/js-yaml": "4.0.9",
     "@types/mime-types": "3.0.1",
     "@types/node": "22.19.7",
     "@types/ws": "8.18.1",
@@ -69,11 +72,11 @@
     "typescript": "5.9.3"
   },
   "overrides": {
-    "axios": "1.18.1",
-    "fast-uri": "3.1.7",
+    "axios": "1.20.0",
+    "fast-uri": "3.1.9",
     "protobufjs": "7.6.5",
-    "hono": "4.13.5",
-    "@hono/node-server": "2.0.11",
+    "hono": "4.13.16",
+    "@hono/node-server": "2.1.6",
     "proxy-addr": "2.0.8"
   },
   "engines": {

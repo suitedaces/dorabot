@@ -29,6 +29,8 @@ export type RunHandle = {
   interrupt?(): Promise<void>;
   /** Change model mid-conversation (Claude SDK only) */
   setModel?(model: string): Promise<void>;
+  /** Turn fast mode on/off mid-run, applies from the next turn (Claude SDK only) */
+  setFastMode?(on: boolean): Promise<void>;
   /** Change permission mode mid-run (Claude SDK only) */
   setPermissionMode?(mode: string): Promise<void>;
   /** Stop a running subagent task (Claude SDK only) */
@@ -90,6 +92,8 @@ export type ProviderRunOptions = {
   mcpServer?: unknown; // in-process MCP server (Claude) or command spec (Codex)
   sandbox?: unknown;
   outputSchema?: unknown;
+  /** fast mode opt-in for this run (Claude SDK only) */
+  fastMode?: boolean;
   /** Called once the async message generator is ready, before SDK query starts */
   onRunReady?: (handle: RunHandle) => void;
 };
@@ -130,6 +134,18 @@ export type ProviderQueryResult = {
   };
 };
 
+export type ClaudeModelCatalog = {
+  models: Array<{
+    value: string;
+    resolvedModel?: string;
+    displayName: string;
+    description: string;
+    supportedEffortLevels?: string[];
+    supportsFastMode?: boolean;
+  }>;
+  fastMode: { available: boolean; reason?: string };
+};
+
 export interface Provider {
   readonly name: string;
 
@@ -150,6 +166,9 @@ export interface Provider {
 
   /** Run a query - yields SDK-compatible messages, returns final result */
   query(opts: ProviderRunOptions): AsyncGenerator<ProviderMessage, ProviderQueryResult, unknown>;
+
+  /** Models the signed-in account can use, plus fast mode availability (Claude SDK only) */
+  getModelCatalog?(): Promise<ClaudeModelCatalog>;
 
   /** Clear transient auth caches before re-checking status */
   invalidateAuthCache?(): Promise<void> | void;

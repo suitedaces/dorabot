@@ -51,6 +51,7 @@ function DraggableTab({
   isRunning,
   isDirty,
   unreadCount,
+  backgroundCount = 0,
   groupId,
   onFocusTab,
   onCloseTab,
@@ -67,6 +68,7 @@ function DraggableTab({
   isRunning: boolean;
   isDirty: boolean;
   unreadCount: number;
+  backgroundCount?: number;
   groupId?: string;
   onFocusTab: (id: string) => void;
   onCloseTab: (id: string) => void;
@@ -131,6 +133,11 @@ function DraggableTab({
         />
       ) : (
         <span className="truncate flex-1" onDoubleClick={e => { e.stopPropagation(); onStartRename?.(); }}>{tab.label}</span>
+      )}
+      {backgroundCount > 0 && (
+        <span className="shrink-0 flex items-center gap-1 text-[9.5px] text-primary tabular-nums" title={`${backgroundCount} running in the background`}>
+          <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />{backgroundCount}
+        </span>
       )}
       {!isActive && unreadCount > 0 && (
         <span className="shrink-0 rounded-full bg-primary text-primary-foreground text-[9px] px-1.5 min-w-[14px] text-center">
@@ -328,6 +335,7 @@ type TabBarProps = {
   activeTabId: string;
   sessionStates: Record<string, SessionState>;
   unreadBySession?: Record<string, number>;
+  backgroundBySession?: Record<string, number>;
   dirtyTabs?: Set<string>;
   isActiveGroup?: boolean;
   isMultiPane?: boolean;
@@ -344,7 +352,7 @@ type TabBarProps = {
   onRenameTab?: (tabId: string, newLabel: string) => void;
 };
 
-export function TabBar({ tabs, activeTabId, sessionStates, unreadBySession = {}, dirtyTabs, isActiveGroup, isMultiPane, groupId, onFocusTab, onCloseTab, onNewChat, onNewTerminal, onCloseOtherTabs, onCloseAllTabs, onCloseTabsToRight, onSplitRight, onSplitDown, onRenameTab }: TabBarProps) {
+export function TabBar({ tabs, activeTabId, sessionStates, unreadBySession = {}, backgroundBySession = {}, dirtyTabs, isActiveGroup, isMultiPane, groupId, onFocusTab, onCloseTab, onNewChat, onNewTerminal, onCloseOtherTabs, onCloseAllTabs, onCloseTabsToRight, onSplitRight, onSplitDown, onRenameTab }: TabBarProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -383,6 +391,7 @@ export function TabBar({ tabs, activeTabId, sessionStates, unreadBySession = {},
               isRunning={isRunning}
               isDirty={dirtyTabs?.has(tab.id) || false}
               unreadCount={isChatTab(tab) ? (unreadBySession[tab.sessionKey] || 0) : 0}
+              backgroundCount={isChatTab(tab) ? (backgroundBySession[tab.sessionKey] || 0) : 0}
               groupId={groupId}
               onFocusTab={onFocusTab}
               onCloseTab={onCloseTab}

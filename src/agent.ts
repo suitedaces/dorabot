@@ -28,6 +28,7 @@ import { getShellPath, cleanEnvForSdk } from './sdk-env.js';
 
 export type AgentOptions = {
   prompt: string;
+  fastMode?: boolean;
   images?: import('./providers/types.js').ImageAttachment[];
   inputItems?: import('./providers/types.js').ProviderInputItem[];
   sessionId?: string;
@@ -340,6 +341,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
     mcpServer: allMcpServers,
     sandbox: effectiveSandbox,
     outputSchema: opts.outputSchema,
+    fastMode: opts.fastMode,
     onRunReady: opts.onRunReady,
   });
 

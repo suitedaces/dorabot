@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'node:http';
-import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, chmodSync, unlinkSync, realpathSync, watch, cpSync, createWriteStream, type FSWatcher } from 'node:fs';
+import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, chmodSync, unlinkSync, realpathSync, watch, cpSync, createWriteStream, openSync, readSync, closeSync, type FSWatcher } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import * as nodePty from 'node-pty';
 import { resolve as pathResolve, join, dirname, sep } from 'node:path';
@@ -8,7 +8,7 @@ import { homedir, tmpdir } from 'node:os';
 import { execSync, execFileSync } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { pipeline } from 'node:stream/promises';
-import matter from 'gray-matter';
+import { parseFrontmatter } from '../frontmatter.js';
 
 // Resolve a user-supplied path. Relative paths resolve against `base` when
 // provided (fall back to process.cwd() for legacy callers), NOT against the
@@ -55,8 +55,13 @@ import {
 } from '../tools/tasks.js';
 import { loadResearch, saveResearch, readResearchContent, writeResearchFile, nextId as nextResearchId, type ResearchItem } from '../tools/research.js';
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
+import { slimToolMeta } from './tool-meta.js';
+
+const thinkingTokensSentAt = new Map<string, number>();
+const NOTICE_SUBTYPES = new Set(['model_refusal_fallback', 'model_refusal_no_fallback', 'api_retry', 'informational', 'notification', 'session_writes_lost', 'mirror_error', 'compact_boundary', 'code_change_published', 'hook_response', 'memory_recall', 'files_persisted', 'permission_denied']);
 import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, onClaudeAuthRequired } from '../providers/claude.js';
-import { isCodexInstalled, hasCodexAuth, onCodexAuthRequired, getCodexModelCatalog, getCodexAppServerSnapshot, callCodexAppServer, closeCodexAppServerRpcClient } from '../providers/codex.js';
+import { getProviderUsage, onProviderUsage } from '../providers/usage.js';
+import { isCodexInstalled, hasCodexAuth, onCodexAuthRequired, getCodexUsage, getCodexModelCatalog, getCodexAppServerSnapshot, callCodexAppServer, closeCodexAppServerRpcClient } from '../providers/codex.js';
 import type { ProviderName } from '../config.js';
 import { buildProviderAuthGate, classifyAuthRecovery, type ProviderAuthGate } from './auth-state.js';
 import { startHttpAuthServer, type HttpAuthServer } from './http-auth-server.js';
@@ -118,7 +123,7 @@ function skillManagerEnv(): NodeJS.ProcessEnv {
 }
 
 function parseSkillMetadata(raw: string): { description: string; metadata: { requires?: { bins?: string[]; env?: string[] } } } {
-  const parsed = matter(raw);
+  const parsed = parseFrontmatter(raw);
   return {
     description: typeof parsed.data.description === 'string' ? parsed.data.description : '',
     metadata: (parsed.data.metadata as { requires?: { bins?: string[]; env?: string[] } } | undefined) || {},
@@ -729,6 +734,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const unsubscribeCodexAuthRequired = onCodexAuthRequired((reason) => {
     if ((config.provider?.name || 'claude') === 'codex') broadcastAuthRequired('codex', reason);
   });
+  const unsubscribeProviderUsage = onProviderUsage((usage) => {
+    broadcast({ event: 'provider.usage', data: usage });
+  });
 
   // file system watcher manager
   type FileWatchEntry = {
@@ -992,6 +1000,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const runHandles = new Map<string, RunHandle>();
   // model the live run is on, so a message sent with a different pick can switch it
   const runModels = new Map<string, string>();
+  // per-chat fast mode, desktop chats only, in memory so a restart turns it off (it bills 2x to usage credits)
+  const fastModes = new Map<string, boolean>();
+  let claudeModelCatalog: { at: number; data: unknown } | null = null;
   type RunReplyRef = {
     sessionId: string;
     source: string;
@@ -2622,6 +2633,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           canUseTool: makeCanUseTool(channel, messageMetadata?.chatId, sessionKey),
           abortController,
           messageMetadata,
+          // undefined off desktop: those runs have no toggle and follow the provider's own config
+          fastMode: sessionKey.startsWith('desktop:') ? fastModes.get(sessionKey) === true : undefined,
           onRunReady: (handle) => { runHandles.set(sessionKey, handle); runModels.set(sessionKey, runConfig.model); },
           lastPulseAt,
           hooks: {
@@ -2635,6 +2648,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         let agentText = '';
         let agentSessionId = '';
         let agentUsage = { inputTokens: 0, outputTokens: 0, totalCostUsd: 0 };
+        let agentEnd: { subtype?: string; stopReason?: string | null; isError?: boolean; errors?: string[]; denied?: number; turns?: number; durationMs?: number; message?: string } | undefined;
         let usedMessageTool = false;
         let hadStreamEvents = false;
 
@@ -2742,6 +2756,21 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
 
           // ── SDK task system messages (subagent progress) ──────────────
+          // safety stops, api retries and cli notices: the desktop shows them in the chat
+          if (m.type === 'prompt_suggestion' && (m as any).suggestion) {
+            broadcast({ event: 'agent.prompt_suggestion', data: { sessionKey, suggestion: (m as any).suggestion } });
+          }
+          // live thinking size, at most twice a second per session
+          if (m.type === 'system' && m.subtype === 'thinking_tokens') {
+            const now = Date.now();
+            if (now - (thinkingTokensSentAt.get(sessionKey) || 0) >= 500) {
+              thinkingTokensSentAt.set(sessionKey, now);
+              broadcast({ event: 'agent.thinking_tokens', data: { sessionKey, tokens: (m as any).estimated_tokens } });
+            }
+          }
+          if ((m.type === 'system' && NOTICE_SUBTYPES.has(String(m.subtype))) || (m.type === 'tool_progress' && (m as any).subagent_retry)) {
+            broadcast({ event: 'agent.notice', data: { source, sessionKey, message: m, timestamp: Date.now() } });
+          }
           if (m.type === 'system' && m.subtype === 'task_started') {
             const taskId = m.task_id as string;
             const toolUseId = m.tool_use_id as string;
@@ -2797,8 +2826,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             }
             broadcast({
               event: 'agent.task_notification',
-              data: { sessionKey, taskId, toolUseId, timestamp: Date.now() },
+              data: { sessionKey, taskId, toolUseId, status: (m as any).status, timestamp: Date.now() },
             });
+          }
+
+          if (m.type === 'system' && m.subtype === 'task_updated' && (m as any).patch) {
+            broadcast({ event: 'agent.task_updated', data: { sessionKey, taskId: (m as any).task_id, patch: (m as any).patch, timestamp: Date.now() } });
           }
 
           // ── Elicitation events ──────────────────────────────────────────
@@ -3116,9 +3149,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                       source,
                       sessionKey,
                       tool_use_id: block.tool_use_id,
-                      content: resultText.slice(0, 2000),
+                      content: resultText,
                       imageData,
                       is_error: block.is_error || false,
+                      // one sdk user message carries one tool result, so its tool_use_result is this block's
+                      meta: content.length === 1 ? slimToolMeta((m as any).tool_use_result) : undefined,
                       parentToolUseId: parentId,
                       timestamp: Date.now(),
                     },
@@ -3149,7 +3184,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 source,
                 sessionKey,
                 tool_use_id: toolUseId,
-                delta: deltaContent.slice(0, 2000),
+                delta: deltaContent,
                 timestamp: Date.now(),
               },
             });
@@ -3167,8 +3202,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 source,
                 sessionKey,
                 tool_use_id: toolUseId,
-                content: resultContent.slice(0, 2000),
+                content: resultContent,
                 is_error: m.is_error || false,
+                meta: slimToolMeta((m as any).meta),
                 timestamp: Date.now(),
               },
             });
@@ -3177,6 +3213,15 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (m.type === 'result' && m.subtype !== 'tool_result' && m.subtype !== 'tool_output_delta') {
             agentText = (m.result as string) || agentText;
             agentSessionId = (m.session_id as string) || agentSessionId;
+            const r = m as any;
+            agentEnd = {
+              subtype: r.subtype, stopReason: r.stop_reason ?? null, isError: !!r.is_error,
+              errors: Array.isArray(r.errors) ? r.errors.map(String) : undefined,
+              denied: Array.isArray(r.permission_denials) ? r.permission_denials.length : undefined,
+              turns: r.num_turns, durationMs: r.duration_ms,
+              // a successful result flagged as an error carries the cli's own message, e.g. a plan limit
+              message: r.is_error && r.subtype === 'success' && typeof r.result === 'string' ? r.result : undefined,
+            };
             if (agentSessionId && session) {
               sessionRegistry.setSdkSessionId(sessionKey, agentSessionId);
               fileSessionManager.setMetadata(session.sessionId, { sdkSessionId: agentSessionId });
@@ -3197,6 +3242,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 sessionId: agentSessionId || '',
                 result: agentText,
                 usage: agentUsage,
+                end: agentEnd,
                 timestamp: Date.now(),
               },
             };
@@ -3536,7 +3582,17 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
           // try injection into active run first
           const handle = runHandles.get(sessionKey);
+          const requestedFast = typeof params?.fastMode === 'boolean' && sessionKey.startsWith('desktop:') ? params.fastMode as boolean : undefined;
+          const fastChanged = requestedFast !== undefined && (fastModes.get(sessionKey) === true) !== requestedFast;
+          if (requestedFast !== undefined) fastModes.set(sessionKey, requestedFast);
           if (handle?.active) {
+            if (fastChanged && handle.setFastMode) {
+              try {
+                await handle.setFastMode(requestedFast!);
+              } catch (err) {
+                console.error(`[gateway] setFastMode on inject failed for ${sessionKey}:`, err);
+              }
+            }
             // the pick applies from this message on, even mid-run
             if (requestedModel && handle.setModel && runModels.get(sessionKey) !== requestedModel) {
               try {
@@ -4912,6 +4968,34 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
         }
 
+        case 'provider.claude.models': {
+          try {
+            const fresh = claudeModelCatalog && Date.now() - claudeModelCatalog.at < 10 * 60_000;
+            if (!fresh || params?.refresh) {
+              const claude = await getProviderByName('claude');
+              if (!claude.getModelCatalog) return { id, error: 'model catalog not supported' };
+              claudeModelCatalog = { at: Date.now(), data: await claude.getModelCatalog() };
+            }
+            return { id, result: claudeModelCatalog!.data };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'provider.usage': {
+          try {
+            const providerName = params?.provider === 'codex' ? 'codex' : 'claude';
+            const cached = getProviderUsage(providerName);
+            // claude only reports limits inside a run; codex can be asked at any time
+            if (providerName === 'codex' && (!cached || params?.refresh)) {
+              return { id, result: await getCodexUsage() };
+            }
+            return { id, result: cached };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
         case 'provider.codex.models': {
           try {
             return { id, result: await getCodexModelCatalog() };
@@ -5126,6 +5210,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             saveConfig(config);
             broadcast({ event: 'config.update', data: { key, value } });
             return { id, result: { key, value } };
+          }
+
+          if (key === 'promptSuggestions') {
+            config.promptSuggestions = value === true;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value: config.promptSuggestions } });
+            return { id, result: { key, value: config.promptSuggestions } };
           }
 
           if (key === 'thinkingDisplay') {
@@ -5418,6 +5509,33 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           try {
             const content = readFileSync(resolved, 'utf-8');
             return { id, result: { content, path: resolved } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        // read a growing file from an offset (background task output, agent transcripts)
+        case 'fs.tail': {
+          const filePath = params?.path as string;
+          const offset = Math.max(0, Number(params?.offset) || 0);
+          if (!filePath) return { id, error: 'path required' };
+          const resolved = resolve(filePath, config.cwd || homedir());
+          if (!isPathAllowed(resolved, config)) return { id, error: `path not allowed: ${resolved}` };
+          try {
+            const size = statSync(resolved).size;
+            if (offset >= size) return { id, result: { content: '', size } };
+            const len = Math.min(size - offset, 1024 * 1024);
+            const fd = openSync(resolved, 'r');
+            try {
+              const buf = Buffer.alloc(len);
+              readSync(fd, buf, 0, len, offset);
+              // a capped read ends on a newline so no line (or utf-8 char) is split across reads
+              const nl = offset + len < size ? buf.lastIndexOf(10) : -1;
+              const end = nl >= 0 ? nl + 1 : len;
+              return { id, result: { content: buf.subarray(0, end).toString('utf-8'), size, next: offset + end } };
+            } finally {
+              closeSync(fd);
+            }
           } catch (err) {
             return { id, error: err instanceof Error ? err.message : String(err) };
           }
@@ -7072,6 +7190,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             shellSessionKeys.delete(shellId);
             pty.kill();
             shellProcesses.delete(shellId);
+            broadcast({ event: 'shell.data', data: { shellId, type: 'exit', code: null } });
           }
         }, SHELL_ORPHAN_GRACE_MS);
         timer.unref?.();
@@ -7166,6 +7285,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       streamBatches.clear();
       unsubscribeClaudeAuthRequired();
       unsubscribeCodexAuthRequired();
+      unsubscribeProviderUsage();
       // Shut down HTTP auth server and flush auth cache
       await httpAuth?.close();
       flushAuthCache();
