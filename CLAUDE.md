@@ -6,7 +6,21 @@ Personal AI agent with multi-channel messaging, browser automation, and persiste
 
 When asked to plan or design, STOP and plan from the user's perspective BEFORE writing or analyzing code. Do not start coding autonomously when the user wants a plan, task list, or discussion first.
 
-## Debugging & Investigation
+## Desktop UI rule: less is more
+
+Every piece of text on screen has to change what the user does next. If it doesn't, it doesn't ship.
+
+- No counts or sizes as labels: lines, bytes, tokens, calls, sources, image dimensions.
+- No success marks. Success is the default; only failures get a mark (red cross), and a label only when it says why (denied by you, blocked by hook, timed out).
+- No label that repeats something already shown (a "running" tag next to a spinner, a "failed" tag next to a cross, a verb like "Edit failed").
+- No text next to a row that the row's body already holds (thought text, answers, line ranges). Open the row to read it.
+- No hints for things users already know ("shift+enter for a new line").
+- Buttons are icons; the words go in the tooltip and aria-label.
+- Time shows only while something runs.
+- Never cut text silently: the full text is one click away.
+- Before adding any label, badge, chip or hint, ask: what will the user do differently because of it? No answer, no label.
+
+
 
 When asked to investigate or debug something, run tests and scripts FIRST to observe actual behavior before reading/analyzing code extensively. Prefer empirical testing over code tracing.
 

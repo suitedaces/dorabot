@@ -1,7 +1,7 @@
 import { memo, useMemo, useRef, useState, type ReactNode } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Check, ChevronRight, Loader2, Maximize2, Minimize2, X, type LucideIcon } from 'lucide-react';
+import { ArrowDown, Check, ChevronRight, Loader2, Maximize2, Minimize2, X, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatDuration, useNow, useStickToBottom } from './hooks';
 
@@ -145,8 +145,8 @@ export function ScrollBox({ live, follow, children, className }: { live?: boolea
         {expanded ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
       </button>
       {detached && (
-        <button type="button" onClick={resume} className="absolute bottom-2 right-3 text-[10px] px-2 py-0.5 rounded-full bg-primary text-primary-foreground shadow">
-          follow ↓
+        <button type="button" onClick={resume} title="back to the latest" aria-label="back to the latest" className="absolute bottom-2 right-3 w-6 h-6 flex items-center justify-center rounded-full bg-primary text-primary-foreground shadow">
+          <ArrowDown className="w-3.5 h-3.5" />
         </button>
       )}
     </div>
