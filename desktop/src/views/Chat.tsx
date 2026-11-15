@@ -1690,8 +1690,9 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         );
       case 'result':
         return (
-          // a line between turns; words only when the turn did not end normally
+          // when the turn ended, and why if it was not a normal ending
           <div key={i} className="flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground py-1 mt-1 border-t border-border">
+            <span>{new Date(item.timestamp).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' })}</span>
             {turnEndNote(item.end)}
           </div>
         );
