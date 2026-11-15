@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { DorabotSprite } from '../components/DorabotSprite';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { useGateway, ChatItem, AskUserQuestion, ImageAttachment, PendingElicitation, CodexModelCatalog, ClaudeModelCatalog, ProviderInputItem } from '../hooks/useGateway';
+import type { useGateway, ChatItem, AskUserQuestion, ImageAttachment, PendingElicitation, CodexModelCatalog, ClaudeModelCatalog, ProviderInputItem, ProviderUsage } from '../hooks/useGateway';
 import type { ChatDraftStore } from '../hooks/useTabs';
 import { ElicitationForm } from '../components/ElicitationForm';
 import { ApprovalList } from '@/components/approval-ui';
@@ -24,7 +24,7 @@ import { cn } from '@/lib/utils';
 import { safeParse } from '@/lib/safe-parse';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
-  Square, ChevronDown, ChevronUp, ChevronRight, Sparkles,
+  Square, ChevronDown, ChevronUp, ChevronRight,
   FileText, FilePlus, Pencil, FolderSearch, FileSearch, Terminal,
   Globe, Search, Bot, MessageCircle, ListChecks, FileCode,
   MessageSquare, Camera, Monitor, Clock, Wrench, ArrowUp, LayoutGrid,
@@ -36,13 +36,13 @@ import {
 import { SHORTCUTS as ALL_SHORTCUTS } from '@/components/ShortcutHelp';
 import { jsonrepair } from 'jsonrepair';
 import {
-  CODEX_MODELS,
   DEFAULT_CLAUDE_MODEL,
   DEFAULT_CODEX_MODEL,
   claudeModelsFromCatalog,
   claudeReasoningEffortOptions,
-  codexModelsForAuth,
+  codexModelsFromCatalog,
   codexReasoningEffortOptions,
+  type ModelOption,
   labelForModel,
   reasoningEffortIsSupported,
   reasoningEffortLabel,
@@ -84,26 +84,41 @@ const LIVE_TOOLS = new Set(['Bash', 'Edit', 'Write', 'Agent', 'Task', 'MultiEdit
 const EMPTY_TASKS: never[] = [];
 const EMPTY_PROGRESS: Record<string, TaskProgress> = {};
 
+function UsageMeter({ usage }: { usage?: ProviderUsage }) {
+  if (!usage?.windows.length) return null;
+  const top = usage.windows.reduce((a, b) => (b.usedPercent > a.usedPercent ? b : a));
+  const resets = (ms?: number) => (ms ? new Date(ms).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'unknown');
+  const title = ['Plan usage', ...usage.windows.map(w => `${w.label}: ${w.usedPercent}% used, resets ${resets(w.resetsAt)}`)].join('\n');
+  return (
+    <span
+      title={title}
+      className={cn(
+        'h-7 px-1.5 hidden @[520px]:flex items-center text-[11px] tabular-nums rounded-lg shrink-0',
+        top.usedPercent >= 95 ? 'text-destructive' : top.usedPercent >= 80 ? 'text-amber-500' : 'text-muted-foreground',
+      )}
+    >
+      {top.label} {top.usedPercent}%
+    </span>
+  );
+}
+
 function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: ReturnType<typeof useGateway>; disabled: boolean; sessionId?: string; sessionKey?: string }) {
   const providerName = (gateway.configData as any)?.provider?.name || 'claude';
+  const isClaude = providerName !== 'codex';
   // this session's model: saved pick, unsent pick, or the last model picked anywhere
   const claudeModel = gateway.getSessionModel(sessionId, sessionKey) || DEFAULT_CLAUDE_MODEL;
   const codexModel = (gateway.configData as any)?.provider?.codex?.model || DEFAULT_CODEX_MODEL;
-  const [codexAuthMethod, setCodexAuthMethod] = useState<string | undefined>(undefined);
   const [codexCatalog, setCodexCatalog] = useState<CodexModelCatalog | null>(null);
-  const codexOptions = codexModelsForAuth(codexAuthMethod, codexModel, codexCatalog?.models);
-  const selectedCodexOption = codexOptions.find(option => option.value === codexModel) || null;
   const [claudeCatalog, setClaudeCatalog] = useState<ClaudeModelCatalog | null>(null);
+  const codexOptions = codexModelsFromCatalog(codexCatalog?.models, codexModel);
   const claudeOptions = claudeModelsFromCatalog(claudeCatalog?.models, claudeModel);
-  const selectedClaudeOption = claudeOptions.find(option => option.value === claudeModel) || null;
-  const currentValue = providerName === 'codex' ? `codex:${codexModel}` : `claude:${claudeModel}`;
+  const selected = isClaude
+    ? claudeOptions.find(option => option.value === claudeModel) || null
+    : codexOptions.find(option => option.value === codexModel) || null;
+  const currentValue = isClaude ? `claude:${claudeModel}` : `codex:${codexModel}`;
   const reasoningEffort = (gateway.configData as any)?.reasoningEffort || null;
-
-  useEffect(() => {
-    gateway.getProviderAuth('codex')
-      .then((auth) => setCodexAuthMethod(auth.method))
-      .catch(() => {});
-  }, [gateway.getProviderAuth]);
+  const effortOptionsFor = (provider: string, option: ModelOption | null) =>
+    provider === 'claude' ? claudeReasoningEffortOptions(option) : codexReasoningEffortOptions(option);
 
   useEffect(() => {
     if (gateway.connectionState !== 'connected') return;
@@ -128,92 +143,74 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
   }, [gateway.connectionState, gateway.getClaudeModels]);
 
   useEffect(() => {
-    if (providerName === 'codex' && gateway.providerInfo?.auth?.method) {
-      setCodexAuthMethod(gateway.providerInfo.auth.method);
-    }
-  }, [gateway.providerInfo, providerName]);
+    if (gateway.connectionState !== 'connected') return;
+    gateway.loadProviderUsage(isClaude ? 'claude' : 'codex').catch(() => {});
+  }, [gateway.connectionState, gateway.loadProviderUsage, isClaude]);
 
   const handleChange = async (encoded: string) => {
     const [provider, model] = encoded.split(':') as [string, string];
+    const option = (provider === 'claude' ? claudeOptions : codexOptions).find(candidate => candidate.value === model) || null;
+    if (provider !== providerName) await gateway.setProvider(provider);
     if (provider === 'claude') {
-      if (providerName !== 'claude') await gateway.setProvider('claude');
-      const option = claudeOptions.find(candidate => candidate.value === model) || null;
-      if (reasoningEffort && !reasoningEffortIsSupported(claudeReasoningEffortOptions(option), reasoningEffort)) {
-        await gateway.setConfig('reasoningEffort', null);
-      }
-      if (sessionKey && !option?.supportsFastMode) gateway.setSessionFastMode(sessionKey, false);
       // always scoped to this chat. with no session row yet it rides along with the next message.
       gateway.selectModel(sessionKey || '', sessionId, model);
     } else {
-      if (providerName !== 'codex') await gateway.setProvider('codex');
       await gateway.setConfig('provider.codex.model', model);
-      const option = codexOptions.find(candidate => candidate.value === model) || null;
-      const efforts = codexReasoningEffortOptions(option);
-      if (reasoningEffort && !reasoningEffortIsSupported(efforts, reasoningEffort)) {
-        await gateway.setConfig('reasoningEffort', null);
-      }
     }
+    if (reasoningEffort && !reasoningEffortIsSupported(effortOptionsFor(provider, option), reasoningEffort)) {
+      await gateway.setConfig('reasoningEffort', null);
+    }
+    if (sessionKey && !option?.supportsFastMode) gateway.setSessionFastMode(sessionKey, false);
   };
 
-  const currentLabel = providerName === 'codex'
-    ? labelForModel(codexOptions, codexModel) || labelForModel(CODEX_MODELS, codexModel)
-    : labelForModel(claudeOptions, claudeModel);
+  const currentLabel = labelForModel(isClaude ? claudeOptions : codexOptions, isClaude ? claudeModel : codexModel);
 
   const handleEffortChange = async (value: string) => {
     const v = value === 'off' ? null : value;
     await gateway.setConfig('reasoningEffort', v);
   };
 
+  const providerGroups = [
+    { provider: 'claude', heading: 'Anthropic', icon: './claude-icon.svg', options: claudeOptions },
+    { provider: 'codex', heading: 'OpenAI', icon: './openai-icon.svg', options: codexOptions },
+  ];
+
   return (
     <div className="flex items-center gap-1 min-w-0 shrink">
       <Select value={currentValue} onValueChange={handleChange} disabled={disabled}>
         <SelectTrigger size="sm" title={currentLabel} className="h-7 gap-1.5 text-[11px] rounded-lg shadow-none w-auto shrink-0 @[360px]:shrink @[360px]:min-w-[72px] max-w-[200px] @max-[400px]:px-2 @max-[400px]:[&>svg:last-child]:hidden">
-          <img
-            src={providerName === 'codex' ? './openai-icon.svg' : './claude-icon.svg'}
-            alt=""
-            className="w-3 h-3 shrink-0"
-          />
+          <img src={isClaude ? './claude-icon.svg' : './openai-icon.svg'} alt="" className="w-3 h-3 shrink-0" />
           {/* too tight for the name: the provider icon alone, name on hover */}
           <span className="hidden @[360px]:inline truncate min-w-0">{currentLabel}</span>
         </SelectTrigger>
         <SelectContent position="popper" align="start" className="min-w-[180px]">
-          <div className="px-2 py-1 text-[9px] font-semibold text-muted-foreground uppercase tracking-wider">Anthropic</div>
-          {claudeOptions.map(m => (
-            <SelectItem key={m.value} value={`claude:${m.value}`} className="text-xs">
-              <span className="flex items-center gap-1.5">
-                <img src="./claude-icon.svg" alt="" className="w-3 h-3" />
-                {m.label}
-              </span>
-            </SelectItem>
-          ))}
-          <div className="px-2 py-1 mt-1 text-[9px] font-semibold text-muted-foreground uppercase tracking-wider border-t border-border">OpenAI</div>
-          {codexOptions.map(m => (
-            <SelectItem key={m.value} value={`codex:${m.value}`} className="text-xs">
-              <div className="flex flex-col gap-0.5 min-w-0">
-                <span className="flex items-center gap-1.5">
-                  <img src="./openai-icon.svg" alt="" className="w-3 h-3" />
-                  {m.label}
-                  {m.isDefault && <span className="text-[9px] text-primary">default</span>}
-                  {m.researchPreview && <span className="text-[9px] text-amber-500">preview</span>}
-                  {m.deprecated && <span className="text-[9px] text-muted-foreground">legacy</span>}
-                </span>
-                {m.description && <span className="text-[10px] text-muted-foreground truncate max-w-72">{m.description}</span>}
-              </div>
-            </SelectItem>
+          {providerGroups.map((group, i) => (
+            <div key={group.provider}>
+              <div className={cn('px-2 py-1 text-[9px] font-semibold text-muted-foreground uppercase tracking-wider', i > 0 && 'mt-1 border-t border-border')}>{group.heading}</div>
+              {group.options.map(m => (
+                <SelectItem key={m.value} value={`${group.provider}:${m.value}`} className="text-xs">
+                  <div className="flex flex-col gap-0.5 min-w-0">
+                    <span className="flex items-center gap-1.5">
+                      <img src={group.icon} alt="" className="w-3 h-3" />
+                      {m.label}
+                      {m.isDefault && <span className="text-[9px] text-primary">default</span>}
+                    </span>
+                    {m.description && <span className="text-[10px] text-muted-foreground truncate max-w-72">{m.description}</span>}
+                  </div>
+                </SelectItem>
+              ))}
+            </div>
           ))}
         </SelectContent>
       </Select>
-      {/* Effort selector — provider-aware icon and levels */}
       {(() => {
-        const isClaude = providerName === 'claude';
-        const effortLevels = isClaude ? claudeReasoningEffortOptions(selectedClaudeOption) : codexReasoningEffortOptions(selectedCodexOption);
+        const effortLevels = effortOptionsFor(providerName, selected);
         if (effortLevels.length === 0) return null;
         const effortValue = reasoningEffortIsSupported(effortLevels, reasoningEffort) ? reasoningEffort : 'off';
-        const EffortIcon = isClaude ? Brain : Sparkles;
         return (
           <Select value={effortValue} onValueChange={handleEffortChange} disabled={disabled}>
             <SelectTrigger size="sm" className="h-7 gap-1 text-[11px] rounded-lg shadow-none w-auto shrink-0 text-muted-foreground @max-[400px]:px-2 @max-[400px]:[&>svg:last-child]:hidden" title={`effort: ${effortValue === 'off' ? 'auto' : reasoningEffortLabel(effortLevels, effortValue)}`}>
-              <EffortIcon className="w-3 h-3" />
+              <Brain className="w-3 h-3" />
               {/* narrow panes keep the icon; the label comes back from 480px */}
               <span className="hidden @[480px]:inline">{effortValue === 'off' ? 'auto' : reasoningEffortLabel(effortLevels, effortValue)}</span>
             </SelectTrigger>
@@ -230,13 +227,16 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
       })()}
       {(() => {
         // desktop chats only: the gateway ignores fast mode for channel and calendar sessions
-        if (providerName !== 'claude' || !selectedClaudeOption?.supportsFastMode) return null;
+        if (!selected?.supportsFastMode) return null;
         if (!sessionKey?.startsWith('desktop:')) return null;
         const fastOn = gateway.getSessionFastMode(sessionKey);
-        const available = claudeCatalog?.fastMode.available !== false;
+        const available = !isClaude || claudeCatalog?.fastMode.available !== false;
+        const what = isClaude
+          ? 'up to 2.5x faster at 2x the price, billed to usage credits'
+          : selected.fastModeDescription || 'faster, uses more of your plan';
         const title = !available
           ? `Fast mode unavailable${claudeCatalog?.fastMode.reason ? ` (${claudeCatalog.fastMode.reason.replace(/_/g, ' ')})` : ''}`
-          : `Fast mode ${fastOn ? 'on' : 'off'}: up to 2.5x faster at 2x the price, billed to usage credits. Applies from your next message.`;
+          : `Fast mode ${fastOn ? 'on' : 'off'}: ${what}. Applies from your next message.`;
         return (
           <Button
             type="button"
@@ -253,6 +253,7 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
           </Button>
         );
       })()}
+      <UsageMeter usage={gateway.usageByProvider[isClaude ? 'claude' : 'codex']} />
     </div>
   );
 }

@@ -11,8 +11,8 @@ import { DORABOT_DIR, CODEX_OAUTH_PATH, OPENAI_KEY_PATH, TMP_DIR } from '../work
 import { getSecretStorageBackend, keychainDelete, keychainLoad, keychainStore, type SecretStorageBackend } from '../auth/keychain.js';
 import { guardImages } from './image-guard.js';
 import { isLoggedInCodexStatusText, summarizeCodexCliAuthRecord } from './codex-auth-state.js';
-import { canReuseAccessTokenAfterRefreshFailure } from './oauth-refresh.js';
 import { mergeSkillEnv } from '../skills/env.js';
+import { codexUsageFromSnapshot, setProviderUsage, type ProviderUsage } from './usage.js';
 
 // ── OAuth constants (same client as Codex CLI) ──────────────────────
 const OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
@@ -27,7 +27,6 @@ const CODEX_OAUTH_FILE = CODEX_OAUTH_PATH;
 const OPENAI_KEY_FILE = OPENAI_KEY_PATH;
 const KEYCHAIN_API_KEY_ACCOUNT = 'openai-api-key';
 const KEYCHAIN_OAUTH_ACCOUNT = 'openai-oauth';
-const REFRESH_LEAD_MS = 30 * 60 * 1000;
 
 const SUCCESS_HTML = `<!doctype html><html><body><p>Authentication successful. You can close this tab.</p></body></html>`;
 
@@ -74,6 +73,8 @@ export type CodexModelCatalogEntry = {
   upgradeInfo?: unknown;
   availabilityNux?: unknown;
   additionalSpeedTiers?: unknown[];
+  serviceTiers?: Array<{ id: string; name?: string; description?: string }>;
+  defaultServiceTier?: string | null;
 };
 
 export type CodexAccountInfo = {
@@ -645,6 +646,18 @@ export async function getCodexModelCatalog(): Promise<CodexModelCatalog> {
   }
 }
 
+export async function getCodexUsage(): Promise<ProviderUsage | null> {
+  const client = await CodexAppServerClient.start();
+  try {
+    const result = await client.request('account/rateLimits/read', undefined) as { rateLimits?: unknown };
+    const usage = codexUsageFromSnapshot(result?.rateLimits);
+    setProviderUsage(usage);
+    return usage;
+  } finally {
+    client.close();
+  }
+}
+
 async function listCodexModels(client: CodexAppServerClient): Promise<CodexModelCatalogEntry[]> {
   const models: CodexModelCatalogEntry[] = [];
   let cursor: string | null | undefined;
@@ -660,6 +673,17 @@ async function listCodexModels(client: CodexAppServerClient): Promise<CodexModel
     cursor = result?.nextCursor;
   } while (cursor);
   return models;
+}
+
+// fast mode = the model's own "Fast" service tier, if it advertises one
+async function fastServiceTierFor(client: CodexAppServerClient, model: string): Promise<string | undefined> {
+  const entry = (await listCodexModels(client)).find(m => m.id === model);
+  return entry?.serviceTiers?.find(t => t.name?.toLowerCase() === 'fast')?.id;
+}
+
+function noteCodexAuthFailure(error: unknown): void {
+  const info = error && typeof error === 'object' ? (error as Record<string, unknown>).codexErrorInfo : undefined;
+  if (info === 'unauthorized') emitAuthRequired('ChatGPT login was rejected');
 }
 
 async function listPaged(client: CodexAppServerClient, method: string, params: Record<string, unknown>): Promise<unknown[]> {
@@ -940,18 +964,11 @@ type CodexCliAuthStatus = {
   storageBackend: SecretStorageBackend;
 };
 
-let nextRefreshAt: number | null = null;
-let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-// Retry state for token refresh, mirroring claude.ts.
-let refreshFailureStreak = 0;
-let lastRefreshRejected = false;
-let refreshCapNotified = false;
-const REFRESH_RETRY_BASE_MS = 30_000;
-const REFRESH_RETRY_MAX_MS = 10 * 60 * 1000;
 let reconnectRequired = false;
 let lastAuthRequiredEmit = 0;
 const AUTH_REQUIRED_COOLDOWN_MS = 60_000;
 let cachedCliAuthStatus: CodexCliAuthStatus | null | undefined;
+let legacyOAuthRetired = false;
 const authRequiredListeners = new Set<(reason: string) => void>();
 
 function asNonEmptyString(value: unknown): string | undefined {
@@ -977,40 +994,21 @@ export function onCodexAuthRequired(listener: (reason: string) => void): () => v
   return () => authRequiredListeners.delete(listener);
 }
 
-function tokenHealth(tokens: CodexOAuthTokens | null): 'valid' | 'expiring' | 'expired' {
-  if (!tokens) return 'expired';
-  if (Date.now() >= tokens.expires_at) return 'expired';
-  if (Date.now() >= tokens.expires_at - REFRESH_LEAD_MS) return 'expiring';
-  return 'valid';
-}
-
-export function getCodexTokenState(): {
-  storageBackend: SecretStorageBackend;
-  tokenHealth: 'valid' | 'expiring' | 'expired';
-  nextRefreshAt?: number;
-  reconnectRequired: boolean;
-} {
-  const tokens = loadCodexOAuthTokens();
-  return {
-    storageBackend: getSecretStorageBackend(),
-    tokenHealth: tokenHealth(tokens),
-    nextRefreshAt: nextRefreshAt || undefined,
-    reconnectRequired,
-  };
-}
-
-function loadCodexOAuthTokens(): CodexOAuthTokens | null {
+// pre-0.3.6 dorabot kept its own copy of the chatgpt login. codex refreshes auth.json itself and
+// rotates the refresh token, so that copy went stale and failed with 401. read only to migrate it.
+function loadLegacyDorabotOAuth(): CodexOAuthTokens | null {
   const raw = keychainLoad(KEYCHAIN_OAUTH_ACCOUNT);
   if (raw) {
     try {
       return JSON.parse(raw) as CodexOAuthTokens;
     } catch {
-      // ignore keychain parse errors and fall back to file
+      // fall back to file
     }
   }
   try {
     if (existsSync(CODEX_OAUTH_FILE)) {
-      return JSON.parse(readFileSync(CODEX_OAUTH_FILE, 'utf-8'));
+      const text = readFileSync(CODEX_OAUTH_FILE, 'utf-8').trim();
+      if (text) return JSON.parse(text) as CodexOAuthTokens;
     }
   } catch { /* ignore */ }
   return null;
@@ -1039,7 +1037,7 @@ function persistCodexCliAuthRecord(record: Record<string, unknown>): void {
   }
 }
 
-function syncDorabotOAuthToCodexCli(tokens: CodexOAuthTokens): void {
+function writeCodexCliOAuth(tokens: CodexOAuthTokens): void {
   const existing = loadCodexCliAuthRecord();
   const existingTokens = existing?.tokens;
   const existingIdToken = existingTokens && typeof existingTokens === 'object'
@@ -1059,22 +1057,17 @@ function syncDorabotOAuthToCodexCli(tokens: CodexOAuthTokens): void {
   });
 }
 
-function persistCodexOAuthTokens(tokens: CodexOAuthTokens): void {
-  reconnectRequired = false;
-  const savedToKeychain = keychainStore(KEYCHAIN_OAUTH_ACCOUNT, JSON.stringify(tokens));
-  syncDorabotOAuthToCodexCli(tokens);
-  if (savedToKeychain) {
-    scheduleCodexRefresh(tokens);
-    return;
+// codex owns the login from here on: move a legacy copy into auth.json if codex has none, then drop it
+function retireLegacyDorabotOAuth(): void {
+  if (legacyOAuthRetired) return;
+  legacyOAuthRetired = true;
+  const legacy = loadLegacyDorabotOAuth();
+  if (!legacy) return;
+  if (!summarizeCodexCliAuthRecord(loadCodexCliAuthRecord()) && legacy.refresh_token) {
+    writeCodexCliOAuth(legacy);
+    console.log('[codex] moved legacy dorabot oauth into codex auth.json');
   }
-  try {
-    ensureDorabotDir();
-    writeFileSync(CODEX_OAUTH_FILE, JSON.stringify(tokens), { mode: 0o600 });
-    chmodSync(CODEX_OAUTH_FILE, 0o600);
-    scheduleCodexRefresh(tokens);
-  } catch (err) {
-    console.error('[codex] failed to persist OAuth tokens:', err);
-  }
+  clearLegacyDorabotOAuth();
 }
 
 async function getCodexCliAuthStatus(): Promise<CodexCliAuthStatus | null> {
@@ -1151,24 +1144,16 @@ function clearPersistedOpenAIKey(): void {
   }
 }
 
-function clearCodexOAuthTokens(): void {
+function clearLegacyDorabotOAuth(): void {
   keychainDelete(KEYCHAIN_OAUTH_ACCOUNT);
-  nextRefreshAt = null;
-  if (refreshTimer) {
-    clearTimeout(refreshTimer);
-    refreshTimer = null;
-  }
   try {
-    if (existsSync(CODEX_OAUTH_FILE)) {
-      writeFileSync(CODEX_OAUTH_FILE, '', { mode: 0o600 });
-      chmodSync(CODEX_OAUTH_FILE, 0o600);
-    }
+    if (existsSync(CODEX_OAUTH_FILE)) unlinkSync(CODEX_OAUTH_FILE);
   } catch {
     // ignore
   }
 }
 
-// ── Token exchange & refresh ────────────────────────────────────────
+// ── Token exchange ────────────────────────────────────────
 
 async function exchangeCodexAuthCode(
   code: string,
@@ -1209,157 +1194,6 @@ async function exchangeCodexAuthCode(
     console.error('[codex] token exchange error:', err);
     return null;
   }
-}
-
-async function refreshCodexAccessToken(refreshToken: string, previousIdToken?: string): Promise<CodexOAuthTokens | null> {
-  try {
-    const res = await fetch(OAUTH_TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-        client_id: OAUTH_CLIENT_ID,
-      }),
-    });
-    if (!res.ok) {
-      console.error(`[codex] token refresh failed: ${res.status}`);
-      lastRefreshRejected = res.status === 400 || res.status === 401 || res.status === 403;
-      return null;
-    }
-    lastRefreshRejected = false;
-    const data = await res.json() as { access_token: string; refresh_token: string; expires_in: number; id_token?: string };
-    if (!data.access_token || !data.refresh_token) return null;
-    const accountId = getAccountId(data.access_token);
-    if (!accountId) return null;
-    return {
-      access_token: data.access_token,
-      refresh_token: data.refresh_token,
-      expires_at: Date.now() + data.expires_in * 1000,
-      account_id: accountId,
-      ...(data.id_token || previousIdToken ? { id_token: data.id_token || previousIdToken } : {}),
-    };
-  } catch (err) {
-    // Network-class failure, not an auth problem. See the matching note in claude.ts:
-    // raising authRequired here means a notification every time a sleeping machine wakes
-    // before its network is up.
-    console.error('[codex] token refresh error:', err);
-    lastRefreshRejected = false;
-    return null;
-  }
-}
-
-// Single-flight, mirroring claude.ts. Codex rotates refresh_token on every response (the
-// parse above rejects a response without one), so two concurrent refreshes carrying the
-// same token guarantee that one of them is rejected. Persisting inside the wrapper keeps
-// that write on exactly one path.
-let inflightCodexRefresh: Promise<CodexOAuthTokens | null> | null = null;
-
-function refreshCodexAccessTokenShared(refreshToken: string, previousIdToken?: string): Promise<CodexOAuthTokens | null> {
-  if (inflightCodexRefresh) return inflightCodexRefresh;
-  inflightCodexRefresh = refreshCodexAccessToken(refreshToken, previousIdToken)
-    .then((tokens) => {
-      if (tokens) persistCodexOAuthTokens(tokens);
-      return tokens;
-    })
-    .finally(() => {
-      inflightCodexRefresh = null;
-    });
-  return inflightCodexRefresh;
-}
-
-/**
- * Arm the next Codex token refresh. Pass `retryDelayMs` to re-arm after a failure rather
- * than scheduling off the token's expiry, so a failed refresh never leaves the process
- * with no timer armed.
- */
-function scheduleCodexRefresh(tokens: CodexOAuthTokens, retryDelayMs?: number): void {
-  if (refreshTimer) {
-    clearTimeout(refreshTimer);
-    refreshTimer = null;
-  }
-
-  const runAt = retryDelayMs !== undefined
-    ? Date.now() + retryDelayMs
-    : Math.max(Date.now() + 1_000, tokens.expires_at - REFRESH_LEAD_MS);
-  nextRefreshAt = runAt;
-  const delay = runAt - Date.now();
-  refreshTimer = setTimeout(async () => {
-    refreshTimer = null;
-    const latest = loadCodexOAuthTokens();
-    if (!latest) {
-      emitAuthRequired('Missing OAuth tokens');
-      nextRefreshAt = null;
-      return;
-    }
-    // ensureCodexOAuthToken() may have refreshed while this timer was pending.
-    if (tokenHealth(latest) === 'valid') {
-      refreshFailureStreak = 0;
-      refreshCapNotified = false;
-      scheduleCodexRefresh(latest);
-      return;
-    }
-    const refreshed = await refreshCodexAccessTokenShared(latest.refresh_token, latest.id_token);
-    if (refreshed) {
-      refreshFailureStreak = 0;
-      refreshCapNotified = false;
-      scheduleCodexRefresh(refreshed);
-      return;
-    }
-    // Keep trying. The refresh token outlives the access token, so a failure here is
-    // almost always the network rather than a dead credential.
-    refreshFailureStreak++;
-    const backoff = Math.min(
-      REFRESH_RETRY_BASE_MS * 2 ** (refreshFailureStreak - 1),
-      REFRESH_RETRY_MAX_MS,
-    );
-    console.log(
-      `[codex] token refresh failed (attempt ${refreshFailureStreak}), retrying in ${Math.round(backoff / 1000)}s`,
-    );
-    if (lastRefreshRejected && refreshFailureStreak >= 3) {
-      emitAuthRequired('OAuth refresh rejected, still retrying in background');
-    } else if (backoff >= REFRESH_RETRY_MAX_MS && !refreshCapNotified) {
-      refreshCapNotified = true;
-      console.warn('[codex] OAuth refresh is still unavailable; background retries will continue');
-    }
-    scheduleCodexRefresh(latest, backoff);
-  }, delay);
-  refreshTimer.unref?.();
-}
-
-/** Ensure we have a valid access token, refreshing if needed */
-async function ensureCodexOAuthToken(forceRefresh = false): Promise<string | null> {
-  const tokens = loadCodexOAuthTokens();
-  if (!tokens) return null;
-
-  if (forceRefresh || Date.now() > tokens.expires_at - 300_000) {
-    console.log('[codex] access token expiring, refreshing...');
-    const refreshed = await refreshCodexAccessTokenShared(tokens.refresh_token, tokens.id_token);
-    if (!refreshed) {
-      if (lastRefreshRejected) emitAuthRequired('OAuth token expired');
-      // Arm a background retry only if nothing is armed. This runs at the top of every
-      // turn, so re-arming unconditionally would clear the pending retry each time and
-      // the background timer would never fire while the user is active. The streak is
-      // deliberately untouched: it counts retry cycles, not turns.
-      if (!refreshTimer) scheduleCodexRefresh(tokens, REFRESH_RETRY_BASE_MS);
-      if (canReuseAccessTokenAfterRefreshFailure(
-        tokens.expires_at,
-        lastRefreshRejected,
-        forceRefresh,
-      )) {
-        return tokens.access_token;
-      }
-      return null;
-    }
-    refreshFailureStreak = 0;
-    refreshCapNotified = false;
-    scheduleCodexRefresh(refreshed);
-    reconnectRequired = false;
-    return refreshed.access_token;
-  }
-
-  scheduleCodexRefresh(tokens);
-  return tokens.access_token;
 }
 
 // ── Local OAuth callback server ─────────────────────────────────────
@@ -1440,40 +1274,8 @@ async function resolveCodexAuthState(): Promise<{ apiKey?: string; status: Provi
     };
   }
 
-  const oauthTokens = loadCodexOAuthTokens();
-  if (oauthTokens) {
-    const token = await ensureCodexOAuthToken();
-    const latest = loadCodexOAuthTokens() || oauthTokens;
-    if (token) {
-      syncDorabotOAuthToCodexCli(latest);
-      return {
-        status: {
-          authenticated: true,
-          method: 'oauth',
-          identity: `ChatGPT (${latest.account_id})`,
-          storageBackend,
-          tokenHealth: tokenHealth(latest),
-          nextRefreshAt: nextRefreshAt || undefined,
-          reconnectRequired,
-        },
-      };
-    }
-    const needsReconnect = reconnectRequired;
-    return {
-      status: {
-        authenticated: false,
-        method: 'oauth',
-        error: needsReconnect
-          ? 'OAuth token expired. Reconnect required.'
-          : 'OAuth token refresh is temporarily unavailable.',
-        storageBackend,
-        tokenHealth: tokenHealth(latest),
-        nextRefreshAt: nextRefreshAt || undefined,
-        reconnectRequired: needsReconnect,
-      },
-    };
-  }
-
+  // codex refreshes auth.json itself; a dead login only shows up as an unauthorized turn
+  retireLegacyDorabotOAuth();
   const cliAuth = await getCodexCliAuthStatus();
   if (cliAuth) {
     return {
@@ -1482,7 +1284,9 @@ async function resolveCodexAuthState(): Promise<{ apiKey?: string; status: Provi
         method: cliAuth.method,
         identity: cliAuth.identity,
         storageBackend: cliAuth.storageBackend,
-        tokenHealth: 'valid',
+        tokenHealth: reconnectRequired ? 'expired' : 'valid',
+        reconnectRequired,
+        ...(reconnectRequired ? { error: 'ChatGPT login was rejected. Reconnect required.' } : {}),
       },
     };
   }
@@ -1507,7 +1311,8 @@ export async function isCodexInstalled(): Promise<boolean> {
 }
 
 export function hasCodexAuth(): boolean {
-  return !!getOpenAIApiKey() || !!loadCodexOAuthTokens() || !!summarizeCodexCliAuthRecord(loadCodexCliAuthRecord());
+  retireLegacyDorabotOAuth();
+  return !!getOpenAIApiKey() || !!summarizeCodexCliAuthRecord(loadCodexCliAuthRecord());
 }
 
 // ── Reasoning effort mapping ────────────────────────────────────────
@@ -1715,17 +1520,6 @@ async function handleCodexServerRequest(message: JsonRpcResponse, opts: Provider
     return { answers };
   }
 
-  if (method === 'account/chatgptAuthTokens/refresh') {
-    const accessToken = await ensureCodexOAuthToken(true);
-    const latest = loadCodexOAuthTokens();
-    if (!accessToken || !latest) throw new Error('No ChatGPT OAuth token available');
-    return {
-      accessToken,
-      chatgptAccountId: latest.account_id,
-      chatgptPlanType: null,
-    };
-  }
-
   if (method === 'mcpServer/elicitation/request') {
     return { action: 'decline', content: null, _meta: null };
   }
@@ -1836,8 +1630,8 @@ export class CodexProvider implements Provider {
         return { authenticated: false, error: 'Token exchange failed' };
       }
 
-      persistCodexOAuthTokens(tokens);
-      scheduleCodexRefresh(tokens);
+      writeCodexCliOAuth(tokens);
+      clearLegacyDorabotOAuth();
       reconnectRequired = false;
       return this.getAuthStatus();
     } finally {
@@ -1848,7 +1642,7 @@ export class CodexProvider implements Provider {
 
   async *query(opts: ProviderRunOptions): AsyncGenerator<ProviderMessage, ProviderQueryResult, unknown> {
     const codexConfig = opts.config.provider?.codex;
-    const model = codexConfig?.model || 'gpt-5.6-terra';
+    const model = codexConfig?.model || 'gpt-6.1-sol';
     const reasoningEffort = opts.config.reasoningEffort;
     const mcpOauthCredentialsStore = (codexConfig?.mcpOauthCredentialsStore || 'file') as CodexMcpOauthCredentialsStore;
 
@@ -2168,6 +1962,7 @@ export class CodexProvider implements Provider {
       if (message.method === 'turn/completed') {
         const turn = params.turn as Record<string, any> | undefined;
         if (turn?.status === 'failed') {
+          noteCodexAuthFailure(turn.error);
           const errMsg = turn.error?.message || 'Turn failed';
           if (isContextOverflowError(errMsg, turn.error?.code) && !compactRetried) {
             contextOverflow = true;
@@ -2177,6 +1972,7 @@ export class CodexProvider implements Provider {
           result = lastAgentMessage || `Codex error: ${errMsg}`;
           yield { type: 'result', subtype: 'error_max_turns', result, session_id: sessionId } as ProviderMessage;
         } else {
+          reconnectRequired = false;
           result = lastAgentMessage || result;
           yield {
             type: 'result',
@@ -2192,6 +1988,11 @@ export class CodexProvider implements Provider {
 
       if (message.method === 'error') {
         const error = params.error as Record<string, unknown> | undefined;
+        if (params.willRetry === true) {
+          console.log(`[codex] retrying after: ${String(error?.message || 'error')}`);
+          return;
+        }
+        noteCodexAuthFailure(error);
         const errMsg = String(error?.message || params.message || 'Codex app-server error');
         if (isContextOverflowError(errMsg, error?.code) && !compactRetried) {
           contextOverflow = true;
@@ -2257,7 +2058,7 @@ export class CodexProvider implements Provider {
       }
 
       if (message.method === 'account/rateLimits/updated') {
-        console.log(`[codex] rate limits updated: ${JSON.stringify(params).slice(0, 500)}`);
+        setProviderUsage(codexUsageFromSnapshot(params.rateLimits));
         return;
       }
     };
@@ -2281,6 +2082,12 @@ export class CodexProvider implements Provider {
         yield { type: 'system', subtype: 'init', session_id: sessionId, model } as ProviderMessage;
       }
 
+      // desktop toggle: on = the model's fast tier, off = standard even if config.toml says priority.
+      // undefined (channels, calendar) inherits the config.
+      const fastTier = opts.fastMode ? await fastServiceTierFor(client, model) : undefined;
+      if (opts.fastMode && !fastTier) console.log(`[codex] fast mode requested but ${model} has no fast tier`);
+      const turnTier = opts.fastMode === false ? 'default' : fastTier;
+
       const startTurn = async () => {
         const turnResult = await client!.request('turn/start', {
           threadId: sessionId,
@@ -2290,6 +2097,7 @@ export class CodexProvider implements Provider {
           sandboxPolicy,
           model,
           ...(serviceTier ? { serviceTier } : {}),
+          ...(turnTier ? { serviceTierForTurn: turnTier } : {}),
           ...(codexConfig?.personality ? { personality: codexConfig.personality } : {}),
           ...(modelReasoningEffort ? { effort: modelReasoningEffort } : {}),
           ...(reasoningSummary ? { summary: reasoningSummary } : {}),
@@ -2403,11 +2211,6 @@ export class CodexProvider implements Provider {
     if (this.pendingOAuth) {
       this.pendingOAuth.server.close();
       this.pendingOAuth = null;
-    }
-    if (refreshTimer) {
-      clearTimeout(refreshTimer);
-      refreshTimer = null;
-      nextRefreshAt = null;
     }
     closeCodexAppServerRpcClient();
   }

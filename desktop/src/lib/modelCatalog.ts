@@ -1,17 +1,12 @@
 export type ModelOption = {
   value: string;
   label: string;
-  requiresApiKey?: boolean;
   description?: string;
-  hidden?: boolean;
-  deprecated?: boolean;
-  researchPreview?: boolean;
   isDefault?: boolean;
-  upgrade?: string | null;
   defaultReasoningEffort?: string | null;
   supportedReasoningEfforts?: string[];
-  inputModalities?: string[];
   supportsFastMode?: boolean;
+  fastModeDescription?: string;
 };
 
 export type ReasoningEffortOption = {
@@ -21,7 +16,7 @@ export type ReasoningEffortOption = {
 };
 
 export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5-5';
-export const DEFAULT_CODEX_MODEL = 'gpt-5.6-terra';
+export const DEFAULT_CODEX_MODEL = 'gpt-6.1-sol';
 
 export const CLAUDE_AGENT_SDK_REASONING_EFFORTS: ReasoningEffortOption[] = [
   { value: 'low', label: 'low' },
@@ -40,58 +35,20 @@ const CODEX_FALLBACK_REASONING_EFFORTS: ReasoningEffortOption[] = [
 
 const CODEX_APP_SERVER_REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
+// offline fallbacks only (signed out, gateway down). the pickers use the sdk lists; text copied from them.
 export const CLAUDE_MODELS: ModelOption[] = [
-  { value: 'claude-opus-5-5', label: 'Opus 5.5', description: 'Released Sep 22, 2026. Fable 5.1-level on most agentic work at $4/$20 per MTok (60% cheaper), 30%+ faster output. 1M context, 128K output, adaptive thinking always on, default effort medium. Anthropic\'s recommended starting point. Default.' },
-  { value: 'claude-fable-5-2', label: 'Fable 5.2', description: 'Released Nov 9, 2026. Frontier reasoning and long-horizon agentic work at $8/$40 per MTok (20% cheaper than Fable 5.1). 1M context, 128K output, adaptive thinking always on, default effort high. Cache reads $0.20/MTok.' },
-  { value: 'claude-fable-5-1', label: 'Fable 5.1 (legacy)', description: 'Superseded by Fable 5.2, which is cheaper ($8/$40 vs $10/$50 per MTok). Cache reads $0.25/MTok.' },
-  { value: 'claude-opus-5', label: 'Opus 5 (legacy)', description: 'Superseded by Opus 5.5, which is cheaper ($5/$25 vs $4/$20 per MTok) and stronger. 1M context, thinking on by default.' },
-  { value: 'claude-fable-5', label: 'Fable 5 (legacy)', description: 'Superseded by Fable 5.1. Same $10/$50 per MTok but 4x more expensive cache reads ($1/MTok).' },
-  { value: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Deep reasoning for hard, long-horizon tasks.' },
-  { value: 'claude-opus-4-7', label: 'Opus 4.7' },
-  { value: 'claude-sonnet-5-5', label: 'Sonnet 5.5', description: 'Released Sep 28, 2026. Best mix of speed and intelligence at $2/$10 per MTok, half the price of Opus 5.5. 1M context, 128K output, adaptive thinking, default effort high. Cache reads $0.10/MTok.' },
-  { value: 'claude-haiku-5-5', label: 'Haiku 5.5', description: 'Released Oct 7, 2026. Fastest and cheapest: $0.10/$0.50 per MTok for prompts up to 100K tokens, $0.50/$2.50 above that. 1M context, 128K output, adaptive thinking, default effort medium.' },
-  { value: 'claude-sonnet-5', label: 'Sonnet 5 (legacy)', description: 'Superseded by Sonnet 5.5 at the same $2/$10 per MTok.' },
-  { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
-  { value: 'claude-haiku-4-5', label: 'Haiku 4.5' },
-  { value: 'claude-opus-4-6', label: 'Opus 4.6 (legacy)' },
-  { value: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5 (legacy)' },
-  { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5 (legacy)' },
+  { value: 'claude-opus-5-5', label: 'Opus 5.5', description: 'For complex work and everyday tasks', isDefault: true, supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFastMode: true },
+  { value: 'claude-fable-5-2', label: 'Fable 5.2', description: 'For your toughest challenges', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFastMode: true },
+  { value: 'claude-sonnet-5-5', label: 'Sonnet 5.5', description: 'Most efficient for simpler tasks', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+  { value: 'claude-haiku-5-5', label: 'Haiku 5.5', description: 'Fastest for quick answers', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
 ];
 
 export const CODEX_MODELS: ModelOption[] = [
-  {
-    value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol',
-    description: 'Latest frontier agentic coding model. Supports max + ultra reasoning (ultra = automatic multi-agent delegation).',
-    defaultReasoningEffort: 'low',
-    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
-  },
-  {
-    value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra',
-    description: 'Balanced agentic coding model for everyday work.',
-    defaultReasoningEffort: 'medium',
-    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
-    isDefault: true,
-  },
-  {
-    value: 'gpt-5.6-luna', label: 'GPT-5.6 Luna',
-    description: 'Fast and affordable agentic coding model.',
-    defaultReasoningEffort: 'medium',
-    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-  },
-  { value: 'gpt-5.5', label: 'GPT-5.5', description: 'Frontier Codex model for complex coding, research, and real-world work.' },
-  { value: 'gpt-5.4', label: 'GPT-5.4', description: 'Strong Codex model for everyday coding.' },
-  { value: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', description: 'Small, fast, cost-efficient Codex model for simpler coding tasks.' },
-  { value: 'gpt-5.3-codex', label: 'GPT-5.3 Codex (removed in 0.145)', deprecated: true, description: 'No longer bundled with the Codex CLI.' },
-  { value: 'gpt-5.3-codex-spark', label: 'GPT-5.3 Codex Spark', description: 'Ultra-fast Codex research preview model.', researchPreview: true },
-  { value: 'gpt-5.2', label: 'GPT-5.2', description: 'Optimized for professional work and long-running agents.' },
-  { value: 'gpt-5-codex', label: 'GPT-5 Codex (deprecated)', deprecated: true },
-  { value: 'gpt-5.2-codex', label: 'GPT-5.2 Codex (deprecated)', deprecated: true },
-  { value: 'gpt-5.1-codex-max', label: 'GPT-5.1 Codex Max (deprecated)', deprecated: true },
-  { value: 'gpt-5.1-codex', label: 'GPT-5.1 Codex (deprecated)', deprecated: true },
-  { value: 'gpt-5.1-codex-mini', label: 'GPT-5.1 Codex Mini (deprecated)', deprecated: true },
-  { value: 'gpt-5.1', label: 'GPT-5.1 (legacy)', deprecated: true },
-  { value: 'gpt-5', label: 'GPT-5 (legacy)', deprecated: true },
-  { value: 'codex-mini-latest', label: 'Codex Mini Latest (deprecated)', deprecated: true },
+  { value: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', description: 'Latest workhorse model for coding and everyday work.', isDefault: true, defaultReasoningEffort: 'medium', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
+  { value: 'gpt-6-astra', label: 'GPT-6-Astra', description: 'Frontier intelligence for the most demanding work.', defaultReasoningEffort: 'medium', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
+  { value: 'gpt-6.1-terra', label: 'GPT-6.1 Terra', description: 'GPT-6.1 Terra Codex model.', defaultReasoningEffort: 'low', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
+  { value: 'gpt-6-sol', label: 'GPT-6-Sol', description: 'Previous generation workhorse model.', defaultReasoningEffort: 'medium', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
+  { value: 'gpt-6-luna', label: 'GPT-6-Luna', description: 'Fast and affordable model for easier tasks.', defaultReasoningEffort: 'medium', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
 ];
 
 export function labelForModel(options: ModelOption[], value: string | null | undefined): string {
@@ -106,25 +63,21 @@ export type CodexCatalogModelLike = {
   hidden?: boolean;
   supportedReasoningEfforts?: Array<{ reasoningEffort: string; description?: string | null }>;
   defaultReasoningEffort?: string | null;
-  inputModalities?: string[];
   isDefault?: boolean;
-  upgrade?: string | null;
+  serviceTiers?: Array<{ id: string; name?: string; description?: string }>;
 };
 
-function optionFromCatalog(model: CodexCatalogModelLike): ModelOption {
-  const fallback = CODEX_MODELS.find(option => option.value === model.id);
+function optionFromCodexCatalog(model: CodexCatalogModelLike): ModelOption {
+  const fast = model.serviceTiers?.find(t => t.name?.toLowerCase() === 'fast');
   return {
     value: model.id,
-    label: model.displayName || fallback?.label || model.id,
-    description: model.description || fallback?.description,
-    hidden: model.hidden,
-    deprecated: fallback?.deprecated,
-    researchPreview: fallback?.researchPreview || model.id.includes('spark'),
+    label: model.displayName || model.id,
+    description: model.description,
     isDefault: model.isDefault,
-    upgrade: model.upgrade,
     defaultReasoningEffort: model.defaultReasoningEffort,
     supportedReasoningEfforts: model.supportedReasoningEfforts?.map(effort => effort.reasoningEffort),
-    inputModalities: model.inputModalities,
+    supportsFastMode: !!fast,
+    ...(fast?.description ? { fastModeDescription: fast.description } : {}),
   };
 }
 
@@ -151,21 +104,16 @@ export function reasoningEffortLabel(options: ReasoningEffortOption[], value: st
   return options.find(option => option.value === value)?.label || value;
 }
 
-export function codexModelsForAuth(method?: string, currentValue?: string | null, catalog?: CodexCatalogModelLike[] | null): ModelOption[] {
-  const visible = catalog?.length
-    ? catalog
-      .filter(model => !model.hidden || model.id === currentValue)
-      .map(optionFromCatalog)
-    : method === 'api_key'
-      ? CODEX_MODELS
-      : CODEX_MODELS.filter((option) => !option.requiresApiKey);
-
-  if (currentValue && !visible.some((option) => option.value === currentValue)) {
-    const current = CODEX_MODELS.find((option) => option.value === currentValue);
-    if (current) return [...visible, current];
+// codex's own picker list: everything it does not mark hidden
+export function codexModelsFromCatalog(catalog: CodexCatalogModelLike[] | null | undefined, currentValue?: string | null): ModelOption[] {
+  if (!catalog?.length) return CODEX_MODELS;
+  const options = catalog
+    .filter(model => !model.hidden || model.id === currentValue)
+    .map(optionFromCodexCatalog);
+  if (currentValue && !options.some(option => option.value === currentValue)) {
+    options.push({ value: currentValue, label: currentValue });
   }
-
-  return visible;
+  return options;
 }
 
 export type ClaudeCatalogModelLike = {
@@ -177,29 +125,34 @@ export type ClaudeCatalogModelLike = {
   supportsFastMode?: boolean;
 };
 
-// the sdk lists family aliases (opus, sonnet, fable...) next to exact ids. chats pin exact ids,
-// so key every row on resolvedModel, drop the 'default' row and keep the first row per id.
+function optionFromClaudeCatalog(row: ClaudeCatalogModelLike, id: string, isDefault: boolean): ModelOption {
+  return {
+    value: id,
+    label: row.displayName,
+    description: row.description,
+    isDefault,
+    supportedReasoningEfforts: row.supportedEffortLevels ?? [],
+    supportsFastMode: !!row.supportsFastMode,
+  };
+}
+
+// the sdk lists family aliases (opus, fable, sonnet, haiku) that point at each family's current
+// model, then every exact id it still accepts. the picker shows the alias targets, keyed on the
+// exact id since chats pin exact ids. an older model only shows while a chat is on it.
 export function claudeModelsFromCatalog(catalog: ClaudeCatalogModelLike[] | null | undefined, currentValue?: string | null): ModelOption[] {
   if (!catalog?.length) return CLAUDE_MODELS;
+  const defaultId = catalog.find(row => row.value === 'default')?.resolvedModel;
   const seen = new Set<string>();
   const options: ModelOption[] = [];
   for (const row of catalog) {
-    if (row.value === 'default') continue;
-    const id = row.resolvedModel || row.value;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    const known = CLAUDE_MODELS.find(option => option.value === id);
-    options.push({
-      value: id,
-      label: known?.label || row.displayName || id,
-      description: known?.description || row.description,
-      supportedReasoningEfforts: row.supportedEffortLevels ?? [],
-      supportsFastMode: !!row.supportsFastMode,
-    });
+    if (row.value === 'default' || !row.resolvedModel || row.resolvedModel === row.value) continue;
+    if (seen.has(row.resolvedModel)) continue;
+    seen.add(row.resolvedModel);
+    options.push(optionFromClaudeCatalog(row, row.resolvedModel, row.resolvedModel === defaultId));
   }
   if (currentValue && !seen.has(currentValue)) {
-    const current = CLAUDE_MODELS.find(option => option.value === currentValue);
-    if (current) options.push(current);
+    const exact = catalog.find(row => (row.resolvedModel || row.value) === currentValue);
+    options.push(exact ? optionFromClaudeCatalog(exact, currentValue, false) : { value: currentValue, label: currentValue });
   }
   return options;
 }

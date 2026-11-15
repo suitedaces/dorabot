@@ -308,6 +308,14 @@ export type CodexCatalogModel = {
   upgradeInfo?: unknown;
   availabilityNux?: unknown;
   additionalSpeedTiers?: unknown[];
+  serviceTiers?: Array<{ id: string; name?: string; description?: string }>;
+};
+
+export type ProviderUsage = {
+  provider: 'claude' | 'codex';
+  windows: Array<{ label: string; usedPercent: number; resetsAt?: number }>;
+  plan?: string;
+  updatedAt: number;
 };
 
 export type CodexModelCatalog = {
@@ -682,6 +690,7 @@ export function useGateway() {
   const pendingModelRef = useRef<Record<string, string>>(pendingModelByKey);
   // per-chat fast mode, in memory only: off again after a restart since it bills 2x
   const [fastModeByKey, setFastModeByKey] = useState<Record<string, boolean>>({});
+  const [usageByProvider, setUsageByProvider] = useState<Record<string, ProviderUsage>>({});
   const fastModeRef = useRef<Record<string, boolean>>(fastModeByKey);
   const lastPickedRef = useRef<string>(lastPickedModel);
   // server-driven values, safe to mirror on render (nothing writes them synchronously)
@@ -1733,6 +1742,12 @@ export function useGateway() {
         break;
       }
 
+      case 'provider.usage': {
+        const u = data as ProviderUsage;
+        if (u?.provider) setUsageByProvider(prev => ({ ...prev, [u.provider]: u }));
+        break;
+      }
+
       case 'provider.auth_required': {
         const d = data as { provider: string; reason: string };
         onNotifiableEventRef.current?.({
@@ -2376,6 +2391,11 @@ export function useGateway() {
     return await rpc('provider.codex.models') as CodexModelCatalog;
   }, [rpc]);
 
+  const loadProviderUsage = useCallback(async (provider: string) => {
+    const u = await rpc('provider.usage', { provider }) as ProviderUsage | null;
+    if (u?.provider) setUsageByProvider(prev => ({ ...prev, [u.provider]: u }));
+  }, [rpc]);
+
   const getCodexAppServerSnapshot = useCallback(async (cwd?: string) => {
     return await rpc('provider.codex.appServerSnapshot', cwd ? { cwd } : {}) as CodexAppServerSnapshot;
   }, [rpc]);
@@ -2586,6 +2606,8 @@ export function useGateway() {
     getProviderAuth,
     getCodexModels,
     getClaudeModels,
+    usageByProvider,
+    loadProviderUsage,
     setSessionFastMode,
     getSessionFastMode,
     getCodexAppServerSnapshot,

@@ -174,6 +174,7 @@ export type GatewayEventName =
   | 'research.update'
   | 'provider.auth_required'
   | 'agent.notice'
+  | 'provider.usage'
   | 'background.status'
   | 'fs.change'
   | 'agent.status'
