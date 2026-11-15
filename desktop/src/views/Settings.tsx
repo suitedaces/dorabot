@@ -18,7 +18,7 @@ import type { Palette } from '../lib/palettes';
 import {
   CLAUDE_AGENT_SDK_REASONING_EFFORTS,
   DEFAULT_CODEX_MODEL,
-  codexModelsForAuth,
+  codexModelsFromCatalog,
   codexReasoningEffortOptions,
   reasoningEffortIsSupported,
 } from '@/lib/modelCatalog';
@@ -700,7 +700,6 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
   const codexCliConfig = cfg?.provider?.codex?.config && typeof cfg.provider.codex.config === 'object'
     ? cfg.provider.codex.config as Record<string, any>
     : {};
-  const serviceTier = typeof codexCliConfig.service_tier === 'string' ? codexCliConfig.service_tier : 'auto';
   const reasoningSummary = typeof codexCliConfig.model_reasoning_summary === 'string' ? codexCliConfig.model_reasoning_summary : 'auto';
   const modelVerbosity = typeof codexCliConfig.model_verbosity === 'string' ? codexCliConfig.model_verbosity : 'auto';
   const memoriesEnabled = Boolean(codexCliConfig.features && typeof codexCliConfig.features === 'object' && codexCliConfig.features.memories === true);
@@ -741,7 +740,7 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
   const authMethod = authStatus?.method;
   const storageBackend = authStatus?.storageBackend || 'file';
   const tokenHealth = authStatus?.tokenHealth || (authenticated ? 'valid' : 'expired');
-  const codexOptions = codexModelsForAuth(authMethod, codexModel, codexCatalog?.models);
+  const codexOptions = codexModelsFromCatalog(codexCatalog?.models, codexModel);
   const selectedCodexOption = codexOptions.find(option => option.value === codexModel) || null;
   const codexReasoningOptions = codexReasoningEffortOptions(selectedCodexOption);
   const codexReasoningEffort = reasoningEffortIsSupported(codexReasoningOptions, reasoningEffort)
@@ -980,8 +979,6 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
                       <span className="flex items-center gap-1.5">
                         {m.label}
                         {m.isDefault && <span className="text-[9px] text-primary">default</span>}
-                        {m.researchPreview && <span className="text-[9px] text-amber-500">preview</span>}
-                        {m.deprecated && <span className="text-[9px] text-muted-foreground">legacy</span>}
                       </span>
                       {m.description && <span className="text-[10px] text-muted-foreground truncate">{m.description}</span>}
                     </div>
@@ -1081,7 +1078,6 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
               <SelectContent>
                 <SelectItem value="never" className="text-[11px]">never (auto)</SelectItem>
                 <SelectItem value="on-request" className="text-[11px]">on request</SelectItem>
-                <SelectItem value="on-failure" className="text-[11px]">on failure (legacy, runs as on-request)</SelectItem>
                 <SelectItem value="untrusted" className="text-[11px]">untrusted</SelectItem>
               </SelectContent>
             </Select>
@@ -1177,20 +1173,6 @@ function OpenAICard({ gateway, disabled }: { gateway: ReturnType<typeof useGatew
                 <SelectItem value="disabled" className="text-[11px]">disabled</SelectItem>
                 <SelectItem value="cached" className="text-[11px]">cached</SelectItem>
                 <SelectItem value="live" className="text-[11px]">live</SelectItem>
-              </SelectContent>
-            </Select>
-          </SettingRow>
-
-          <SettingRow label="service tier" description="Codex service_tier preference">
-            <Select value={serviceTier} onValueChange={v => setCodexCliConfigKey('service_tier', v)} disabled={disabled}>
-              <SelectTrigger className="h-7 w-40 text-[11px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="auto" className="text-[11px]">auto</SelectItem>
-                <SelectItem value="priority" className="text-[11px]">priority (1.5x speed, more usage — 5.6 models)</SelectItem>
-                <SelectItem value="flex" className="text-[11px]">flex (legacy)</SelectItem>
-                <SelectItem value="fast" className="text-[11px]">fast (legacy)</SelectItem>
               </SelectContent>
             </Select>
           </SettingRow>

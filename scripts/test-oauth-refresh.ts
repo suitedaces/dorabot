@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { canReuseAccessTokenAfterRefreshFailure } from '../src/providers/oauth-refresh.js';
@@ -61,11 +61,15 @@ try {
   assert.equal(claudeStatus.reconnectRequired, false);
   assert.equal(claudeStatus.tokenHealth, 'expiring');
 
+  // codex owns its login: the legacy dorabot copy moves into auth.json once and is never refreshed by us
   const codexStatus = await new CodexProvider().getAuthStatus();
   assert.equal(codexStatus.authenticated, true);
+  assert.equal(codexStatus.method, 'oauth');
   assert.equal(codexStatus.reconnectRequired, false);
-  assert.equal(codexStatus.tokenHealth, 'expiring');
-  assert.equal(refreshRequests, 2);
+  const cliAuth = JSON.parse(readFileSync(join(testHome, '.codex', 'auth.json'), 'utf-8'));
+  assert.equal(cliAuth.tokens.refresh_token, 'codex-refresh');
+  assert.equal(existsSync(join(dorabotDir, '.codex-oauth.json')), false);
+  assert.equal(refreshRequests, 1);
 
   const expiredAt = Date.now() - 1;
   writeFileSync(join(dorabotDir, '.claude-oauth.json'), JSON.stringify({
@@ -73,20 +77,10 @@ try {
     refresh_token: 'claude-refresh',
     expires_at: expiredAt,
   }));
-  writeFileSync(join(dorabotDir, '.codex-oauth.json'), JSON.stringify({
-    access_token: 'codex-access',
-    refresh_token: 'codex-refresh',
-    expires_at: expiredAt,
-    account_id: 'account-1',
-  }));
 
   const expiredClaudeStatus = await new ClaudeProvider().getAuthStatus();
   assert.equal(expiredClaudeStatus.authenticated, false);
   assert.equal(expiredClaudeStatus.reconnectRequired, false);
-
-  const expiredCodexStatus = await new CodexProvider().getAuthStatus();
-  assert.equal(expiredCodexStatus.authenticated, false);
-  assert.equal(expiredCodexStatus.reconnectRequired, false);
 
   refreshStatus = 400;
   writeFileSync(join(dorabotDir, '.claude-oauth.json'), JSON.stringify({
@@ -94,21 +88,16 @@ try {
     refresh_token: 'claude-refresh',
     expires_at: Date.now() + 240_000,
   }));
-  writeFileSync(join(dorabotDir, '.codex-oauth.json'), JSON.stringify({
-    access_token: 'codex-access',
-    refresh_token: 'codex-refresh',
-    expires_at: Date.now() + 240_000,
-    account_id: 'account-1',
-  }));
 
   const rejectedClaudeStatus = await new ClaudeProvider().getAuthStatus();
   assert.equal(rejectedClaudeStatus.authenticated, false);
   assert.equal(rejectedClaudeStatus.reconnectRequired, true);
 
-  const rejectedCodexStatus = await new CodexProvider().getAuthStatus();
-  assert.equal(rejectedCodexStatus.authenticated, false);
-  assert.equal(rejectedCodexStatus.reconnectRequired, true);
-  assert.equal(refreshRequests, 6);
+  assert.equal(refreshRequests, 3);
+
+  // a stale legacy copy never overrides the login codex already has
+  const codexStatusLater = await new CodexProvider().getAuthStatus();
+  assert.equal(codexStatusLater.authenticated, true);
 } finally {
   rmSync(testHome, { recursive: true, force: true });
 }

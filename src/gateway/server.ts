@@ -56,7 +56,8 @@ import {
 import { loadResearch, saveResearch, readResearchContent, writeResearchFile, nextId as nextResearchId, type ResearchItem } from '../tools/research.js';
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
 import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, onClaudeAuthRequired } from '../providers/claude.js';
-import { isCodexInstalled, hasCodexAuth, onCodexAuthRequired, getCodexModelCatalog, getCodexAppServerSnapshot, callCodexAppServer, closeCodexAppServerRpcClient } from '../providers/codex.js';
+import { getProviderUsage, onProviderUsage } from '../providers/usage.js';
+import { isCodexInstalled, hasCodexAuth, onCodexAuthRequired, getCodexUsage, getCodexModelCatalog, getCodexAppServerSnapshot, callCodexAppServer, closeCodexAppServerRpcClient } from '../providers/codex.js';
 import type { ProviderName } from '../config.js';
 import { buildProviderAuthGate, classifyAuthRecovery, type ProviderAuthGate } from './auth-state.js';
 import { startHttpAuthServer, type HttpAuthServer } from './http-auth-server.js';
@@ -728,6 +729,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   });
   const unsubscribeCodexAuthRequired = onCodexAuthRequired((reason) => {
     if ((config.provider?.name || 'claude') === 'codex') broadcastAuthRequired('codex', reason);
+  });
+  const unsubscribeProviderUsage = onProviderUsage((usage) => {
+    broadcast({ event: 'provider.usage', data: usage });
   });
 
   // file system watcher manager
@@ -2625,7 +2629,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           canUseTool: makeCanUseTool(channel, messageMetadata?.chatId, sessionKey),
           abortController,
           messageMetadata,
-          fastMode: sessionKey.startsWith('desktop:') && fastModes.get(sessionKey) === true,
+          // undefined off desktop: those runs have no toggle and follow the provider's own config
+          fastMode: sessionKey.startsWith('desktop:') ? fastModes.get(sessionKey) === true : undefined,
           onRunReady: (handle) => { runHandles.set(sessionKey, handle); runModels.set(sessionKey, runConfig.model); },
           lastPulseAt,
           hooks: {
@@ -4940,6 +4945,20 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
         }
 
+        case 'provider.usage': {
+          try {
+            const providerName = params?.provider === 'codex' ? 'codex' : 'claude';
+            const cached = getProviderUsage(providerName);
+            // claude only reports limits inside a run; codex can be asked at any time
+            if (providerName === 'codex' && (!cached || params?.refresh)) {
+              return { id, result: await getCodexUsage() };
+            }
+            return { id, result: cached };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
         case 'provider.codex.models': {
           try {
             return { id, result: await getCodexModelCatalog() };
@@ -7195,6 +7214,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       streamBatches.clear();
       unsubscribeClaudeAuthRequired();
       unsubscribeCodexAuthRequired();
+      unsubscribeProviderUsage();
       // Shut down HTTP auth server and flush auth cache
       await httpAuth?.close();
       flushAuthCache();

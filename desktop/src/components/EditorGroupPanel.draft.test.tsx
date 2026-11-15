@@ -47,6 +47,8 @@ function makeGateway() {
     getCodexModels: vi.fn(async () => ({ models: [] })),
     getClaudeModels: vi.fn(async () => ({ models: [], fastMode: { available: true } })),
     getSessionFastMode: vi.fn(() => false),
+    usageByProvider: {},
+    loadProviderUsage: vi.fn(async () => {}),
     setSessionFastMode: vi.fn(),
     sendMessage: vi.fn(async () => {}),
     setProvider: vi.fn(async () => ({})),

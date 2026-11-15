@@ -173,6 +173,7 @@ export type GatewayEventName =
   | 'tasks.log'
   | 'research.update'
   | 'provider.auth_required'
+  | 'provider.usage'
   | 'background.status'
   | 'fs.change'
   | 'agent.status'

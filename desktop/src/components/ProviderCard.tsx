@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Check, X, ChevronDown, ChevronUp } from 'lucide-react';
-import { DEFAULT_CODEX_MODEL, codexModelsForAuth } from '@/lib/modelCatalog';
+import { DEFAULT_CODEX_MODEL, codexModelsFromCatalog } from '@/lib/modelCatalog';
 
 type Props = {
   gateway: ReturnType<typeof useGateway>;
@@ -53,7 +53,7 @@ export function ProviderCard({ gateway, disabled }: Props) {
   }, [gateway.getProviderStatus]);
 
   const codexModel = cfg?.provider?.codex?.model || '';
-  const codexOptions = codexModelsForAuth(providerName === 'codex' ? authMethod : undefined, codexModel);
+  const codexOptions = codexModelsFromCatalog(null, codexModel);
 
   const handleCodexModelChange = useCallback(async (value: string) => {
     try {
