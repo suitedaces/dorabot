@@ -369,6 +369,8 @@ export function isPathAllowed(
   const allowedRaw = channelOverride?.allowedPaths?.length
     ? channelOverride.allowedPaths
     : (config.gateway?.allowedPaths || [home, '/tmp']);
-  const allowed = allowedRaw.map(p => resolve(p.replace(/^~/, home)));
-  return allowed.some(a => resolved.startsWith(a));
+  // compare real paths on both sides: /tmp is a symlink to /private/tmp on macOS
+  const real = (p: string) => { try { return realpathSync(p); } catch { return p; } };
+  const allowed = allowedRaw.map(p => real(resolve(p.replace(/^~/, home))));
+  return allowed.some(a => resolved === a || resolved.startsWith(a.endsWith('/') ? a : a + '/'));
 }

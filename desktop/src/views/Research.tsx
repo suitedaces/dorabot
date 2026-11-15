@@ -1,3 +1,4 @@
+import { onResearchFocus, takePendingResearch } from '@/lib/research-focus';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { useGateway } from '../hooks/useGateway';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -46,7 +47,7 @@ type ViewMode = 'list' | 'table';
 export function ResearchView({ gateway }: Props) {
   const [items, setItems] = useState<ResearchItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => takePendingResearch());
   const [selectedContent, setSelectedContent] = useState<ResearchItemWithContent | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
   const [filter, setFilter] = useState<FilterType>('all');
@@ -58,6 +59,7 @@ export function ResearchView({ gateway }: Props) {
   const [collapsedTopics, setCollapsedTopics] = useState<Set<string>>(new Set());
   const [selectedTopic, setSelectedTopic] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => onResearchFocus(id => { takePendingResearch(); setSelectedId(id); }), []);
 
   const loadItems = useCallback(async () => {
     if (gateway.connectionState !== 'connected') return;

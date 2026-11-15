@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'node:http';
-import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, chmodSync, unlinkSync, realpathSync, watch, cpSync, createWriteStream, type FSWatcher } from 'node:fs';
+import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, chmodSync, unlinkSync, realpathSync, watch, cpSync, createWriteStream, openSync, readSync, closeSync, type FSWatcher } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import * as nodePty from 'node-pty';
 import { resolve as pathResolve, join, dirname, sep } from 'node:path';
@@ -55,6 +55,9 @@ import {
 } from '../tools/tasks.js';
 import { loadResearch, saveResearch, readResearchContent, writeResearchFile, nextId as nextResearchId, type ResearchItem } from '../tools/research.js';
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
+import { slimToolMeta } from './tool-meta.js';
+
+const NOTICE_SUBTYPES = new Set(['model_refusal_fallback', 'model_refusal_no_fallback', 'api_retry', 'informational', 'notification', 'session_writes_lost', 'mirror_error']);
 import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, onClaudeAuthRequired } from '../providers/claude.js';
 import { getProviderUsage, onProviderUsage } from '../providers/usage.js';
 import { isCodexInstalled, hasCodexAuth, onCodexAuthRequired, getCodexUsage, getCodexModelCatalog, getCodexAppServerSnapshot, callCodexAppServer, closeCodexAppServerRpcClient } from '../providers/codex.js';
@@ -2751,6 +2754,10 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
 
           // ── SDK task system messages (subagent progress) ──────────────
+          // safety stops, api retries and cli notices: the desktop shows them in the chat
+          if (m.type === 'system' && NOTICE_SUBTYPES.has(String(m.subtype))) {
+            broadcast({ event: 'agent.notice', data: { source, sessionKey, message: m, timestamp: Date.now() } });
+          }
           if (m.type === 'system' && m.subtype === 'task_started') {
             const taskId = m.task_id as string;
             const toolUseId = m.tool_use_id as string;
@@ -3125,9 +3132,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                       source,
                       sessionKey,
                       tool_use_id: block.tool_use_id,
-                      content: resultText.slice(0, 2000),
+                      content: resultText,
                       imageData,
                       is_error: block.is_error || false,
+                      // one sdk user message carries one tool result, so its tool_use_result is this block's
+                      meta: content.length === 1 ? slimToolMeta((m as any).tool_use_result) : undefined,
                       parentToolUseId: parentId,
                       timestamp: Date.now(),
                     },
@@ -3158,7 +3167,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 source,
                 sessionKey,
                 tool_use_id: toolUseId,
-                delta: deltaContent.slice(0, 2000),
+                delta: deltaContent,
                 timestamp: Date.now(),
               },
             });
@@ -3176,8 +3185,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 source,
                 sessionKey,
                 tool_use_id: toolUseId,
-                content: resultContent.slice(0, 2000),
+                content: resultContent,
                 is_error: m.is_error || false,
+                meta: slimToolMeta((m as any).meta),
                 timestamp: Date.now(),
               },
             });
@@ -5465,6 +5475,33 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           try {
             const content = readFileSync(resolved, 'utf-8');
             return { id, result: { content, path: resolved } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        // read a growing file from an offset (background task output, agent transcripts)
+        case 'fs.tail': {
+          const filePath = params?.path as string;
+          const offset = Math.max(0, Number(params?.offset) || 0);
+          if (!filePath) return { id, error: 'path required' };
+          const resolved = resolve(filePath, config.cwd || homedir());
+          if (!isPathAllowed(resolved, config)) return { id, error: `path not allowed: ${resolved}` };
+          try {
+            const size = statSync(resolved).size;
+            if (offset >= size) return { id, result: { content: '', size } };
+            const len = Math.min(size - offset, 1024 * 1024);
+            const fd = openSync(resolved, 'r');
+            try {
+              const buf = Buffer.alloc(len);
+              readSync(fd, buf, 0, len, offset);
+              // a capped read ends on a newline so no line (or utf-8 char) is split across reads
+              const nl = offset + len < size ? buf.lastIndexOf(10) : -1;
+              const end = nl >= 0 ? nl + 1 : len;
+              return { id, result: { content: buf.subarray(0, end).toString('utf-8'), size, next: offset + end } };
+            } finally {
+              closeSync(fd);
+            }
           } catch (err) {
             return { id, error: err instanceof Error ? err.message : String(err) };
           }
