@@ -302,7 +302,7 @@ function CopyMessageButton({
   };
   const base = variant === 'overlay'
     ? 'absolute top-1 right-1 inline-flex items-center justify-center w-6 h-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-background/60 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity'
-    : 'inline-flex items-center gap-1 h-5 px-1.5 rounded text-[10px] text-muted-foreground/70 hover:text-foreground hover:bg-secondary/60 transition-colors';
+    : 'inline-flex items-center gap-1 h-5 px-1.5 rounded text-[10px] text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors';
   return (
     <button
       type="button"
@@ -620,7 +620,7 @@ export function AskUserQuestionPanel({
                   onFocus={() => setCursor(oi)}
                   onClick={() => { setCursor(oi); handleSelect(q.question, opt.label, q.multiSelect); }}
                 >
-                  {oi < 9 && <span className="text-[10px] text-muted-foreground/70 tabular-nums mt-px w-2 shrink-0">{oi + 1}</span>}
+                  {oi < 9 && <span className="text-[10px] text-muted-foreground tabular-nums mt-px w-2 shrink-0">{oi + 1}</span>}
                   <span className="flex flex-col items-start min-w-0">
                     <span className="text-xs font-medium">{opt.label}</span>
                     {opt.description && <span className="text-[10px] text-muted-foreground leading-tight">{opt.description}</span>}
@@ -641,7 +641,7 @@ export function AskUserQuestionPanel({
               onFocus={() => setCursor(options.length)}
               onClick={() => { setCursor(options.length); choose(options.length); }}
             >
-              {options.length < 9 && <span className="text-[10px] text-muted-foreground/70 tabular-nums mt-px w-2 shrink-0">{options.length + 1}</span>}
+              {options.length < 9 && <span className="text-[10px] text-muted-foreground tabular-nums mt-px w-2 shrink-0">{options.length + 1}</span>}
               <span className="flex flex-col items-start min-w-0">
                 <span className="text-xs font-medium">Other</span>
                 <span className="text-[10px] text-muted-foreground">type your own answer</span>
@@ -1950,11 +1950,11 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
           <button type="button" onClick={() => setQueuedOpen(v => !v)} className="w-full flex items-center gap-2 px-2.5 py-1 rounded-md text-[11px] text-muted-foreground hover:bg-secondary/50">
             <ChevronRight className={cn('w-3 h-3 transition-transform', queuedOpen && 'rotate-90')} />
             {activeState!.queued!.length} queued
-            <span className="text-muted-foreground/70">· {isRunning ? 'starts after this turn' : 'not sent: the run stopped'}</span>
+            <span className="text-muted-foreground">· {isRunning ? 'starts after this turn' : 'not sent: the run stopped'}</span>
           </button>
           {queuedOpen && activeState!.queued!.map((q, i) => (
             <div key={q.timestamp + ':' + i} className="flex items-start gap-2 pl-7 pr-2 py-1 text-[12px]">
-              <span className="flex-1 min-w-0 whitespace-pre-wrap break-words text-foreground/90">{q.content}</span>
+              <span className="flex-1 min-w-0 whitespace-pre-wrap break-words text-foreground">{q.content}</span>
               {!isRunning && (
                 <>
                   <button type="button" className="text-[11px] text-primary hover:underline shrink-0" onClick={() => { const t = gateway.takeQueued(sessionKey, i); if (t) gateway.sendMessage(t.content, sessionKey, undefined, t.images); }}>send</button>
