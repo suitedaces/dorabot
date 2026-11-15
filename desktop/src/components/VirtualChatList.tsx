@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowDown } from 'lucide-react';
 
 type Props<T> = {
   items: T[];
@@ -26,6 +27,7 @@ export function VirtualChatList<T>({
   const viewportRef = useRef<HTMLDivElement>(null);
   const heightsRef = useRef<Map<number, number>>(new Map());
   const nearBottomRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
   const measureRafRef = useRef<number | null>(null);
   const observerRef = useRef<ResizeObserver | null>(null);
   const observedRef = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -33,6 +35,7 @@ export function VirtualChatList<T>({
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [measureVersion, setMeasureVersion] = useState(0);
+  const [away, setAway] = useState(false);
 
   const queueMeasureRecalc = useCallback(() => {
     if (measureRafRef.current !== null) return;
@@ -128,7 +131,12 @@ export function VirtualChatList<T>({
     const nextScrollTop = viewport.scrollTop;
     setScrollTop(prev => (prev === nextScrollTop ? prev : nextScrollTop));
     const distanceFromBottom = viewport.scrollHeight - (nextScrollTop + viewport.clientHeight);
-    nearBottomRef.current = distanceFromBottom <= bottomThresholdPx;
+    // pinning only ever moves the view down, so moving up away from the bottom is the user:
+    // let go right away instead of waiting until they clear the threshold
+    const movedUp = nextScrollTop < lastScrollTopRef.current - 1 && distanceFromBottom > 2;
+    lastScrollTopRef.current = nextScrollTop;
+    nearBottomRef.current = movedUp ? false : distanceFromBottom <= bottomThresholdPx;
+    setAway(!nearBottomRef.current);
   }, [bottomThresholdPx]);
 
   useEffect(() => {
@@ -203,7 +211,15 @@ export function VirtualChatList<T>({
     updateHeight(index, el);
   }, [updateHeight]);
 
+  const backToLatest = () => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    nearBottomRef.current = true;
+    viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'auto' });
+  };
+
   return (
+    <div className="relative flex-1 min-h-0 min-w-0 flex flex-col">
     <div
       ref={viewportRef}
       className={className || 'flex-1 overflow-auto'}
@@ -221,6 +237,12 @@ export function VirtualChatList<T>({
         );
       })}
       <div style={{ height: `${bottomSpacer}px` }} />
+    </div>
+    {away && (
+      <button type="button" onClick={backToLatest} title="back to the latest" aria-label="back to the latest" className="absolute bottom-3 left-1/2 -translate-x-1/2 w-7 h-7 flex items-center justify-center rounded-full bg-primary text-primary-foreground shadow">
+        <ArrowDown className="w-4 h-4" />
+      </button>
+    )}
     </div>
   );
 }
