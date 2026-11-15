@@ -112,14 +112,11 @@ export const ThinkingRow = memo(function ThinkingRow({ item }: { item: ThinkingI
   const [open, setOpen] = useState(false);
   const text = item.content?.trim() || '';
   if (!text && !item.streaming) return null;
-  const sentences = text.split(/(?<=[.!?])\s+/);
-  const target = item.streaming ? sentences[sentences.length - 1] : sentences[0];
   return (
     <div className={item.withdrawn ? 'opacity-50' : undefined}>
     <ToolCard
       icon={Brain}
       verb={item.streaming ? 'Thinking' : 'Thought'}
-      target={target}
       status="none"
       dim
       open={open}
