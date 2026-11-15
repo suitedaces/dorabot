@@ -3,7 +3,7 @@
 // contents, prompts) and keep the small facts the cards show.
 
 const DROP = new Set([
-  'stdout', 'stderr', 'originalFile', 'content', 'file', 'result', 'prompt', 'oldString', 'newString',
+  'stdout', 'stderr', 'originalFile', 'content', 'result', 'prompt', 'oldString', 'newString',
   'staleReadFileStateHint', 'backgroundCwdHint',
 ]);
 
@@ -15,6 +15,12 @@ export function slimToolMeta(raw: unknown): ToolMeta | undefined {
   const out: ToolMeta = {};
   for (const [k, v] of Object.entries(src)) {
     if (DROP.has(k) || v === undefined) continue;
+    if (k === 'file' && v && typeof v === 'object') {
+      // read: keep path and line facts, drop the text or image bytes
+      const { content: _c, base64: _b, ...facts } = v as Record<string, unknown>;
+      out.file = facts;
+      continue;
+    }
     if (k === 'results' && Array.isArray(v)) {
       // websearch: keep the links, the summary text already is the tool result
       const links: Array<{ title: string; url: string }> = [];
