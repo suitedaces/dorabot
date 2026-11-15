@@ -50,7 +50,7 @@ export function PlanPill({ items }: { items: Array<{ content: string; status: st
         {items.map((t, i) => (
           <div key={i} className="flex items-start gap-2 px-3 py-0.5 text-[11.5px] leading-relaxed">
             <span className={cn('w-3.5 h-3.5 mt-[3px] rounded border shrink-0 flex items-center justify-center text-[9px]', t.status === 'completed' ? 'bg-success border-success text-background' : t.status === 'in_progress' ? 'border-primary' : 'border-border')}>{t.status === 'completed' ? '✓' : ''}</span>
-            <span className={cn(t.status === 'completed' ? 'text-muted-foreground line-through' : t.status === 'in_progress' ? 'text-foreground font-medium' : 'text-foreground/80')}>{t.content}</span>
+            <span className={cn(t.status === 'completed' ? 'text-muted-foreground line-through' : t.status === 'in_progress' ? 'text-foreground font-medium' : 'text-foreground')}>{t.content}</span>
           </div>
         ))}
       </div>

@@ -118,8 +118,8 @@ function CodeLines({ lines, start = 1 }: { lines: string[]; start?: number }) {
     <div className="py-1.5 font-mono text-[11px] leading-[19px]">
       {lines.map((l, i) => (
         <div key={i} className="flex">
-          <span className="w-12 pr-3 text-right text-muted-foreground/45 select-none shrink-0 tabular-nums">{start + i}</span>
-          <span className="whitespace-pre-wrap break-words pr-3 min-w-0 text-foreground/90">{l || ' '}</span>
+          <span className="w-12 pr-3 text-right text-muted-foreground select-none shrink-0 tabular-nums">{start + i}</span>
+          <span className="whitespace-pre-wrap break-words pr-3 min-w-0 text-foreground">{l || ' '}</span>
         </div>
       ))}
     </div>
@@ -132,12 +132,12 @@ function DiffRows({ rows, live }: { rows: DiffRow[]; live?: boolean }) {
   return (
     <div className="py-1.5 font-mono text-[11px] leading-[19px]">
       {rows.map((r, i) => r.k === 'gap'
-        ? <div key={i} className="px-3 text-muted-foreground/50 select-none">⋯</div>
+        ? <div key={i} className="px-3 text-muted-foreground select-none">⋯</div>
         : (
           <div key={i} className={cn('flex', r.k === 'add' && 'bg-success/10', r.k === 'del' && 'bg-destructive/10')}>
-            <span className="w-10 pr-2 text-right text-muted-foreground/45 select-none shrink-0 tabular-nums">{r.k !== 'add' ? r.o : ''}</span>
-            <span className="w-10 pr-2 text-right text-muted-foreground/45 select-none shrink-0 tabular-nums">{r.k !== 'del' ? r.n : ''}</span>
-            <span className={cn('w-4 select-none shrink-0', r.k === 'add' ? 'text-success' : r.k === 'del' ? 'text-destructive' : 'text-muted-foreground/50')}>{r.k === 'add' ? '+' : r.k === 'del' ? '−' : ''}</span>
+            <span className="w-10 pr-2 text-right text-muted-foreground select-none shrink-0 tabular-nums">{r.k !== 'add' ? r.o : ''}</span>
+            <span className="w-10 pr-2 text-right text-muted-foreground select-none shrink-0 tabular-nums">{r.k !== 'del' ? r.n : ''}</span>
+            <span className={cn('w-4 select-none shrink-0', r.k === 'add' ? 'text-success' : r.k === 'del' ? 'text-destructive' : 'text-muted-foreground')}>{r.k === 'add' ? '+' : r.k === 'del' ? '−' : ''}</span>
             <span className={cn('whitespace-pre-wrap break-words pr-3 min-w-0', r.k === 'add' ? 'text-success' : r.k === 'del' ? 'text-destructive' : 'text-muted-foreground')}>{r.s || ' '}{live && i === rows.length - 1 && <span className="streaming-cursor" />}</span>
           </div>
         ))}
@@ -215,7 +215,7 @@ function Checklist({ todos }: { todos: Array<{ content?: string; subject?: strin
         return (
           <div key={i} className="flex items-start gap-2 px-3 py-0.5 text-[11.5px] leading-relaxed">
             <span className={cn('w-3.5 h-3.5 mt-[3px] rounded border shrink-0 flex items-center justify-center', done ? 'bg-success border-success text-background' : doing ? 'border-primary' : 'border-border')}>{done ? '✓' : ''}</span>
-            <span className={cn(done ? 'text-muted-foreground line-through' : doing ? 'text-foreground font-medium' : 'text-foreground/80')}>{t.content || t.subject}</span>
+            <span className={cn(done ? 'text-muted-foreground line-through' : doing ? 'text-foreground font-medium' : 'text-foreground')}>{t.content || t.subject}</span>
           </div>
         );
       })}
@@ -232,9 +232,9 @@ function SmartOutput({ text, error }: { text: string; error?: boolean }) {
       if (cols.length <= 12) {
         return (
           <div className="overflow-auto max-h-[300px]">
-            <table className="w-full text-[11px] border-collapse">
-              <thead><tr>{cols.map(c => <th key={c} className="text-left font-medium text-muted-foreground px-3 py-1 border-b border-border/50 sticky top-0 bg-[var(--stream-deep)]">{c}</th>)}</tr></thead>
-              <tbody>{rows.map((r: any, i: number) => <tr key={i}>{cols.map(c => <td key={c} className="px-3 py-1 border-b border-border/20 text-foreground whitespace-nowrap">{typeof r[c] === 'object' ? JSON.stringify(r[c]) : String(r[c] ?? '')}</td>)}</tr>)}</tbody>
+            <table className="tool-table w-full text-[11px] border-collapse">
+              <thead><tr>{cols.map(c => <th key={c} className="text-left font-semibold text-foreground px-3 py-1 sticky top-0 bg-[var(--stream-deep)]">{c}</th>)}</tr></thead>
+              <tbody>{rows.map((r: any, i: number) => <tr key={i}>{cols.map(c => <td key={c} className="px-3 py-1 text-foreground whitespace-nowrap">{typeof r[c] === 'object' ? JSON.stringify(r[c]) : String(r[c] ?? '')}</td>)}</tr>)}</tbody>
             </table>
           </div>
         );
@@ -390,8 +390,8 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
                 const path = m ? m[1] : l;
                 return (
                   <div key={i} className="flex px-3 min-w-0">
-                    {m && <span className="text-muted-foreground/50 w-10 shrink-0 text-right pr-2 tabular-nums">{m[2]}</span>}
-                    <button type="button" disabled={!open?.file} onClick={() => open?.file?.(path)} className={cn('text-left min-w-0 break-all', m ? 'text-foreground/90' : 'text-foreground hover:underline')}>{m ? <><span className="text-muted-foreground">{path.split('/').pop()}:</span> {m[3]}</> : l}</button>
+                    {m && <span className="text-muted-foreground w-10 shrink-0 text-right pr-2 tabular-nums">{m[2]}</span>}
+                    <button type="button" disabled={!open?.file} onClick={() => open?.file?.(path)} className={cn('text-left min-w-0 break-all', m ? 'text-foreground' : 'text-foreground hover:underline')}>{m ? <><span className="text-muted-foreground">{path.split('/').pop()}:</span> {m[3]}</> : l}</button>
                   </div>
                 );
               })}

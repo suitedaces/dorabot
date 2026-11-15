@@ -101,7 +101,7 @@ export const NoticeRow = memo(function NoticeRow({ item }: { item: NoticeItem })
             <ExternalLink className="w-3 h-3" />open
           </button>
         )}
-        {item.detail && <ChevronRight className={cn('w-3 h-3 mt-[3px] shrink-0 text-muted-foreground/70 transition-transform', open && 'rotate-90')} />}
+        {item.detail && <ChevronRight className={cn('w-3 h-3 mt-[3px] shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />}
       </div>
       {open && item.detail && <div className="pl-[30px] pr-3 pb-2 text-[11px] text-muted-foreground whitespace-pre-wrap">{item.detail}</div>}
     </div>
@@ -215,7 +215,7 @@ export const ActivityGroup = memo(function ActivityGroup({ items, base, active }
         {busy ? <Loader2 className="w-3.5 h-3.5 mt-[2px] animate-spin text-muted-foreground shrink-0" /> : <ChevronRight className={cn('w-3.5 h-3.5 mt-[2px] text-muted-foreground shrink-0 transition-transform', open && 'rotate-90')} />}
         <span className="flex-1 min-w-0 leading-relaxed text-muted-foreground">
           {busy && <span className="compacting-sheen font-medium mr-2">Working</span>}
-          {parts.map((p, i) => <span key={i}>{i > 0 && <span className="mx-1.5 text-muted-foreground/50">·</span>}{p}</span>)}
+          {parts.map((p, i) => <span key={i}>{i > 0 && <span className="mx-1.5 text-muted-foreground">·</span>}{p}</span>)}
         </span>
         <span className="text-[11px] text-muted-foreground tabular-nums shrink-0 mt-px">{duration}</span>
       </button>

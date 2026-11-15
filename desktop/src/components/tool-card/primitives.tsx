@@ -62,7 +62,7 @@ export const ToolCard = memo(function ToolCard({ icon: Icon, verb, target, facts
         )}
         <StatusIcon status={status} />
         <span className="text-muted-foreground text-[11px] w-11 text-right tabular-nums shrink-0 mt-px">{duration}</span>
-        <ChevronRight className={cn('w-3 h-3 mt-[3px] shrink-0 text-muted-foreground/70 transition-transform', open && 'rotate-90', !hasBody && 'invisible')} />
+        <ChevronRight className={cn('w-3 h-3 mt-[3px] shrink-0 text-muted-foreground transition-transform', open && 'rotate-90', !hasBody && 'invisible')} />
       </div>
       {subline && <div className="pl-[30px] pr-2 -mt-0.5 pb-1 text-[11px] text-muted-foreground break-words">{subline}</div>}
       {open && hasBody && (
