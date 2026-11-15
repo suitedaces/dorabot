@@ -150,7 +150,6 @@ export function EditorGroupPanel({
             onOpenDiff={(opts) => tabState.openDiffTab(opts)}
             onOpenResearch={() => tabState.openViewTab('research', 'research')}
             onOpenTask={(id, title) => tabState.openTaskTab(id, title)}
-            onOpenTerminal={() => tabState.openTerminalTab()}
             onClearChat={() => {
               tabState.closeTab(activeTab.id);
               tabState.newChatTab(group.id);

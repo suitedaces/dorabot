@@ -1,9 +1,9 @@
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { BROWSER_PROFILE_DIR } from '../workspace.js';
 
 const execFileAsync = promisify(execFile);
@@ -109,30 +109,37 @@ function readDevToolsPort(dataDir: string): number | null {
   }
 }
 
-// check if a process matching the app name is running
-async function isAppRunning(appName: string): Promise<boolean> {
+// the browser holding a user data dir, from chrome's own SingletonLock (-> "<host>-<pid>").
+// pgrep on the app name would match the user's own browser too.
+async function profileOwnerPid(profileDir: string, exec: string): Promise<number | null> {
+  let target: string;
+  try { target = readlinkSync(join(profileDir, 'SingletonLock')); } catch { return null; }
+  const dash = target.lastIndexOf('-');
+  if (target.slice(0, dash) !== hostname()) return null;
+  const pid = Number(target.slice(dash + 1));
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  // a stale lock can name a reused pid: only trust it if that pid is this browser
   try {
-    const { stdout } = await execFileAsync('pgrep', ['-f', appName]);
-    return stdout.trim().length > 0;
+    const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'args=']);
+    return stdout.trim().startsWith(exec) ? pid : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
-// gracefully quit a macOS app and wait for it to exit
-async function quitApp(appName: string, timeoutMs = 5000): Promise<void> {
-  try {
-    await execFileAsync('osascript', ['-e', `tell application "${appName}" to quit`]);
-  } catch {
-    // app might not be running or not respond to osascript
-  }
+function alive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+// stop only that browser instance and wait for it to exit
+async function stopPid(pid: number, timeoutMs = 5000): Promise<void> {
+  try { process.kill(pid, 'SIGTERM'); } catch { return; }
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (!(await isAppRunning(appName))) return;
+    if (!alive(pid)) return;
     await new Promise(r => setTimeout(r, 300));
   }
-  // force kill as fallback
-  try { await execFileAsync('pkill', ['-f', appName]); } catch {}
+  try { process.kill(pid, 'SIGKILL'); } catch {}
 }
 
 export async function launchBrowser(config: BrowserConfig = {}): Promise<void> {
@@ -168,10 +175,11 @@ export async function launchBrowser(config: BrowserConfig = {}): Promise<void> {
     }
   }
 
-  // if browser is running without CDP, quit it first
-  if (await isAppRunning(info.appName)) {
-    console.error(`[browser] ${info.appName} running without CDP, restarting with remote debugging...`);
-    await quitApp(info.appName);
+  // the profile is open in a browser without CDP: restart just that instance
+  const owner = await profileOwnerPid(profileDir, info.exec);
+  if (owner) {
+    console.error(`[browser] ${info.appName} has the profile open without CDP (pid ${owner}), restarting it with remote debugging...`);
+    await stopPid(owner);
   }
 
   const { spawn } = await import('node:child_process');

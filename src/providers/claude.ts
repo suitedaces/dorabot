@@ -939,6 +939,10 @@ export class ClaudeProvider implements Provider {
     const messageQueue: UserMsg[] = [];
     let waitingForMessage: ((msg: UserMsg) => void) | null = null;
     let closed = false;
+    // messages taken in (the prompt + every inject), handed to the cli, and handed by the last result
+    let accepted = 1;
+    let sent = 0;
+    let sentAtLastResult = 0;
 
     const makeUserMsg = async (text: string, images?: import('./types.js').ImageAttachment[]): Promise<UserMsg> => {
       const content: ContentBlock[] = [];
@@ -967,6 +971,7 @@ export class ClaudeProvider implements Provider {
       await seedReady;
       while (!closed && !opts.abortController?.signal.aborted) {
         if (messageQueue.length > 0) {
+          sent++;
           yield messageQueue.shift()!;
         } else {
           const msg = await new Promise<UserMsg>((resolve) => {
@@ -974,6 +979,7 @@ export class ClaudeProvider implements Provider {
           });
           waitingForMessage = null;
           if (closed || opts.abortController?.signal.aborted) break;
+          sent++;
           yield msg;
         }
       }
@@ -987,6 +993,7 @@ export class ClaudeProvider implements Provider {
       get active() { return !closed; },
       inject(text: string, images?: import('./types.js').ImageAttachment[]): boolean {
         if (closed) return false;
+        accepted++;
         makeUserMsg(text, images).then(msg => {
           if (closed) return;
           // a message sent while a turn runs waits for that turn to end and starts the next one
@@ -997,6 +1004,12 @@ export class ClaudeProvider implements Provider {
             messageQueue.push(msg);
           }
         });
+        return true;
+      },
+      idleClose() {
+        // a message not yet sent would be lost, and one whose turn has not ended would run with its input closed
+        if (closed || sent !== accepted || sentAtLastResult !== sent) return false;
+        this.close();
         return true;
       },
       close() {
@@ -1018,6 +1031,9 @@ export class ClaudeProvider implements Provider {
           console.warn(`[claude] interrupt: ${receipt.still_queued.length} queued message(s) survive and will still run`);
         }
       },
+      // queued messages carry priority 'later': an interrupt ends the turn and the cli starts them
+      async sendNow() { await queryRef?.interrupt(); },
+      async backgroundTask(toolUseId: string) { return (await queryRef?.backgroundTasks(toolUseId)) ?? false; },
       async setModel(model: string) { await queryRef?.setModel(model); },
       async setFastMode(on: boolean) { await queryRef?.applyFlagSettings({ fastMode: on }); },
       async setPermissionMode(mode: string) { await queryRef?.setPermissionMode(mode as any); },
@@ -1168,9 +1184,11 @@ export class ClaudeProvider implements Provider {
 
     try {
       for await (const msg of q) {
+        const m = msg as Record<string, unknown>;
+        // before the yield, so whoever reads this result already sees the run as idle
+        if (m.type === 'result' && m.subtype !== 'tool_result' && m.subtype !== 'tool_output_delta') sentAtLastResult = sent;
         yield msg as ProviderMessage;
 
-        const m = msg as Record<string, unknown>;
         if (m.type === 'rate_limit_event') {
           setProviderUsage(claudeUsageFromRateLimitInfo(m.rate_limit_info, getProviderUsage('claude')));
         }

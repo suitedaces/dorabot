@@ -999,6 +999,22 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const toolLogs = new Map<string, { completed: ToolEntry[]; current: { name: string; inputJson: string; detail: string } | null; lastEditAt: number }>();
   // active RunHandles for message injection into running agent sessions
   const runHandles = new Map<string, RunHandle>();
+  // when each live run's last turn ended, and how many background tasks it has (they live inside its cli)
+  const turnEndedAt = new Map<string, number>();
+  const liveBgTasks = new Map<string, number>();
+  // a run's cli stays up between turns so the next message starts fast. after 30 idle minutes it
+  // is closed: the next message resumes the session from disk.
+  const IDLE_CLI_MS = 30 * 60 * 1000;
+  const idleCliSweep = setInterval(() => {
+    const now = Date.now();
+    for (const [key, handle] of runHandles) {
+      const ended = turnEndedAt.get(key);
+      if (!ended || now - ended < IDLE_CLI_MS) continue;
+      if (sessionRegistry.get(key)?.activeRun || liveBgTasks.get(key)) continue;
+      if (handle.idleClose?.()) console.log(`[gateway] closed idle cli for ${key} (${Math.round((now - ended) / 60000)}m since its last turn)`);
+    }
+  }, 60_000);
+  idleCliSweep.unref();
   // model the live run is on, so a message sent with a different pick can switch it
   const runModels = new Map<string, string>();
   // per-chat fast mode, desktop chats only, in memory so a restart turns it off (it bills 2x to usage credits)
@@ -2752,6 +2768,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             }));
             const snap = sessionSnapshots.get(sessionKey);
             if (snap) { snap.backgroundTasks = tasks; snap.updatedAt = Date.now(); }
+            liveBgTasks.set(sessionKey, tasks.length);
             broadcast({ event: 'agent.background_tasks', data: { sessionKey, tasks, timestamp: Date.now() } });
           }
 
@@ -2917,6 +2934,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             const parentId = m.parent_tool_use_id || null;
 
             // new turn starting — re-activate if idle between turns
+            if (evtType === 'message_start') turnEndedAt.delete(sessionKey);
             if (evtType === 'message_start' && !sessionRegistry.get(sessionKey)?.activeRun) {
               sessionRegistry.setActiveRun(sessionKey, true);
               broadcast({ event: 'status.update', data: { activeRun: true, source, sessionKey } });
@@ -3298,6 +3316,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             }
 
             finishTaskRun(sessionKey, 'completed');
+            turnEndedAt.set(sessionKey, Date.now());
 
             // per-turn: mark idle so sidebar spinner stops
             sessionRegistry.setActiveRun(sessionKey, false);
@@ -3392,6 +3411,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         activeRunChannels.delete(sessionKey);
         activeRunSources.delete(sessionKey);
         runHandles.delete(sessionKey);
+        turnEndedAt.delete(sessionKey);
+        liveBgTasks.delete(sessionKey);
         runModels.delete(sessionKey);
         // a stopped run never started the turns its waiting messages were for
         queuedUserMessages.delete(sessionKey);
@@ -3670,6 +3691,28 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!h.interrupt) return { id, error: 'interrupt not supported by current provider' };
           await h.interrupt();
           return { id, result: { interrupted: true, sessionKey: sk } };
+        }
+
+        case 'agent.backgroundTask': {
+          const sk = params?.sessionKey as string;
+          const toolUseId = params?.toolUseId as string;
+          if (!sk) return { id, error: 'sessionKey required' };
+          if (!toolUseId) return { id, error: 'toolUseId required' };
+          const h = runHandles.get(sk);
+          if (!h?.active) return { id, error: 'no active run for that session' };
+          if (!h.backgroundTask) return { id, error: 'backgroundTask not supported by current provider' };
+          const moved = await h.backgroundTask(toolUseId);
+          return { id, result: { moved, sessionKey: sk } };
+        }
+
+        case 'agent.sendNow': {
+          const sk = params?.sessionKey as string;
+          if (!sk) return { id, error: 'sessionKey required' };
+          const h = runHandles.get(sk);
+          if (!h?.active) return { id, error: 'no active run for that session' };
+          if (!h.sendNow) return { id, error: 'sendNow not supported by current provider' };
+          await h.sendNow();
+          return { id, result: { sessionKey: sk } };
         }
 
         case 'agent.setModel': {
@@ -7299,6 +7342,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     httpAuthPort: httpAuth?.port || 0,
     close: async () => {
       clearInterval(heartbeatSweepTimer);
+      clearInterval(idleCliSweep);
       for (const [, batch] of streamBatches) { if (batch.timer) clearTimeout(batch.timer); }
       streamBatches.clear();
       unsubscribeClaudeAuthRequired();

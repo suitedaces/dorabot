@@ -23,8 +23,14 @@ export type RunHandle = {
   inject(text: string, images?: ImageAttachment[], inputItems?: ProviderInputItem[]): boolean;
   /** End the generator → SDK CLI process exits */
   close(): void;
+  /** Close only if no message is waiting to start a turn; false means it stayed open (Claude SDK only) */
+  idleClose?(): boolean;
   /** Whether the generator is still alive */
   readonly active: boolean;
+  /** Move one running Bash command or subagent to the background; the turn carries on (Claude SDK only) */
+  backgroundTask?(toolUseId: string): Promise<boolean>;
+  /** End the running turn so the messages queued behind it start now */
+  sendNow?(): Promise<void>;
   /** Interrupt current processing (Claude SDK only) */
   interrupt?(): Promise<void>;
   /** Change model mid-conversation (Claude SDK only) */

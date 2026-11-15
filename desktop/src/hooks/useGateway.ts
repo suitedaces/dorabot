@@ -2631,6 +2631,14 @@ export function useGateway() {
     }, [rpc]),
     sendMessage,
     abortAgent,
+    // move one running command or subagent to the background; the turn carries on
+    backgroundTask: useCallback(async (sessionKey: string, toolUseId: string) => {
+      await rpc('agent.backgroundTask', { sessionKey, toolUseId });
+    }, [rpc]),
+    // end the running turn so the messages queued behind it start now
+    sendQueuedNow: useCallback(async (sessionKey: string) => {
+      await rpc('agent.sendNow', { sessionKey });
+    }, [rpc]),
     newSession,
     loadSession,
     setCurrentSessionId: useCallback((id: string | undefined) => {
