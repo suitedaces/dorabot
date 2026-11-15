@@ -61,12 +61,10 @@ function outcome(item: ToolItem, ctx: ToolCtx): { status: CardStatus; label?: st
   if (!item.is_error) return { status: 'ok' };
   if (/^The user doesn't want to proceed|^User rejected|tool use was rejected/i.test(out)) return { status: 'stopped', label: 'denied by you', tone: 'warn' };
   if (/^(PreToolUse|PostToolUse)\S* hook|blocked by (a )?hook/i.test(out)) return { status: 'error', label: 'blocked by hook', tone: 'warn' };
-  const code = /^Exit code (\d+)/.exec(out)?.[1] ?? (typeof item.meta?.exitCode === 'number' ? String(item.meta.exitCode) : undefined);
-  if (code) return { status: 'error', label: `exit ${code}`, tone: 'bad' };
   if (/timed out|timeout/i.test(firstLine(out))) return { status: 'error', label: 'timed out', tone: 'bad' };
   if (/has not been read yet|must read/i.test(out)) return { status: 'error', label: 'file not read first', tone: 'bad' };
   if (/String to replace not found|not found in file/i.test(out)) return { status: 'error', label: 'old text not found', tone: 'bad' };
-  return { status: 'error', label: 'failed', tone: 'bad' };
+  return { status: 'error' };
 }
 
 const verbFor = (running: boolean, a: string, b: string) => (running ? a : b);
@@ -292,8 +290,8 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       const desc = input.description ? String(input.description) : '';
       if (bg) {
         return {
-          kind: 'command', background: true, icon: SquareTerminal, verb: 'Background', target: desc ? `${desc}\n${command}` : command,
-          facts: running ? undefined : bgRunning ? <Tag tone="run">running</Tag> : tag ?? endTag,
+          kind: 'command', background: true, icon: SquareTerminal, verb: 'Background', target: desc || command,
+          facts: running || bgRunning ? undefined : tag ?? endTag,
           status: bgRunning ? 'running' : ended === 'failed' ? 'error' : ended === 'killed' || ended === 'stopped' ? 'stopped' : o.status,
           endedAt: bgRunning ? undefined : prog?.endedAt ?? (item.meta?.bgEndedAt as number | undefined),
           actions: [
@@ -321,10 +319,9 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       const f = item.meta?.file as Record<string, any> | undefined;
       const parsed = !err ? parseReadOutput(out) : null;
       const isImage = !!item.imageData || f?.type === 'image' || item.meta?.type === 'image';
-      const range = f?.startLine && f?.numLines ? `lines ${f.startLine}-${f.startLine + f.numLines - 1}` : input.offset ? `from line ${input.offset}` : '';
       const facts = tag;
       return {
-        kind: 'read', icon: isImage ? ImageIcon : FileText, verb: verbFor(running, 'Reading', 'Read'), target: range ? `${path}  ${range}` : path, facts, status: o.status,
+        kind: 'read', icon: isImage ? ImageIcon : FileText, verb: verbFor(running, 'Reading', 'Read'), target: path, facts, status: o.status,
         actions: open?.file && path ? [{ icon: ExternalLink, label: 'open file', onClick: () => open.file!(path) }] : [],
         body: item.imageData
           ? () => <img src={item.imageData} alt="" className="m-2 max-h-[320px] rounded border border-border/50" />
@@ -339,7 +336,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       const rows = diffRowsFor(item, oldStr, newStr);
       const add = rows.filter(r => r.k === 'add').length, del = rows.filter(r => r.k === 'del').length;
       return {
-        kind: 'edit', icon: Pencil, verb: verbFor(running, 'Editing', err ? 'Edit failed' : 'Edited'), target: path,
+        kind: 'edit', icon: Pencil, verb: verbFor(running, 'Editing', 'Edited'), target: path,
         facts: tag ?? <DiffStat add={add} del={del} />, status: o.status,
         actions: [
           ...(open?.file && path ? [{ icon: ExternalLink, label: 'open file', onClick: () => open.file!(path) }] : []),
@@ -360,7 +357,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       const lines = content.split('\n');
       const replaced = item.meta?.type === 'update';
       return {
-        kind: 'write', icon: FilePlus, verb: verbFor(running, 'Writing', err ? 'Write failed' : replaced ? 'Rewrote' : 'Wrote'), target: path,
+        kind: 'write', icon: FilePlus, verb: verbFor(running, 'Writing', replaced ? 'Rewrote' : 'Wrote'), target: path,
         facts: tag, status: o.status,
         actions: open?.file && path && !running ? [{ icon: ExternalLink, label: 'open file', onClick: () => open.file!(path) }] : [],
         body: () => (
@@ -417,7 +414,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       const url = String(input.url || item.meta?.url || '');
       const code = item.meta?.code;
       return {
-        kind: 'fetch', icon: Globe, verb: verbFor(running, 'Fetching', err ? 'Fetch failed' : 'Fetched'), target: url.replace(/^https?:\/\/(www\.)?/, ''),
+        kind: 'fetch', icon: Globe, verb: verbFor(running, 'Fetching', 'Fetched'), target: url.replace(/^https?:\/\/(www\.)?/, ''),
         facts: tag ?? (typeof code === 'number' && (code < 200 || code >= 300) ? <Tag tone="bad">HTTP {code}</Tag> : undefined), status: o.status,
         actions: url && open?.url ? [{ icon: ExternalLink, label: 'open page', onClick: () => open.url!(url) }] : [],
         body: out || input.prompt ? () => (
@@ -453,7 +450,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
     case 'message': {
       const message = String(input.message || '');
       return {
-        kind: 'other', icon: MessageSquare, verb: verbFor(running, 'Sending', err ? 'Send failed' : 'Sent'), target: [input.channel, input.target].filter(Boolean).join(' · '), facts: tag, status: o.status,
+        kind: 'other', icon: MessageSquare, verb: verbFor(running, 'Sending', 'Sent'), target: [input.channel, input.target].filter(Boolean).join(' · '), facts: tag, status: o.status,
         body: message ? () => <div className="p-3"><div className="inline-block max-w-[92%] rounded-2xl rounded-bl-sm px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words bg-[var(--stream-bubble-default)]">{message}</div></div> : undefined,
       };
     }
@@ -478,7 +475,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       const firstQ = qs[0]?.question || '';
       const firstA = answers[firstQ] || (out && !/^User has answered/.test(out) ? out : '');
       return {
-        kind: 'other', icon: HelpCircle, verb: running ? 'Asking' : 'Asked', target: firstQ, facts: firstA ? `→ ${String(firstA).split('\n')[0]}` : tag, status: o.status,
+        kind: 'other', icon: HelpCircle, verb: running ? 'Asking' : 'Asked', target: firstQ, facts: tag, status: o.status,
         body: qs.length ? () => (
           <div className="py-1.5">
             {qs.map((q: any, qi: number) => (
@@ -498,7 +495,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
 
     case 'schedule': case 'list_schedule': case 'update_schedule': case 'cancel_schedule': {
       const verb = { schedule: 'Scheduled', list_schedule: 'Listed schedule', update_schedule: 'Updated schedule', cancel_schedule: 'Cancelled' }[name]!;
-      return { kind: 'other', icon: Clock, verb, target: String(input.summary || input.message || input.id || ''), facts: tag ?? (input.rrule ? String(input.rrule) : undefined), status: o.status, body: () => <><KeyValues entries={inputEntries(input)} />{out && <TextBlock text={out} />}</> };
+      return { kind: 'other', icon: Clock, verb, target: String(input.summary || input.message || input.id || ''), facts: tag, status: o.status, body: () => <><KeyValues entries={inputEntries(input)} />{out && <TextBlock text={out} />}</> };
     }
 
     case 'research_view': case 'research_add': case 'research_update': case 'research_delete': {
@@ -553,7 +550,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
   const short = mcp ? mcp[2] : item.name;
   return {
     kind: 'other', icon: mcp ? Plug : Wrench, verb: short.replace(/_/g, ' '), target: firstString(input),
-    facts: tag ?? (server ? <Tag>{server}</Tag> : undefined), status: o.status,
+    facts: tag, status: o.status,
     body: () => (
       <ScrollBox follow={0}>
         <KeyValues entries={inputEntries(input)} />

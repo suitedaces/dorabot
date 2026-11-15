@@ -33,10 +33,11 @@ describe('buildDisplay', () => {
 });
 
 describe('describeTool', () => {
-  it('reads the real exit code from the bash error text', () => {
+  it('a failed command is marked by its status alone', () => {
     const item = tool('Bash', { command: 'python3 -c "import reportlab"' }, { output: "Exit code 1\nTraceback (most recent call last):", is_error: true });
+    // the red cross says it failed; no extra label
     expect(describeTool(item, ctx).status).toBe('error');
-    expect(facts(item)).toBe('exit 1');
+    expect(facts(item)).toBe('');
   });
 
   it('names denials and interrupts instead of calling them failures', () => {
@@ -68,10 +69,10 @@ describe('describeTool', () => {
     expect(facts(item)).toBe('+2 −1');
   });
 
-  it('shows the read range in the target and no line-count noise', () => {
+  it('a read shows just the path', () => {
     const item = tool('Read', { file_path: '/a.ts' }, { output: '40\tx\n41\ty', meta: { type: 'text', file: { filePath: '/a.ts', startLine: 40, numLines: 2, totalLines: 90 } } });
     const spec = describeTool(item, ctx);
-    expect(spec.target).toBe('/a.ts  lines 40-41');
+    expect(spec.target).toBe('/a.ts');
     expect(facts(item)).toBe('');
   });
 

@@ -30,13 +30,12 @@ type CardProps = {
 export const ToolCard = memo(function ToolCard({ icon: Icon, verb, target, facts, status, startedAt, endedAt, actions, open, onToggle, children, dim, subline }: CardProps) {
   const lines = target ? target.split('\n') : [];
   const first = lines[0] ?? '';
-  const more = lines.length - 1;
   const running = status === 'running';
   const now = useNow(running);
   const ms = startedAt ? (endedAt ?? (running ? now : undefined)) : undefined;
-  // time only matters while it runs or when it was slow
+  // elapsed time only while it runs
   const elapsed = startedAt && ms ? ms - startedAt : 0;
-  const duration = elapsed && (running || elapsed >= 3000) ? formatDuration(elapsed) : '';
+  const duration = running && elapsed ? formatDuration(elapsed) : '';
   const hasBody = !!children;
 
   return (
@@ -53,7 +52,6 @@ export const ToolCard = memo(function ToolCard({ icon: Icon, verb, target, facts
         <span className={cn('font-medium shrink-0 flex-1 @[420px]:flex-none', dim ? 'text-muted-foreground font-normal' : 'text-foreground')}>{verb}</span>
         <span className="text-muted-foreground text-[11.5px] min-w-0 flex-1 [overflow-wrap:anywhere] line-clamp-2 order-last basis-full pl-[22px] @[420px]:order-none @[420px]:basis-auto @[420px]:pl-0" title={target}>
           {first}
-          {more > 0 && <span className="ml-1.5 text-[10px] px-1 py-px rounded border border-border/60 whitespace-nowrap">+{more} line{more === 1 ? '' : 's'}</span>}
         </span>
         {facts && <span className="text-muted-foreground text-[11px] whitespace-nowrap tabular-nums shrink-0 mt-px">{facts}</span>}
         {/* rows without a body keep their actions in the header; otherwise they sit on the body */}

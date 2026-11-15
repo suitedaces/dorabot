@@ -14,6 +14,9 @@ export type DisplayItem =
   | { type: 'item'; item: ChatItem; index: number }
   | { type: 'activity'; items: ActivityItem[]; index: number; lastIndex: number };
 
+// bookkeeping, not work: tool loading, reading a background task's output, plan updates (the plan pill shows those)
+const HIDDEN_TOOLS = new Set(['ToolSearch', 'TaskOutput', 'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet']);
+
 const isActivity = (it: ChatItem): it is ActivityItem =>
   (it.type === 'tool_use' && !(it.name === 'AskUserQuestion' && it.output == null)) || it.type === 'thinking' || it.type === 'notice';
 
@@ -24,6 +27,7 @@ export function buildDisplay(items: ChatItem[]): DisplayItem[] {
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     if (it.type === 'tool_use' && it.name === 'AskUserQuestion' && it.output == null) continue; // the question panel shows it
+    if (it.type === 'tool_use' && HIDDEN_TOOLS.has(it.name)) continue;
     if (isActivity(it)) {
       const last = out[out.length - 1];
       if (last && last.type === 'activity') { last.items.push(it); last.lastIndex = i; continue; }
@@ -56,9 +60,6 @@ export const ToolRow = memo(function ToolRow({ item, ctx }: { item: ToolItem; ct
   const [manual, setManual] = useState<boolean | null>(null);
   const spec = describeTool(item, ctx);
   const open = manual ?? ctx.live;
-  const subline = spec.kind === 'agent' && spec.status === 'running'
-    ? (ctx.progressByToolUse.get(item.id)?.summary ? `now: ${ctx.progressByToolUse.get(item.id)!.summary}` : undefined)
-    : undefined;
   return (
     <div id={`tool-${item.id}`} className={item.withdrawn ? 'opacity-50' : undefined}>
       <ToolCard
@@ -71,7 +72,6 @@ export const ToolRow = memo(function ToolRow({ item, ctx }: { item: ToolItem; ct
         endedAt={spec.endedAt ?? item.endedAt}
         actions={spec.actions}
         dim={spec.dim}
-        subline={subline}
         open={open}
         onToggle={() => setManual(!open)}
       >
@@ -200,7 +200,7 @@ export const ActivityGroup = memo(function ActivityGroup({ items, base, active }
   const first = visible[0].timestamp;
   const lastEnd = Math.max(...visible.map(it => (it.type === 'tool_use' ? it.endedAt ?? it.timestamp : it.timestamp)));
   const span = (busy ? now : lastEnd) - first;
-  const duration = busy || span >= 3000 ? formatDuration(span) : '';
+  const duration = busy ? formatDuration(span) : '';
   const open = manual ?? active;
   const showFilters = visible.length > 20;
   const shown = filter === 'all' ? visible : visible.filter(it => {

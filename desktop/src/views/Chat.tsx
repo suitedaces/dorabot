@@ -1875,9 +1875,6 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                     <Paperclip className="w-4 h-4 text-muted-foreground" />
                   </Button>
                   <ModelSelector gateway={gateway} disabled={!connected} sessionId={activeState?.sessionId} sessionKey={sessionKey} />
-                  {input.trim() && (
-                    <span className="text-[9px] text-muted-foreground/60 ml-2 select-none hidden @sm:inline">{'\u21E7\u21B5 new line'}</span>
-                  )}
                   <span className="flex-1 min-w-1" />
                   <Button
                     size="sm"
@@ -2087,9 +2084,6 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             </Button>
             <ModelSelector gateway={gateway} disabled={!connected} sessionId={activeState?.sessionId} sessionKey={sessionKey} />
             <span className="hidden @[400px]:flex shrink-0"><ContextWheel getContextUsage={gateway.getContextUsage} sessionKey={sessionKey} isRunning={isRunning} /></span>
-            {input.trim() && (
-              <span className="text-[9px] text-muted-foreground/60 ml-2 select-none hidden @sm:inline">{'\u21E7\u21B5 new line'}</span>
-            )}
             <span className="flex-1 min-w-1" />
             <PlanPill items={progress} />
             {sessionKey && (
