@@ -509,6 +509,9 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
           continue;
         }
       }
+      // the sdk flags model-facing context as synthetic: image size notes, compaction summaries,
+      // resume instructions, loaded skill text. none of it is something the user typed.
+      if ((c as any).isSynthetic === true) continue;
       // real user message (or recovered after orphan cleanup)
       {
         // real user message
