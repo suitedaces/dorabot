@@ -57,7 +57,8 @@ import { loadResearch, saveResearch, readResearchContent, writeResearchFile, nex
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
 import { slimToolMeta } from './tool-meta.js';
 
-const NOTICE_SUBTYPES = new Set(['model_refusal_fallback', 'model_refusal_no_fallback', 'api_retry', 'informational', 'notification', 'session_writes_lost', 'mirror_error']);
+const thinkingTokensSentAt = new Map<string, number>();
+const NOTICE_SUBTYPES = new Set(['model_refusal_fallback', 'model_refusal_no_fallback', 'api_retry', 'informational', 'notification', 'session_writes_lost', 'mirror_error', 'compact_boundary', 'code_change_published', 'hook_response', 'memory_recall', 'files_persisted', 'permission_denied']);
 import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, onClaudeAuthRequired } from '../providers/claude.js';
 import { getProviderUsage, onProviderUsage } from '../providers/usage.js';
 import { isCodexInstalled, hasCodexAuth, onCodexAuthRequired, getCodexUsage, getCodexModelCatalog, getCodexAppServerSnapshot, callCodexAppServer, closeCodexAppServerRpcClient } from '../providers/codex.js';
@@ -2647,6 +2648,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         let agentText = '';
         let agentSessionId = '';
         let agentUsage = { inputTokens: 0, outputTokens: 0, totalCostUsd: 0 };
+        let agentEnd: { subtype?: string; stopReason?: string | null; isError?: boolean; errors?: string[]; denied?: number; turns?: number; durationMs?: number; message?: string } | undefined;
         let usedMessageTool = false;
         let hadStreamEvents = false;
 
@@ -2755,7 +2757,18 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
           // ── SDK task system messages (subagent progress) ──────────────
           // safety stops, api retries and cli notices: the desktop shows them in the chat
-          if (m.type === 'system' && NOTICE_SUBTYPES.has(String(m.subtype))) {
+          if (m.type === 'prompt_suggestion' && (m as any).suggestion) {
+            broadcast({ event: 'agent.prompt_suggestion', data: { sessionKey, suggestion: (m as any).suggestion } });
+          }
+          // live thinking size, at most twice a second per session
+          if (m.type === 'system' && m.subtype === 'thinking_tokens') {
+            const now = Date.now();
+            if (now - (thinkingTokensSentAt.get(sessionKey) || 0) >= 500) {
+              thinkingTokensSentAt.set(sessionKey, now);
+              broadcast({ event: 'agent.thinking_tokens', data: { sessionKey, tokens: (m as any).estimated_tokens } });
+            }
+          }
+          if ((m.type === 'system' && NOTICE_SUBTYPES.has(String(m.subtype))) || (m.type === 'tool_progress' && (m as any).subagent_retry)) {
             broadcast({ event: 'agent.notice', data: { source, sessionKey, message: m, timestamp: Date.now() } });
           }
           if (m.type === 'system' && m.subtype === 'task_started') {
@@ -2813,8 +2826,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             }
             broadcast({
               event: 'agent.task_notification',
-              data: { sessionKey, taskId, toolUseId, timestamp: Date.now() },
+              data: { sessionKey, taskId, toolUseId, status: (m as any).status, timestamp: Date.now() },
             });
+          }
+
+          if (m.type === 'system' && m.subtype === 'task_updated' && (m as any).patch) {
+            broadcast({ event: 'agent.task_updated', data: { sessionKey, taskId: (m as any).task_id, patch: (m as any).patch, timestamp: Date.now() } });
           }
 
           // ── Elicitation events ──────────────────────────────────────────
@@ -3196,6 +3213,15 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (m.type === 'result' && m.subtype !== 'tool_result' && m.subtype !== 'tool_output_delta') {
             agentText = (m.result as string) || agentText;
             agentSessionId = (m.session_id as string) || agentSessionId;
+            const r = m as any;
+            agentEnd = {
+              subtype: r.subtype, stopReason: r.stop_reason ?? null, isError: !!r.is_error,
+              errors: Array.isArray(r.errors) ? r.errors.map(String) : undefined,
+              denied: Array.isArray(r.permission_denials) ? r.permission_denials.length : undefined,
+              turns: r.num_turns, durationMs: r.duration_ms,
+              // a successful result flagged as an error carries the cli's own message, e.g. a plan limit
+              message: r.is_error && r.subtype === 'success' && typeof r.result === 'string' ? r.result : undefined,
+            };
             if (agentSessionId && session) {
               sessionRegistry.setSdkSessionId(sessionKey, agentSessionId);
               fileSessionManager.setMetadata(session.sessionId, { sdkSessionId: agentSessionId });
@@ -3216,6 +3242,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 sessionId: agentSessionId || '',
                 result: agentText,
                 usage: agentUsage,
+                end: agentEnd,
                 timestamp: Date.now(),
               },
             };
@@ -5183,6 +5210,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             saveConfig(config);
             broadcast({ event: 'config.update', data: { key, value } });
             return { id, result: { key, value } };
+          }
+
+          if (key === 'promptSuggestions') {
+            config.promptSuggestions = value === true;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value: config.promptSuggestions } });
+            return { id, result: { key, value: config.promptSuggestions } };
           }
 
           if (key === 'thinkingDisplay') {

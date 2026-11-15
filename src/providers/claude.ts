@@ -1121,6 +1121,7 @@ export class ClaudeProvider implements Provider {
         betas: opts.config.betas,
         // fast mode needs an explicit sdk opt-in, it bills to usage credits on subscriptions
         settings: opts.fastMode ? { fastMode: true } : undefined,
+        promptSuggestions: !!opts.config.promptSuggestions,
         settingSources: opts.config.settingSources,
         agentProgressSummaries: opts.config.agentProgressSummaries ?? true,
         includePartialMessages: true,

@@ -9,7 +9,7 @@ import { ElicitationForm } from '../components/ElicitationForm';
 import { ApprovalList } from '@/components/approval-ui';
 import { ActivityGroup, buildDisplay, type DisplayItem, type ListCtx } from '@/components/tool-card/ToolList';
 import { PlanPill, RunningPill } from '@/components/tool-card/StatusPills';
-import type { TaskProgress } from '../hooks/useGateway';
+import type { TaskProgress, TurnEnd } from '../hooks/useGateway';
 import { focusResearch } from '@/lib/research-focus';
 import { InlineErrorBoundary } from '@/components/ErrorBoundary';
 import { AuroraBackground } from '@/components/aceternity/aurora-background';
@@ -727,6 +727,44 @@ function ImagePreviewStrip({ images, onRemove }: { images: ImageAttachment[]; on
           </button>
         </div>
       ))}
+    </div>
+  );
+}
+
+// say why a turn stopped, only when it was not a normal ending
+const STOP_REASONS: Record<string, string> = {
+  max_tokens: 'stopped at the output limit',
+  refusal: 'stopped by the safety classifier',
+  pause_turn: 'paused by the server',
+  model_context_window_exceeded: 'ran out of context',
+};
+const END_SUBTYPES: Record<string, string> = {
+  error_max_turns: 'stopped: hit the turn limit',
+  error_during_execution: 'stopped before it finished',
+  error_max_budget_usd: 'stopped: hit the budget limit',
+  error_max_structured_output_retries: 'stopped: could not produce the required output',
+};
+function turnEndNote(end?: TurnEnd) {
+  if (!end) return null;
+  const notes: Array<{ text: string; bad?: boolean; title?: string }> = [];
+  if (end.message) notes.push({ text: end.message, bad: true });
+  else if (end.subtype && END_SUBTYPES[end.subtype]) notes.push({ text: END_SUBTYPES[end.subtype], bad: end.subtype !== 'error_during_execution', title: end.errors?.join('\n') });
+  else if (end.isError) notes.push({ text: 'ended with an error', bad: true, title: end.errors?.join('\n') });
+  if (end.stopReason && STOP_REASONS[end.stopReason]) notes.push({ text: STOP_REASONS[end.stopReason], bad: end.stopReason !== 'pause_turn' });
+  if (end.denied) notes.push({ text: `${end.denied} tool call${end.denied === 1 ? '' : 's'} denied` });
+  return notes.map((n, k) => <span key={k} title={n.title} className={n.bad ? 'text-destructive' : 'text-warning'}>{n.text}</span>);
+}
+
+// text the safety classifier stopped and another model redid: kept, but folded and marked
+function WithdrawnText({ content }: { content: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="my-1">
+      <button type="button" onClick={() => setOpen(v => !v)} className="flex items-center gap-1.5 text-[11px] text-warning/90 hover:text-warning">
+        <ChevronRight className={cn('w-3 h-3 transition-transform', open && 'rotate-90')} />
+        withdrawn by the safety classifier, redone below
+      </button>
+      {open && <div className="mt-1 pl-4 border-l-2 border-warning/30 opacity-60 line-through decoration-muted-foreground/40 prose-chat text-sm"><Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown></div>}
     </div>
   );
 }
@@ -1480,6 +1518,12 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   }, []);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // tab takes the suggested next message
+    if (e.key === 'Tab' && !e.shiftKey && !input && suggestion && !isRunning) {
+      e.preventDefault();
+      handleInputChange(suggestion, suggestion.length);
+      return;
+    }
     // Slash command navigation
     if (slashOpen && filteredSlashCommands.length > 0) {
       if (e.key === 'ArrowUp') {
@@ -1606,6 +1650,8 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   }, [chatItems, isRunning, lastUserIdx]);
   const bgTasks = (sessionKey && gateway.backgroundTasks[sessionKey]) || EMPTY_TASKS;
   const taskProgress = activeState?.taskProgress || EMPTY_PROGRESS;
+  const thinkingTokens = activeState?.thinkingTokens;
+  const suggestion = activeState?.suggestion;
   const listBase = useMemo(() => {
     const progressByToolUse = new Map<string, TaskProgress>();
     for (const p of Object.values(taskProgress)) if (p.toolUseId) progressByToolUse.set(p.toolUseId, p);
@@ -1624,8 +1670,8 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         tail: async (path: string, offset: number) => await gateway.rpc('fs.tail', { path, offset }) as { content: string; size: number; next?: number },
       },
     };
-    return { current: { ...base, turnRunning: true } as ListCtx, past: { ...base, liveId: null, turnRunning: false } as ListCtx };
-  }, [liveId, bgTasks, taskProgress, onOpenFile, onOpenDiff, onOpenResearch, onOpenTask, onOpenTerminal, sessionKey, gateway.stopTask, gateway.rpc]);
+    return { current: { ...base, turnRunning: true, thinkingTokens } as ListCtx, past: { ...base, liveId: null, turnRunning: false } as ListCtx };
+  }, [liveId, thinkingTokens, bgTasks, taskProgress, onOpenFile, onOpenDiff, onOpenResearch, onOpenTask, onOpenTerminal, sessionKey, gateway.stopTask, gateway.rpc]);
 
   const jumpToTool = useCallback((toolUseId: string) => {
     document.getElementById(`tool-${toolUseId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -1636,6 +1682,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
       case 'user':
         return <UserMessageItem key={i} item={item} onReply={handleReply} />;
       case 'text':
+        if (item.withdrawn) return <WithdrawnText key={i} content={item.content} />;
         return (
           <AssistantTextWithReply
             key={i}
@@ -1657,9 +1704,10 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         );
       case 'result':
         return (
-          <div key={i} className="flex gap-2 text-[10px] text-muted-foreground py-1 mt-1 border-t border-border">
+          <div key={i} className="flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground py-1 mt-1 border-t border-border">
             {item.cost != null && <span>${item.cost.toFixed(4)}</span>}
             <span>{formatTime(item.timestamp)}</span>
+            {turnEndNote(item.end)}
           </div>
         );
       case 'error':
@@ -1990,7 +2038,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             onChange={e => handleInputChange(e.target.value, e.target.selectionStart ?? undefined)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            placeholder={connected ? 'type a message...' : 'waiting for gateway...'}
+            placeholder={!connected ? 'waiting for gateway...' : suggestion && !isRunning ? `${suggestion}   (tab)` : 'type a message...'}
             disabled={!connected || !!pendingQuestion}
             className="w-full min-h-[64px] max-h-[200px] resize-none text-[13px] border-0 rounded-2xl bg-transparent shadow-none focus-visible:ring-0 pt-3"
             style={inputHeight ? { height: inputHeight, minHeight: 64, maxHeight: 400 } : undefined}
