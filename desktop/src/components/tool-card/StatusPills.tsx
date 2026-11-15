@@ -23,7 +23,7 @@ function PillPanel({ label, children, title }: { label: ReactNode; children: Rea
         title={title}
         aria-expanded={open}
         onClick={() => setOpen(v => !v)}
-        className={cn('h-7 flex items-center gap-1.5 px-2 rounded-lg text-[11px] text-muted-foreground hover:text-foreground hover:bg-secondary/60 whitespace-nowrap', open && 'bg-secondary/60 text-foreground')}
+        className={cn('h-7 shrink-0 flex items-center gap-1.5 px-2 rounded-lg text-[11px] text-muted-foreground hover:text-foreground hover:bg-secondary/60 whitespace-nowrap', open && 'bg-secondary/60 text-foreground')}
       >
         {label}
       </button>
@@ -44,7 +44,7 @@ export function PlanPill({ items }: { items: Array<{ content: string; status: st
   const done = items.filter(i => i.status === 'completed').length;
   const doing = items.find(i => i.status === 'in_progress');
   return (
-    <PillPanel title={doing?.activeForm || 'plan'} label={<><ListTodo className="w-3.5 h-3.5" /><span className="tabular-nums">plan {done}/{items.length}</span></>}>
+    <PillPanel title={doing?.activeForm || 'plan'} label={<><ListTodo className="w-3.5 h-3.5" /><span className="tabular-nums"><span className="hidden @[480px]:inline">plan </span>{done}/{items.length}</span></>}>
       <div className="px-3 py-2 text-[11px] text-muted-foreground border-b border-border/50">{doing ? doing.activeForm : done === items.length ? 'all done' : 'plan'}</div>
       <div className="py-1.5">
         {items.map((t, i) => (
@@ -77,7 +77,7 @@ export function RunningPill({ tasks, progress, onStop, onJump }: {
     groups.set(k, [...(groups.get(k) || []), t]);
   }
   return (
-    <PillPanel title="background work in this chat" label={<><span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" /><span className="tabular-nums">{tasks.length} running</span></>}>
+    <PillPanel title="background work in this chat" label={<><span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" /><span className="tabular-nums">{tasks.length}<span className="hidden @[480px]:inline"> running</span></span></>}>
       {[...groups.entries()].map(([kind, list]) => {
         const meta = KIND[kind] || { label: 'other', icon: Square };
         return (

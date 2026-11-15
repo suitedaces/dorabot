@@ -167,13 +167,13 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
   return (
     <div className="flex items-center gap-1 min-w-0 shrink">
       <Select value={currentValue} onValueChange={handleChange} disabled={disabled}>
-        <SelectTrigger size="sm" className="h-7 gap-1.5 text-[11px] rounded-lg shadow-none w-auto min-w-0">
+        <SelectTrigger size="sm" className="h-7 gap-1.5 text-[11px] rounded-lg shadow-none w-auto min-w-[72px] max-w-[200px] @max-[400px]:px-2 @max-[400px]:[&>svg:last-child]:hidden">
           <img
             src={providerName === 'codex' ? './openai-icon.svg' : './claude-icon.svg'}
             alt=""
-            className="w-3 h-3"
+            className="w-3 h-3 shrink-0"
           />
-          <span>{currentLabel}</span>
+          <span className="truncate min-w-0">{currentLabel}</span>
         </SelectTrigger>
         <SelectContent position="popper" align="start" className="min-w-[180px]">
           <div className="px-2 py-1 text-[9px] font-semibold text-muted-foreground uppercase tracking-wider">Anthropic</div>
@@ -211,9 +211,10 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
         const EffortIcon = isClaude ? Brain : Sparkles;
         return (
           <Select value={effortValue} onValueChange={handleEffortChange} disabled={disabled}>
-            <SelectTrigger size="sm" className="h-7 gap-1 text-[11px] rounded-lg shadow-none w-auto text-muted-foreground">
+            <SelectTrigger size="sm" className="h-7 gap-1 text-[11px] rounded-lg shadow-none w-auto shrink-0 text-muted-foreground @max-[400px]:px-2 @max-[400px]:[&>svg:last-child]:hidden" title={`effort: ${effortValue === 'off' ? 'auto' : reasoningEffortLabel(effortLevels, effortValue)}`}>
               <EffortIcon className="w-3 h-3" />
-              <span>{effortValue === 'off' ? 'auto' : reasoningEffortLabel(effortLevels, effortValue)}</span>
+              {/* narrow panes keep the icon; the label comes back from 480px */}
+              <span className="hidden @[480px]:inline">{effortValue === 'off' ? 'auto' : reasoningEffortLabel(effortLevels, effortValue)}</span>
             </SelectTrigger>
             <SelectContent position="popper" align="start" className="min-w-[120px]">
               <SelectItem value="off" className="text-xs">auto</SelectItem>
@@ -245,7 +246,7 @@ function ModelSelector({ gateway, disabled, sessionId, sessionKey }: { gateway: 
             aria-pressed={fastOn}
             disabled={disabled || !available}
             onClick={() => gateway.setSessionFastMode(sessionKey, !fastOn)}
-            className={cn('h-7 w-7 rounded-lg', fastOn ? 'text-amber-500 bg-amber-500/10 hover:bg-amber-500/20 hover:text-amber-500' : 'text-muted-foreground')}
+            className={cn('h-7 w-7 rounded-lg shrink-0', fastOn ? 'text-amber-500 bg-amber-500/10 hover:bg-amber-500/20 hover:text-amber-500' : 'text-muted-foreground')}
           >
             <Zap className="w-3 h-3" fill={fastOn ? 'currentColor' : 'none'} />
           </Button>
@@ -1812,11 +1813,11 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                   className="hidden"
                   onChange={e => { if (e.target.files) addImagesFromFiles(e.target.files); e.target.value = ''; }}
                 />
-                <div className="flex items-center px-3 pb-3">
+                <div className="flex items-center gap-0.5 px-3 pb-3 min-w-0">
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-8 w-8 p-0 rounded-lg mr-1"
+                    className="h-8 w-8 p-0 rounded-lg mr-1 shrink-0"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={!isReady}
                     title="Attach image"
@@ -1827,10 +1828,10 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                   {input.trim() && (
                     <span className="text-[9px] text-muted-foreground/60 ml-2 select-none hidden @sm:inline">{'\u21E7\u21B5 new line'}</span>
                   )}
-                  <span className="flex-1" />
+                  <span className="flex-1 min-w-1" />
                   <Button
                     size="sm"
-                    className="h-8 w-8 p-0 rounded-lg"
+                    className="h-8 w-8 p-0 rounded-lg shrink-0"
                     onClick={() => { handleSend(); }}
                     disabled={(!input.trim() && attachedImages.length === 0) || sending || !isReady}
                   >
@@ -2001,11 +2002,11 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             className="hidden"
             onChange={e => { if (e.target.files) addImagesFromFiles(e.target.files); e.target.value = ''; }}
           />
-          <div className="flex items-center px-3 pb-3">
+          <div className="flex items-center gap-0.5 px-3 pb-3 min-w-0">
             <Button
               variant="ghost"
               size="sm"
-              className="h-8 w-8 p-0 rounded-lg mr-1"
+              className="h-8 w-8 p-0 rounded-lg mr-1 shrink-0"
               onClick={() => fileInputRef.current?.click()}
               disabled={!connected}
               title="Attach image"
@@ -2013,11 +2014,11 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
               <Paperclip className="w-4 h-4 text-muted-foreground" />
             </Button>
             <ModelSelector gateway={gateway} disabled={!connected} sessionId={activeState?.sessionId} sessionKey={sessionKey} />
-            <ContextWheel getContextUsage={gateway.getContextUsage} sessionKey={sessionKey} isRunning={isRunning} />
+            <span className="hidden @[400px]:flex shrink-0"><ContextWheel getContextUsage={gateway.getContextUsage} sessionKey={sessionKey} isRunning={isRunning} /></span>
             {input.trim() && (
               <span className="text-[9px] text-muted-foreground/60 ml-2 select-none hidden @sm:inline">{'\u21E7\u21B5 new line'}</span>
             )}
-            <span className="flex-1" />
+            <span className="flex-1 min-w-1" />
             <PlanPill items={progress} />
             {sessionKey && (
               <RunningPill
@@ -2031,7 +2032,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
               <Button
                 size="sm"
                 variant="destructive"
-                className="h-8 w-8 p-0 rounded-lg"
+                className="h-8 w-8 p-0 rounded-lg shrink-0"
                 onClick={() => gateway.abortAgent(sessionKey)}
               >
                 <Square className="w-3.5 h-3.5" />
@@ -2039,7 +2040,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             ) : (
               <Button
                 size="sm"
-                className="h-8 w-8 p-0 rounded-lg"
+                className="h-8 w-8 p-0 rounded-lg shrink-0"
                 onClick={() => { handleSend(); }}
                 disabled={(!input.trim() && attachedImages.length === 0) || sending || !connected}
               >
