@@ -1083,9 +1083,11 @@ export class ClaudeProvider implements Provider {
       thinking = thinkingCfg as any;
     }
 
-    // Apply thinking display preference (4.7+ defaults to omitted)
-    if (thinking && thinking.type === 'adaptive' && opts.config.thinkingDisplay) {
-      thinking.display = opts.config.thinkingDisplay;
+    // the api defaults display to omitted on 4.7+ (empty thinking blocks). ask for summaries unless the
+    // config says otherwise: same billing, and the chat has something to show.
+    if (!thinking && modelNeedAdaptive) thinking = { type: 'adaptive' };
+    if (thinking && thinking.type === 'adaptive') {
+      thinking.display = opts.config.thinkingDisplay || 'summarized';
     }
 
     // ── SDK query with async generator prompt ───────────────────────

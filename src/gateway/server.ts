@@ -55,6 +55,7 @@ import {
 } from '../tools/tasks.js';
 import { loadResearch, saveResearch, readResearchContent, writeResearchFile, nextId as nextResearchId, type ResearchItem } from '../tools/research.js';
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
+import { slimToolMeta } from './tool-meta.js';
 import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, onClaudeAuthRequired } from '../providers/claude.js';
 import { isCodexInstalled, hasCodexAuth, onCodexAuthRequired, getCodexModelCatalog, getCodexAppServerSnapshot, callCodexAppServer, closeCodexAppServerRpcClient } from '../providers/codex.js';
 import type { ProviderName } from '../config.js';
@@ -3120,9 +3121,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                       source,
                       sessionKey,
                       tool_use_id: block.tool_use_id,
-                      content: resultText.slice(0, 2000),
+                      content: resultText,
                       imageData,
                       is_error: block.is_error || false,
+                      // one sdk user message carries one tool result, so its tool_use_result is this block's
+                      meta: content.length === 1 ? slimToolMeta((m as any).tool_use_result) : undefined,
                       parentToolUseId: parentId,
                       timestamp: Date.now(),
                     },
@@ -3153,7 +3156,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 source,
                 sessionKey,
                 tool_use_id: toolUseId,
-                delta: deltaContent.slice(0, 2000),
+                delta: deltaContent,
                 timestamp: Date.now(),
               },
             });
@@ -3171,8 +3174,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 source,
                 sessionKey,
                 tool_use_id: toolUseId,
-                content: resultContent.slice(0, 2000),
+                content: resultContent,
                 is_error: m.is_error || false,
+                meta: slimToolMeta((m as any).meta),
                 timestamp: Date.now(),
               },
             });

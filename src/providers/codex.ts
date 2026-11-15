@@ -1969,7 +1969,7 @@ export class CodexProvider implements Provider {
       }
     };
 
-    const emitToolResult = function*(itemId: string, text: string, isError = false): Generator<ProviderMessage> {
+    const emitToolResult = function*(itemId: string, text: string, isError = false, meta?: Record<string, unknown>): Generator<ProviderMessage> {
       toolItems.delete(itemId);
       toolOutputTexts.delete(itemId);
       yield {
@@ -1978,6 +1978,7 @@ export class CodexProvider implements Provider {
         tool_use_id: `codex-${itemId}`,
         content: [{ type: 'text', text: text || '(no output)' }],
         is_error: isError,
+        ...(meta ? { meta } : {}),
       } as ProviderMessage;
     };
 
@@ -2067,7 +2068,9 @@ export class CodexProvider implements Provider {
         if (item.type === 'commandExecution') {
           yield* emitToolUse(item.id, 'Bash', { command: item.command, cwd: item.cwd });
           if (message.method === 'item/completed') {
-            yield* emitToolResult(item.id, item.aggregatedOutput || '(no output)', item.status === 'failed' || item.status === 'declined');
+            yield* emitToolResult(item.id, item.aggregatedOutput || '(no output)', item.status === 'failed' || item.status === 'declined', {
+              exitCode: item.exitCode, durationMs: item.durationMs, cwd: item.cwd, status: item.status,
+            });
           }
           return;
         }
@@ -2076,7 +2079,9 @@ export class CodexProvider implements Provider {
           yield* emitToolUse(item.id, item.tool || 'unknown', item.arguments || {});
           if (message.method === 'item/completed') {
             const text = item.error?.message || textFromUnknownContent(item.result?.content) || textFromUnknownContent(item.result?.structuredContent) || '(no result)';
-            yield* emitToolResult(item.id, text, item.status === 'failed');
+            yield* emitToolResult(item.id, text, item.status === 'failed', {
+              server: item.server, durationMs: item.durationMs, structuredContent: item.result?.structuredContent,
+            });
           }
           return;
         }
