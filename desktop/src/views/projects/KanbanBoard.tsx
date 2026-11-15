@@ -327,9 +327,6 @@ export function KanbanBoard({
                     <div key={project.id} className="rounded-md px-3 py-1.5 flex items-center gap-2 text-muted-foreground/40">
                       <CheckCircle2 className="h-3 w-3 text-emerald-500/30" />
                       <span className="text-[11px]">{project.title}</span>
-                      <span className="text-[10px] ml-auto">
-                        {(tasksByProject.map.get(project.id) || []).length} tasks
-                      </span>
                     </div>
                   ))}
                 </div>

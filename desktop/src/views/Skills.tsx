@@ -1677,9 +1677,6 @@ function TreeNode({ node, depth, expandedFile, fileContent, loadingFile, onClick
       >
         <File className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
         <span className="text-[11px] font-mono truncate">{node.name}</span>
-        {node.size !== undefined && (
-          <span className="text-[9px] text-muted-foreground ml-auto shrink-0">{formatBytes(node.size)}</span>
-        )}
       </button>
       {isExpanded && (
         <div className="border-t border-border bg-secondary/30">
@@ -1747,8 +1744,3 @@ function formatCount(value: number): string {
   return String(value);
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-}

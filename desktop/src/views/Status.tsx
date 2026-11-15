@@ -133,7 +133,6 @@ export function StatusView({ gateway }: Props) {
                           <span className={`font-mono ${s.id === gateway.currentSessionId ? 'text-primary' : ''}`}>
                             {s.id.slice(0, 8)}
                           </span>
-                          <span>{s.messageCount} msgs</span>
                           <span>{s.updatedAt}</span>
                         </div>
                       ))}
@@ -164,9 +163,6 @@ export function StatusView({ gateway }: Props) {
                             <Badge variant={t.status === 'running' ? 'default' : t.status === 'completed' ? 'outline' : 'destructive'} className="text-[9px] h-4">
                               {t.status}
                             </Badge>
-                            <span className="text-muted-foreground tabular-nums">
-                              {t.toolCount} tools · {t.inputTokens > 0 ? `${(t.inputTokens / 1000).toFixed(1)}K tok` : ''}
-                            </span>
                             {t.summary && <span className="text-foreground/70 truncate flex-1">{t.summary}</span>}
                           </div>
                         ))}

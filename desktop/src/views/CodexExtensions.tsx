@@ -427,7 +427,6 @@ export function CodexExtensionsView({ gateway }: Props) {
                           <span className="text-xs font-semibold">{name}</span>
                           <Badge variant="secondary" className="h-4 text-[9px]">{authLabel(server.authStatus)}</Badge>
                         </div>
-                        <div className="text-[10px] text-muted-foreground">{tools.length} tools · {resources.length} resources</div>
                       </div>
                       {stringValue(server.authStatus) === 'notLoggedIn' && (
                         <Button variant="outline" size="sm" className="h-6 text-[10px]" disabled={!!action} onClick={() => startOauth(name)}>

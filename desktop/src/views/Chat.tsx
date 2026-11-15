@@ -33,7 +33,6 @@ import {
   Quote, Reply, Zap,
   type LucideIcon,
 } from 'lucide-react';
-import { SHORTCUTS as ALL_SHORTCUTS } from '@/components/ShortcutHelp';
 import { jsonrepair } from 'jsonrepair';
 import {
   DEFAULT_CLAUDE_MODEL,
@@ -698,15 +697,6 @@ const SUGGESTIONS: { icon: LucideIcon; label: string; prompt: string }[] = [
   { icon: Radio, label: 'set up a research agent', prompt: 'every morning, scan Hacker News and Twitter for AI agent news and send me a summary on Telegram' },
 ];
 
-const QUICK_SHORTCUTS: { keys: string; label: string }[] = [
-  { keys: '⌘T', label: 'new tab' },
-  { keys: '⌘W', label: 'close tab' },
-  { keys: '⌘L', label: 'focus input' },
-  { keys: '⌘B', label: 'files' },
-  { keys: '⌘D', label: 'split' },
-  { keys: '⌘,', label: 'settings' },
-  { keys: 'Esc', label: 'stop' },
-];
 
 function ImagePreviewStrip({ images, onRemove }: { images: ImageAttachment[]; onRemove: (index: number) => void }) {
   if (images.length === 0) return null;
@@ -1622,10 +1612,6 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     }
   };
 
-  const formatTime = (ts: number) => {
-    return new Date(ts).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
-  };
-
   const handleReply = useCallback((snippet: QuotedSnippet) => {
     setQuotedSnippet(snippet);
     // Focus whichever input is mounted (landing vs main).
@@ -1704,9 +1690,8 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         );
       case 'result':
         return (
+          // a line between turns; words only when the turn did not end normally
           <div key={i} className="flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground py-1 mt-1 border-t border-border">
-            {item.cost != null && <span>${item.cost.toFixed(4)}</span>}
-            <span>{formatTime(item.timestamp)}</span>
             {turnEndNote(item.end)}
           </div>
         );
@@ -1811,14 +1796,17 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                   <DorabotSprite size={compact ? 56 : 96} className="relative dorabot-alive" />
                 </div>
                 <h1 className={cn('font-semibold text-foreground', compact ? 'text-sm' : 'text-lg')}>{getGreeting()}</h1>
+                {/* nothing to say when it's ready */}
+                {(!isReady || gatewayFailed) && (
                 <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
                   <div className={cn('w-1.5 h-1.5 rounded-full', isReady ? 'bg-success' : connected && !authenticated ? 'bg-warning' : connected ? 'bg-success' : 'bg-destructive')} />
                   {gatewayFailed
                     ? <span className="text-destructive">{gateway.gatewayError?.error || 'gateway failed to start'}</span>
                     : !connected ? <>connecting...{gateway.gatewayTelemetry.reconnectCount > 2 && <span className="ml-1 opacity-60">({gateway.gatewayTelemetry.disconnectReason || 'retrying'})</span>}</>
                     : !authenticated ? <>set up provider in <button type="button" className="underline hover:text-foreground transition-colors" onClick={onNavigateSettings}>Settings</button></>
-                    : 'ready'}
+                    : null}
                 </div>
+                )}
                 {gatewayFailed && gateway.gatewayError?.logs && (
                   <details className="mt-2 max-w-md mx-auto text-left">
                     <summary className="text-[10px] text-muted-foreground cursor-pointer hover:text-foreground transition-colors select-none">view logs</summary>
@@ -1903,41 +1891,6 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                 </div>
               )}
 
-              {/* keyboard shortcuts */}
-              {!compact && (
-                <Collapsible>
-                  <div className="flex flex-wrap justify-center gap-x-4 gap-y-1.5 text-[10px] text-muted-foreground/80 pt-2">
-                    {QUICK_SHORTCUTS.map(s => (
-                      <span key={s.keys} className="flex items-center gap-1">
-                        <kbd className="px-1.5 py-0.5 rounded border border-border/50 bg-muted/60 text-[10px] font-mono">{s.keys}</kbd>
-                        <span>{s.label}</span>
-                      </span>
-                    ))}
-                    <CollapsibleTrigger className="flex items-center gap-1 hover:text-foreground transition-colors cursor-pointer">
-                      <Keyboard className="w-3 h-3" />
-                      <span>all shortcuts</span>
-                      <ChevronDown className="w-3 h-3" />
-                    </CollapsibleTrigger>
-                  </div>
-                  <CollapsibleContent>
-                    <div className="grid grid-cols-1 @sm:grid-cols-2 gap-4 pt-3 max-w-md mx-auto">
-                      {ALL_SHORTCUTS.map(s => (
-                        <div key={s.section}>
-                          <div className="text-[9px] font-semibold text-muted-foreground/60 uppercase tracking-wider mb-1">{s.section}</div>
-                          <div className="space-y-0.5">
-                            {s.items.map(i => (
-                              <div key={i.keys} className="flex items-center justify-between text-[10px] text-muted-foreground/80">
-                                <span>{i.desc}</span>
-                                <kbd className="px-1 py-0.5 rounded border border-border/50 bg-muted/60 text-[9px] font-mono shrink-0 ml-2">{i.keys}</kbd>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </CollapsibleContent>
-                </Collapsible>
-              )}
             </div>
           </AuroraBackground>
         </div>
