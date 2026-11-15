@@ -33,6 +33,18 @@ describe('buildDisplay', () => {
 });
 
 describe('describeTool', () => {
+  it('a running command can be moved to the background once the cli has made it a task', () => {
+    const item = tool('Bash', { command: 'sleep 60' });
+    const labels = (c: ToolCtx) => (describeTool(item, c).actions || []).map(a => a.label);
+    const running: ToolCtx = { ...ctx, turnRunning: true, open: { background: () => {} } };
+    expect(labels(running)).not.toContain('move to background');
+    const progress = new Map([[item.id, { taskId: 't1', toolUseId: item.id, status: 'running' } as any]]);
+    expect(labels({ ...running, progressByToolUse: progress })).toContain('move to background');
+    // done: nothing left to move
+    expect(labels({ ...running, progressByToolUse: progress, turnRunning: false })).not.toContain('move to background');
+    expect(labels(running)).not.toContain('open terminal');
+  });
+
   it('a failed command is marked by its status alone', () => {
     const item = tool('Bash', { command: 'python3 -c "import reportlab"' }, { output: "Exit code 1\nTraceback (most recent call last):", is_error: true });
     // the red cross says it failed; no extra label

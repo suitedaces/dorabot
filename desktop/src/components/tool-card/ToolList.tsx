@@ -72,6 +72,7 @@ export const ToolRow = memo(function ToolRow({ item, ctx }: { item: ToolItem; ct
         endedAt={spec.endedAt ?? item.endedAt}
         actions={spec.actions}
         dim={spec.dim}
+        targetInBody={spec.kind === 'command'}
         open={open}
         onToggle={() => setManual(!open)}
       >
@@ -119,6 +120,7 @@ export const ThinkingRow = memo(function ThinkingRow({ item }: { item: ThinkingI
       verb={item.streaming ? 'Thinking' : 'Thought'}
       status="none"
       dim
+      sheen={!!item.streaming}
       open={open}
       onToggle={() => setOpen(v => !v)}
     >

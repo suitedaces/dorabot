@@ -22,12 +22,15 @@ type CardProps = {
   onToggle: () => void;
   children?: ReactNode;
   dim?: boolean;
+  sheen?: boolean;
+  // the body shows the whole target, so no tooltip
+  targetInBody?: boolean;
   subline?: ReactNode;
 };
 
 // one row for every tool: icon, verb, target, facts, status, time. the body is optional and
 // only rendered while open.
-export const ToolCard = memo(function ToolCard({ icon: Icon, verb, target, facts, status, startedAt, endedAt, actions, open, onToggle, children, dim, subline }: CardProps) {
+export const ToolCard = memo(function ToolCard({ icon: Icon, verb, target, facts, status, startedAt, endedAt, actions, open, onToggle, children, dim, sheen, targetInBody, subline }: CardProps) {
   const lines = target ? target.split('\n') : [];
   const first = lines[0] ?? '';
   const running = status === 'running';
@@ -49,8 +52,8 @@ export const ToolCard = memo(function ToolCard({ icon: Icon, verb, target, facts
         className={cn('group/row flex flex-wrap @[420px]:flex-nowrap items-start gap-x-2 gap-y-0.5 px-2 py-[5px] rounded-md text-xs min-w-0', hasBody && 'cursor-pointer hover:bg-secondary/50')}
       >
         <Icon className={cn('w-3.5 h-3.5 mt-[2px] shrink-0', status === 'error' ? 'text-destructive' : 'text-muted-foreground')} />
-        <span className={cn('font-medium shrink-0 flex-1 @[420px]:flex-none', dim ? 'text-muted-foreground font-normal' : 'text-foreground')}>{verb}</span>
-        <span className="text-muted-foreground text-[11.5px] min-w-0 flex-1 [overflow-wrap:anywhere] line-clamp-2 order-last basis-full pl-[22px] @[420px]:order-none @[420px]:basis-auto @[420px]:pl-0" title={target}>
+        <span className={cn('font-medium shrink-0 flex-1 @[420px]:flex-none', dim ? 'text-muted-foreground font-normal' : 'text-foreground', (sheen || running) && 'compacting-sheen')}>{verb}</span>
+        <span className="text-muted-foreground text-[11.5px] min-w-0 flex-1 [overflow-wrap:anywhere] line-clamp-2 order-last basis-full pl-[22px] @[420px]:order-none @[420px]:basis-auto @[420px]:pl-0" title={targetInBody ? undefined : target}>
           {first}
         </span>
         {facts && <span className="text-muted-foreground text-[11px] whitespace-nowrap tabular-nums shrink-0 mt-px">{facts}</span>}
@@ -207,6 +210,11 @@ export function Favicon({ url }: { url: string }) {
   let origin = '';
   try { origin = new URL(url).origin; } catch { /* letter tile above */ }
   return <img src={`${origin}/favicon.ico`} alt="" className="w-4 h-4 rounded shrink-0" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />;
+}
+
+// what the agent sent the tool, tinted so it never reads as the tool's output
+export function InputBand({ children, className }: { children: ReactNode; className?: string }) {
+  return <div className={cn('border-l-2 border-primary/60 bg-primary/[0.07]', className)}>{children}</div>;
 }
 
 export function KeyValues({ entries }: { entries: Array<[string, ReactNode]> }) {

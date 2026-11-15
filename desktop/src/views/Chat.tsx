@@ -72,7 +72,6 @@ type Props = {
   onOpenDiff?: (opts: { filePath: string; oldContent: string; newContent: string; label?: string }) => void;
   onOpenResearch?: () => void;
   onOpenTask?: (taskId: string, title: string) => void;
-  onOpenTerminal?: () => void;
   onClearChat?: () => void;
   onNewTab?: () => void;
 };
@@ -1046,7 +1045,7 @@ function AssistantTextWithReply({
   );
 }
 
-export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, sessionKey, drafts, onNavigateSettings, onOpenFile, onOpenDiff, onOpenResearch, onOpenTask, onOpenTerminal, onClearChat, onNewTab }: Props) {
+export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, sessionKey, drafts, onNavigateSettings, onOpenFile, onOpenDiff, onOpenResearch, onOpenTask, onClearChat, onNewTab }: Props) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [attachedImages, setAttachedImages] = useState<ImageAttachment[]>([]);
@@ -1086,6 +1085,10 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
 
   // Derive elicitation and worktree state from active session
   const activeState = sessionKey ? gateway.sessionStates[sessionKey] : undefined;
+  // one interrupt per click: a second one would cut into the queued message's own turn
+  const [sendingNow, setSendingNow] = useState(false);
+  const queuedCount = activeState?.queued?.length ?? 0;
+  useEffect(() => { if (!queuedCount || !isRunning) setSendingNow(false); }, [queuedCount, isRunning]);
   const pendingElicitation = activeState?.pendingElicitation ?? null;
 
   // save/restore input draft and images per session when switching tabs or panes
@@ -1650,14 +1653,15 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         diff: onOpenDiff,
         research: onOpenResearch ? (id: string) => { focusResearch(id); onOpenResearch(); } : undefined,
         task: onOpenTask,
-        terminal: onOpenTerminal,
+        // the sdk can background a running call; codex cannot
+        background: sessionKey && ((gateway.configData as any)?.provider?.name || 'claude') !== 'codex' ? (toolUseId: string) => { gateway.backgroundTask(sessionKey, toolUseId).catch(() => {}); } : undefined,
         url: (url: string) => { (window as any).electronAPI?.openExternal ? (window as any).electronAPI.openExternal(url) : window.open(url, '_blank'); },
         stopTask: sessionKey ? (taskId: string) => { gateway.stopTask(sessionKey, taskId).catch(() => {}); } : undefined,
         tail: async (path: string, offset: number) => await gateway.rpc('fs.tail', { path, offset }) as { content: string; size: number; next?: number },
       },
     };
     return { current: { ...base, turnRunning: true } as ListCtx, past: { ...base, liveId: null, turnRunning: false } as ListCtx };
-  }, [liveId, bgTasks, taskProgress, onOpenFile, onOpenDiff, onOpenResearch, onOpenTask, onOpenTerminal, sessionKey, gateway.stopTask, gateway.rpc]);
+  }, [liveId, bgTasks, taskProgress, onOpenFile, onOpenDiff, onOpenResearch, onOpenTask, sessionKey, gateway.configData, gateway.backgroundTask, gateway.stopTask, gateway.rpc]);
 
   const jumpToTool = useCallback((toolUseId: string) => {
     document.getElementById(`tool-${toolUseId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -1947,11 +1951,28 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
       {/* messages sent mid-turn: they start the next turn. one line, opens to show them */}
       {sessionKey && (activeState?.queued?.length ?? 0) > 0 && (
         <div className="px-4 pt-2 shrink-0">
-          <button type="button" onClick={() => setQueuedOpen(v => !v)} className="w-full flex items-center gap-2 px-2.5 py-1 rounded-md text-[11px] text-muted-foreground hover:bg-secondary/50">
-            <ChevronRight className={cn('w-3 h-3 transition-transform', queuedOpen && 'rotate-90')} />
-            {activeState!.queued!.length} queued
-            <span className="text-muted-foreground">· {isRunning ? 'starts after this turn' : 'not sent: the run stopped'}</span>
-          </button>
+          <div className="flex items-center gap-1">
+            <button type="button" onClick={() => setQueuedOpen(v => !v)} className="flex-1 min-w-0 flex items-center gap-2 px-2.5 py-1 rounded-md text-[11px] text-muted-foreground hover:bg-secondary/50">
+              <ChevronRight className={cn('w-3 h-3 transition-transform', queuedOpen && 'rotate-90')} />
+              {activeState!.queued!.length} queued
+              <span className="text-muted-foreground">· {isRunning ? 'starts after this turn' : 'not sent: the run stopped'}</span>
+            </button>
+            {isRunning && (
+              <button
+                type="button"
+                title="interrupt and send now"
+                aria-label="interrupt and send now"
+                disabled={sendingNow}
+                onClick={() => {
+                  setSendingNow(true);
+                  gateway.sendQueuedNow(sessionKey).catch(() => setSendingNow(false));
+                }}
+                className="w-[22px] h-[22px] shrink-0 flex items-center justify-center rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
+              >
+                <ArrowUp className="w-3 h-3" />
+              </button>
+            )}
+          </div>
           {queuedOpen && activeState!.queued!.map((q, i) => (
             <div key={q.timestamp + ':' + i} className="flex items-start gap-2 pl-7 pr-2 py-1 text-[12px]">
               <span className="flex-1 min-w-0 whitespace-pre-wrap break-words text-foreground">{q.content}</span>

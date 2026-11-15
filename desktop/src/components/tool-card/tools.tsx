@@ -2,13 +2,13 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Activity, Bell, BookOpen, Bot, Camera, ClipboardList, Clock, Copy, ExternalLink, FileDiff, FilePlus, FileText, FolderSearch, Globe,
   HelpCircle, Image as ImageIcon, ListChecks, ListTodo, MessageSquare, MousePointer2, Pencil, Plug, Search, Square,
-  SquareTerminal, Terminal, Wrench, type LucideIcon,
+  SquareTerminal, Terminal, Wrench, ArrowDownToLine, type LucideIcon,
 } from 'lucide-react';
 import { safeParse } from '@/lib/safe-parse';
 import { computeDiff } from '@/lib/diff';
 import type { ChatItem, TaskProgress } from '@/hooks/useGateway';
 import { cn } from '@/lib/utils';
-import { DiffStat, Favicon, hostOf, KeyValues, Md, ScrollBox, Tag, TextBlock, type CardAction, type CardStatus } from './primitives';
+import { DiffStat, Favicon, hostOf, InputBand, KeyValues, Md, ScrollBox, Tag, TextBlock, type CardAction, type CardStatus } from './primitives';
 
 export type ToolItem = Extract<ChatItem, { type: 'tool_use' }>;
 
@@ -23,7 +23,7 @@ export type ToolCtx = {
     diff?: (opts: { filePath: string; oldContent: string; newContent: string; label?: string }) => void;
     research?: (id: string) => void;
     task?: (id: string, title: string) => void;
-    terminal?: () => void;
+    background?: (toolUseId: string) => void;
     url?: (url: string) => void;
     stopTask?: (taskId: string) => void;
     tail?: (path: string, offset: number) => Promise<{ content: string; size: number; next?: number }>;
@@ -78,7 +78,7 @@ function CommandBody({ command, output, error, live, item, ctx }: { command: str
   const text = full ?? output;
   return (
     <ScrollBox live={live} follow={command + text}>
-      <pre className="px-3 pt-2 m-0 font-mono text-[11px] leading-[18px] whitespace-pre-wrap break-words text-foreground"><span className="text-success select-none">$ </span>{command}</pre>
+      <InputBand><pre className="px-3 py-1.5 m-0 font-mono text-[11px] leading-[18px] whitespace-pre-wrap break-words text-foreground"><span className="text-primary select-none">$ </span>{command}</pre></InputBand>
       {text ? <TextBlock text={text} tone={error ? 'error' : undefined} /> : null}
       {persisted && !full && ctx.open?.tail && (
         <button type="button" className="mx-3 mb-2 text-[10.5px] text-primary hover:underline" onClick={() => {
@@ -107,7 +107,7 @@ function TailBody({ path, command, running, tail }: { path: string; command: str
   }, [path, running, tail]);
   return (
     <ScrollBox live={running} follow={text}>
-      <pre className="px-3 pt-2 m-0 font-mono text-[11px] leading-[18px] whitespace-pre-wrap break-words text-foreground"><span className="text-success select-none">$ </span>{command}</pre>
+      <InputBand><pre className="px-3 py-1.5 m-0 font-mono text-[11px] leading-[18px] whitespace-pre-wrap break-words text-foreground"><span className="text-primary select-none">$ </span>{command}</pre></InputBand>
       {text ? <TextBlock text={text} /> : <div className="px-3 py-2 text-[11px] text-muted-foreground">{running ? 'waiting for output…' : 'no output'}</div>}
     </ScrollBox>
   );
@@ -308,7 +308,8 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
         actions: [
           { icon: Copy, label: 'copy command', onClick: () => copy(command) },
           ...(out ? [{ icon: ClipboardList, label: 'copy output', onClick: () => copy(out) }] : []),
-          ...(open?.terminal ? [{ icon: SquareTerminal, label: 'open terminal', onClick: () => open.terminal!() }] : []),
+          // the cli can move it only once it has registered the call as a task
+          ...(running && prog?.status === 'running' && open?.background ? [{ icon: ArrowDownToLine, label: 'move to background', onClick: () => open.background!(item.id) }] : []),
         ],
         body: () => <CommandBody command={command} output={out} error={!!err} live={ctx.live} item={item} ctx={ctx} />,
       };
@@ -419,7 +420,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
         actions: url && open?.url ? [{ icon: ExternalLink, label: 'open page', onClick: () => open.url!(url) }] : [],
         body: out || input.prompt ? () => (
           <ScrollBox follow={0} className="max-h-[460px]">
-            {input.prompt && <div className="mx-3 mt-2 pl-2 border-l-2 border-border text-[11px] text-muted-foreground whitespace-pre-wrap">asked: {String(input.prompt)}</div>}
+            {input.prompt && <InputBand className="px-3 py-1.5 text-[11px] text-foreground whitespace-pre-wrap break-words">{String(input.prompt)}</InputBand>}
             {out && (err ? <TextBlock text={out} tone="error" /> : <Md text={out} />)}
             {url && <div className="flex items-center gap-2 px-3 py-1.5 border-t border-border/40 text-[10.5px] text-muted-foreground"><Favicon url={url} /><span className="break-all">{url}</span></div>}
           </ScrollBox>
@@ -495,7 +496,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
 
     case 'schedule': case 'list_schedule': case 'update_schedule': case 'cancel_schedule': {
       const verb = { schedule: 'Scheduled', list_schedule: 'Listed schedule', update_schedule: 'Updated schedule', cancel_schedule: 'Cancelled' }[name]!;
-      return { kind: 'other', icon: Clock, verb, target: String(input.summary || input.message || input.id || ''), facts: tag, status: o.status, body: () => <><KeyValues entries={inputEntries(input)} />{out && <TextBlock text={out} />}</> };
+      return { kind: 'other', icon: Clock, verb, target: String(input.summary || input.message || input.id || ''), facts: tag, status: o.status, body: () => <><InputBand><KeyValues entries={inputEntries(input)} /></InputBand>{out && <TextBlock text={out} />}</> };
     }
 
     case 'research_view': case 'research_add': case 'research_update': case 'research_delete': {
@@ -553,8 +554,8 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
     facts: tag, status: o.status,
     body: () => (
       <ScrollBox follow={0}>
-        <KeyValues entries={inputEntries(input)} />
-        {out && <div className="border-t border-border/40"><SmartOutput text={item.meta?.structuredContent ? JSON.stringify(item.meta.structuredContent) : out} error={err} /></div>}
+        <InputBand><KeyValues entries={inputEntries(input)} /></InputBand>
+        {out && <div><SmartOutput text={item.meta?.structuredContent ? JSON.stringify(item.meta.structuredContent) : out} error={err} /></div>}
       </ScrollBox>
     ),
   };
@@ -592,6 +593,7 @@ function describeAgent(item: ToolItem, input: Record<string, any>, ctx: ToolCtx,
     actions: [
       ...(outputFile && ctx.open?.file ? [{ icon: ExternalLink, label: 'open transcript', onClick: () => ctx.open!.file!(outputFile) }] : []),
       ...(status === 'running' && taskId && ctx.open?.stopTask ? [{ icon: Square, label: 'stop', onClick: () => ctx.open!.stopTask!(taskId) }] : []),
+      ...(!bg && status === 'running' && progress?.status === 'running' && ctx.open?.background ? [{ icon: ArrowDownToLine, label: 'move to background', onClick: () => ctx.open!.background!(item.id) }] : []),
     ],
     body: () => <AgentBody item={item} prompt={prompt} progress={progress} subs={subs} ctx={ctx} running={status === 'running'} bg={bg} outputFile={outputFile} />,
   };
@@ -608,7 +610,7 @@ function AgentBody({ item, prompt, progress, subs, ctx, running, bg, outputFile 
       {prompt && (
         <button type="button" onClick={() => setShowPrompt(v => !v)} className="block w-full text-left px-3 py-1 text-[10.5px] text-muted-foreground hover:text-foreground">{showPrompt ? '▾ prompt' : '▸ prompt'}</button>
       )}
-      {showPrompt && <div className="px-3 pb-2 text-[11px] text-muted-foreground whitespace-pre-wrap break-words">{prompt}</div>}
+      {showPrompt && <InputBand className="px-3 py-1.5 text-[11px] text-foreground whitespace-pre-wrap break-words">{prompt}</InputBand>}
       {nested.length > 0 && (
         <ScrollBox live={running} follow={nested.length} className="!rounded-none">
           <div className="pl-3 pr-1 py-1">{ctx.renderNested?.(nested, ctx.depth + 1)}</div>
