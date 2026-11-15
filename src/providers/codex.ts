@@ -2120,6 +2120,12 @@ export class CodexProvider implements Provider {
           active = false;
           abort.abort();
         },
+        // ends only the turn: its turn/completed starts the queued inputs (interrupt also aborts the run)
+        async sendNow() {
+          if (client && currentTurnId) {
+            await client.request('turn/interrupt', { threadId: sessionId, turnId: currentTurnId }).catch(() => {});
+          }
+        },
         async interrupt() {
           if (client && currentTurnId) {
             await client.request('turn/interrupt', { threadId: sessionId, turnId: currentTurnId }).catch(() => {});
