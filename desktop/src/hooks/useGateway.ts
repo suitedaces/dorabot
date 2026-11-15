@@ -388,8 +388,9 @@ export type SessionState = {
   sessionId?: string;
   pendingQuestion: AskUserQuestion | null;
   taskProgress: Record<string, TaskProgress>;
-  thinkingTokens?: number;
   suggestion?: string;
+  // sent while a turn was running; they start the next turn and join the chat then
+  queued?: Array<{ content: string; images?: ImageAttachment[]; timestamp: number }>;
   pendingElicitation: PendingElicitation | null;
   activeWorktrees: ActiveWorktree[];
 };
@@ -1041,6 +1042,10 @@ export function useGateway() {
           setSessionStates(prev => {
             const state = prev[sk];
             if (!state) return prev;
+            // a channel message that arrives mid-turn waits for the next turn, like one typed here
+            if (d.injected && state.agentStatus !== 'idle') {
+              return { ...prev, [sk]: { ...state, queued: [...(state.queued || []), { content: d.prompt, timestamp: d.timestamp || Date.now() }] } };
+            }
             const last = state.chatItems[state.chatItems.length - 1];
             const isMarkedRunSource = d.source?.startsWith('tasks/') || d.source?.startsWith('calendar/');
             if (isMarkedRunSource && last?.type === 'user' && last.content === d.prompt) {
@@ -1122,9 +1127,12 @@ export function useGateway() {
           // Remove compacting indicator and add result
           const cleaned = updated.filter(i => i.type !== 'compacting');
           cleaned.push({ type: 'result', cost: d.usage?.totalCostUsd, end: d.end, timestamp: Date.now() });
+          // messages sent during this turn start the next one
+          const queued = state.queued || [];
+          for (const q of queued) cleaned.push({ type: 'user', content: q.content, images: q.images, timestamp: Date.now() });
           return {
             ...prev,
-            [sk]: { ...state, chatItems: cleaned, agentStatus: 'idle', pendingQuestion: null, thinkingTokens: undefined, sessionId: d.sessionId || state.sessionId },
+            [sk]: { ...state, chatItems: cleaned, queued: [], agentStatus: queued.length ? 'thinking...' : 'idle', pendingQuestion: null, sessionId: d.sessionId || state.sessionId },
           };
         });
         // Notify tab system of sessionId assignment
@@ -1282,14 +1290,6 @@ export function useGateway() {
         const sk = d.sessionKey;
         if (!sk || !trackedSessionsRef.current.has(sk) || !d.suggestion) break;
         setSessionStates(prev => prev[sk] ? { ...prev, [sk]: { ...prev[sk], suggestion: d.suggestion } } : prev);
-        break;
-      }
-
-      case 'agent.thinking_tokens': {
-        const d = data as { sessionKey?: string; tokens?: number };
-        const sk = d.sessionKey;
-        if (!sk || !trackedSessionsRef.current.has(sk) || typeof d.tokens !== 'number') break;
-        setSessionStates(prev => prev[sk] ? { ...prev, [sk]: { ...prev[sk], thinkingTokens: d.tokens } } : prev);
         break;
       }
 
@@ -2080,6 +2080,10 @@ export function useGateway() {
       if (isFirst && onFirstMessageRef.current) {
         onFirstMessageRef.current(sk, prompt.slice(0, 80));
       }
+      if (state.agentStatus !== 'idle') {
+        const queued = [...(state.queued || []), { content: prompt, images: images?.length ? images : undefined, timestamp: Date.now() }];
+        return { ...prev, [sk]: { ...state, queued, suggestion: undefined } };
+      }
       return {
         ...prev,
         [sk]: {
@@ -2288,6 +2292,18 @@ export function useGateway() {
   const setSessionFastMode = useCallback((sessionKey: string, on: boolean) => {
     fastModeRef.current = { ...fastModeRef.current, [sessionKey]: on };
     setFastModeByKey(fastModeRef.current);
+  }, []);
+
+  // a queued message whose run was stopped never reached the agent: take it back out
+  const takeQueued = useCallback((sessionKey: string, index: number) => {
+    let taken: { content: string; images?: ImageAttachment[] } | undefined;
+    setSessionStates(prev => {
+      const state = prev[sessionKey];
+      if (!state?.queued?.[index]) return prev;
+      taken = state.queued[index];
+      return { ...prev, [sessionKey]: { ...state, queued: state.queued.filter((_, i) => i !== index) } };
+    });
+    return taken;
   }, []);
 
   const getSessionFastMode = useCallback((sessionKey?: string) => !!(sessionKey && fastModeByKey[sessionKey]), [fastModeByKey]);
@@ -2693,6 +2709,7 @@ export function useGateway() {
     loadProviderUsage,
     setSessionFastMode,
     getSessionFastMode,
+    takeQueued,
     getCodexAppServerSnapshot,
     codexAppServerRpc,
     detectProviders,

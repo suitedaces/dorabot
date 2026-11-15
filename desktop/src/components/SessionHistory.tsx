@@ -128,7 +128,6 @@ export function SessionHistory({ sessions, onOpenSession, onDeleteSession }: Pro
                     </div>
                     <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-muted-foreground">
                       <span>{channelLabel(s.channel)}</span>
-                      <span>{s.messageCount} msgs</span>
                       <span className="flex items-center gap-0.5">
                         <Clock className="w-2.5 h-2.5" />
                         {formatRelativeDate(s.updatedAt)}

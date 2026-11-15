@@ -989,6 +989,8 @@ export class ClaudeProvider implements Provider {
         if (closed) return false;
         makeUserMsg(text, images).then(msg => {
           if (closed) return;
+          // a message sent while a turn runs waits for that turn to end and starts the next one
+          (msg as UserMsg & { priority?: 'later' }).priority = 'later';
           if (waitingForMessage) {
             waitingForMessage(msg);
           } else {

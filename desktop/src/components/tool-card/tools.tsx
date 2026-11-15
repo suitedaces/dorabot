@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  Activity, Bell, BookOpen, Bot, Camera, Clock, Copy, ExternalLink, FileDiff, FilePlus, FileText, FolderSearch, Globe,
+  Activity, Bell, BookOpen, Bot, Camera, ClipboardList, Clock, Copy, ExternalLink, FileDiff, FilePlus, FileText, FolderSearch, Globe,
   HelpCircle, Image as ImageIcon, ListChecks, ListTodo, MessageSquare, MousePointer2, Pencil, Plug, Search, Square,
   SquareTerminal, Terminal, Wrench, type LucideIcon,
 } from 'lucide-react';
@@ -42,13 +42,13 @@ export type CardSpec = {
   dim?: boolean;
   kind: Kind;
   endedAt?: number;       // overrides the tool's own end (background tasks end long after the call)
+  background?: boolean;   // runs past its turn; the "N running" pill tracks it, not the group
 };
 
 // what the turn summary counts
 export type Kind = 'command' | 'read' | 'edit' | 'write' | 'search' | 'fetch' | 'agent' | 'browser' | 'plan' | 'other';
 
 const copy = (text: string) => { navigator.clipboard?.writeText(text).catch(() => {}); };
-const countLines = (s: string) => (s ? s.split('\n').length : 0);
 
 function firstLine(s: string) { return (s || '').split('\n')[0]; }
 
@@ -61,12 +61,10 @@ function outcome(item: ToolItem, ctx: ToolCtx): { status: CardStatus; label?: st
   if (!item.is_error) return { status: 'ok' };
   if (/^The user doesn't want to proceed|^User rejected|tool use was rejected/i.test(out)) return { status: 'stopped', label: 'denied by you', tone: 'warn' };
   if (/^(PreToolUse|PostToolUse)\S* hook|blocked by (a )?hook/i.test(out)) return { status: 'error', label: 'blocked by hook', tone: 'warn' };
-  const code = /^Exit code (\d+)/.exec(out)?.[1] ?? (typeof item.meta?.exitCode === 'number' ? String(item.meta.exitCode) : undefined);
-  if (code) return { status: 'error', label: `exit ${code}`, tone: 'bad' };
   if (/timed out|timeout/i.test(firstLine(out))) return { status: 'error', label: 'timed out', tone: 'bad' };
   if (/has not been read yet|must read/i.test(out)) return { status: 'error', label: 'file not read first', tone: 'bad' };
   if (/String to replace not found|not found in file/i.test(out)) return { status: 'error', label: 'old text not found', tone: 'bad' };
-  return { status: 'error', label: 'failed', tone: 'bad' };
+  return { status: 'error' };
 }
 
 const verbFor = (running: boolean, a: string, b: string) => (running ? a : b);
@@ -287,12 +285,13 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       const prog = ctx.progressByToolUse.get(item.id);
       const ended = (prog && prog.status !== 'running' ? prog.status : undefined) ?? (item.meta?.bgStatus as string | undefined);
       const bgRunning = bg && !ended && (prog ? prog.status === 'running' : !!bgId && ctx.backgroundRunning.has(bgId));
-      const endTag = ended === 'failed' ? <Tag tone="bad">failed</Tag> : ended === 'killed' || ended === 'stopped' ? <Tag tone="warn">stopped</Tag> : <Tag tone="ok">done</Tag>;
+      // success needs no label
+      const endTag = ended === 'failed' ? <Tag tone="bad">failed</Tag> : ended === 'killed' || ended === 'stopped' ? <Tag tone="warn">stopped</Tag> : undefined;
       const desc = input.description ? String(input.description) : '';
       if (bg) {
         return {
-          kind: 'command', icon: SquareTerminal, verb: 'Background', target: desc ? `${desc}\n${command}` : command,
-          facts: running ? undefined : bgRunning ? <Tag tone="run">running</Tag> : tag ?? endTag,
+          kind: 'command', background: true, icon: SquareTerminal, verb: 'Background', target: desc || command,
+          facts: running || bgRunning ? undefined : tag ?? endTag,
           status: bgRunning ? 'running' : ended === 'failed' ? 'error' : ended === 'killed' || ended === 'stopped' ? 'stopped' : o.status,
           endedAt: bgRunning ? undefined : prog?.endedAt ?? (item.meta?.bgEndedAt as number | undefined),
           actions: [
@@ -304,11 +303,11 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       }
       return {
         kind: 'command', icon: Terminal, verb: verbFor(running, 'Running', 'Ran'), target: command,
-        facts: tag ?? (out && !running ? `${countLines(out)} lines` : undefined),
+        facts: tag,
         status: o.status,
         actions: [
           { icon: Copy, label: 'copy command', onClick: () => copy(command) },
-          ...(out ? [{ icon: Copy, label: 'copy output', onClick: () => copy(out) }] : []),
+          ...(out ? [{ icon: ClipboardList, label: 'copy output', onClick: () => copy(out) }] : []),
           ...(open?.terminal ? [{ icon: SquareTerminal, label: 'open terminal', onClick: () => open.terminal!() }] : []),
         ],
         body: () => <CommandBody command={command} output={out} error={!!err} live={ctx.live} item={item} ctx={ctx} />,
@@ -320,11 +319,9 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       const f = item.meta?.file as Record<string, any> | undefined;
       const parsed = !err ? parseReadOutput(out) : null;
       const isImage = !!item.imageData || f?.type === 'image' || item.meta?.type === 'image';
-      const range = f?.startLine && f?.numLines ? `lines ${f.startLine}-${f.startLine + f.numLines - 1}` : input.offset ? `from line ${input.offset}` : '';
-      const dims = f?.dimensions || (f as any)?.originalSize;
-      const facts = tag ?? (isImage ? (dims?.originalWidth ? `${dims.originalWidth}×${dims.originalHeight}` : 'image') : f?.totalLines ? `${f.numLines ?? parsed?.lines.length} of ${f.totalLines} lines` : parsed ? `${parsed.lines.length} lines` : undefined);
+      const facts = tag;
       return {
-        kind: 'read', icon: isImage ? ImageIcon : FileText, verb: verbFor(running, 'Reading', 'Read'), target: range ? `${path}  ${range}` : path, facts, status: o.status,
+        kind: 'read', icon: isImage ? ImageIcon : FileText, verb: verbFor(running, 'Reading', 'Read'), target: path, facts, status: o.status,
         actions: open?.file && path ? [{ icon: ExternalLink, label: 'open file', onClick: () => open.file!(path) }] : [],
         body: item.imageData
           ? () => <img src={item.imageData} alt="" className="m-2 max-h-[320px] rounded border border-border/50" />
@@ -339,7 +336,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       const rows = diffRowsFor(item, oldStr, newStr);
       const add = rows.filter(r => r.k === 'add').length, del = rows.filter(r => r.k === 'del').length;
       return {
-        kind: 'edit', icon: Pencil, verb: verbFor(running, 'Editing', err ? 'Edit failed' : 'Edited'), target: path,
+        kind: 'edit', icon: Pencil, verb: verbFor(running, 'Editing', 'Edited'), target: path,
         facts: tag ?? <DiffStat add={add} del={del} />, status: o.status,
         actions: [
           ...(open?.file && path ? [{ icon: ExternalLink, label: 'open file', onClick: () => open.file!(path) }] : []),
@@ -360,8 +357,8 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       const lines = content.split('\n');
       const replaced = item.meta?.type === 'update';
       return {
-        kind: 'write', icon: FilePlus, verb: verbFor(running, 'Writing', err ? 'Write failed' : replaced ? 'Rewrote' : 'Wrote'), target: path,
-        facts: tag ?? `${lines.length} lines`, status: o.status,
+        kind: 'write', icon: FilePlus, verb: verbFor(running, 'Writing', replaced ? 'Rewrote' : 'Wrote'), target: path,
+        facts: tag, status: o.status,
         actions: open?.file && path && !running ? [{ icon: ExternalLink, label: 'open file', onClick: () => open.file!(path) }] : [],
         body: () => (
           <ScrollBox live={ctx.live} follow={content}>
@@ -382,7 +379,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       const chips = ['glob', 'type', 'output_mode', '-i', '-n', 'multiline'].filter(k => input[k] != null && input[k] !== false).map(k => `${k}${input[k] === true ? '' : `: ${input[k]}`}`);
       return {
         kind: 'search', icon: isGlob ? FolderSearch : Search, verb: verbFor(running, 'Searching', isGlob ? 'Found' : 'Searched'), target: pattern + where,
-        facts: tag ?? (header ? `${header[1]} ${header[2]}` : items.length ? `${items.length} ${isGlob ? 'files' : 'lines'}` : 'nothing'),
+        facts: tag ?? (!running && !items.length ? <Tag>no matches</Tag> : undefined),
         status: o.status,
         body: out ? () => (
           <ScrollBox follow={0}>
@@ -406,21 +403,19 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
 
     case 'WebSearch': {
       const links = linksFrom(item);
-      const dur = typeof item.meta?.durationSeconds === 'number' ? item.meta.durationSeconds : undefined;
       return {
         kind: 'search', icon: Globe, verb: verbFor(running, 'Searching web', 'Searched web'), target: String(input.query || ''),
-        facts: tag ?? (links.length ? `${links.length} sources` : dur ? undefined : undefined), status: o.status,
+        facts: tag, status: o.status,
         body: out ? () => <SearchBody output={out} links={links} /> : undefined,
       };
     }
 
     case 'WebFetch': {
       const url = String(input.url || item.meta?.url || '');
-      const code = item.meta?.code, bytes = item.meta?.bytes;
-      const kb = typeof bytes === 'number' ? (bytes > 1024 * 1024 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`) : '';
+      const code = item.meta?.code;
       return {
-        kind: 'fetch', icon: Globe, verb: verbFor(running, 'Fetching', err ? 'Fetch failed' : 'Fetched'), target: url.replace(/^https?:\/\/(www\.)?/, ''),
-        facts: tag ?? (code ? `${code}${kb ? ` · ${kb}` : ''}` : undefined), status: o.status,
+        kind: 'fetch', icon: Globe, verb: verbFor(running, 'Fetching', 'Fetched'), target: url.replace(/^https?:\/\/(www\.)?/, ''),
+        facts: tag ?? (typeof code === 'number' && (code < 200 || code >= 300) ? <Tag tone="bad">HTTP {code}</Tag> : undefined), status: o.status,
         actions: url && open?.url ? [{ icon: ExternalLink, label: 'open page', onClick: () => open.url!(url) }] : [],
         body: out || input.prompt ? () => (
           <ScrollBox follow={0} className="max-h-[460px]">
@@ -455,7 +450,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
     case 'message': {
       const message = String(input.message || '');
       return {
-        kind: 'other', icon: MessageSquare, verb: verbFor(running, 'Sending', err ? 'Send failed' : 'Sent'), target: [input.channel, input.target].filter(Boolean).join(' · '), facts: tag, status: o.status,
+        kind: 'other', icon: MessageSquare, verb: verbFor(running, 'Sending', 'Sent'), target: [input.channel, input.target].filter(Boolean).join(' · '), facts: tag, status: o.status,
         body: message ? () => <div className="p-3"><div className="inline-block max-w-[92%] rounded-2xl rounded-bl-sm px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words bg-[var(--stream-bubble-default)]">{message}</div></div> : undefined,
       };
     }
@@ -480,7 +475,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
       const firstQ = qs[0]?.question || '';
       const firstA = answers[firstQ] || (out && !/^User has answered/.test(out) ? out : '');
       return {
-        kind: 'other', icon: HelpCircle, verb: running ? 'Asking' : 'Asked', target: firstQ, facts: firstA ? `→ ${String(firstA).split('\n')[0]}` : tag, status: o.status,
+        kind: 'other', icon: HelpCircle, verb: running ? 'Asking' : 'Asked', target: firstQ, facts: tag, status: o.status,
         body: qs.length ? () => (
           <div className="py-1.5">
             {qs.map((q: any, qi: number) => (
@@ -500,7 +495,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
 
     case 'schedule': case 'list_schedule': case 'update_schedule': case 'cancel_schedule': {
       const verb = { schedule: 'Scheduled', list_schedule: 'Listed schedule', update_schedule: 'Updated schedule', cancel_schedule: 'Cancelled' }[name]!;
-      return { kind: 'other', icon: Clock, verb, target: String(input.summary || input.message || input.id || ''), facts: tag ?? (input.rrule ? String(input.rrule) : undefined), status: o.status, body: () => <><KeyValues entries={inputEntries(input)} />{out && <TextBlock text={out} />}</> };
+      return { kind: 'other', icon: Clock, verb, target: String(input.summary || input.message || input.id || ''), facts: tag, status: o.status, body: () => <><KeyValues entries={inputEntries(input)} />{out && <TextBlock text={out} />}</> };
     }
 
     case 'research_view': case 'research_add': case 'research_update': case 'research_delete': {
@@ -555,7 +550,7 @@ export function describeTool(item: ToolItem, ctx: ToolCtx): CardSpec {
   const short = mcp ? mcp[2] : item.name;
   return {
     kind: 'other', icon: mcp ? Plug : Wrench, verb: short.replace(/_/g, ' '), target: firstString(input),
-    facts: tag ?? (server ? <Tag>{server}</Tag> : undefined), status: o.status,
+    facts: tag, status: o.status,
     body: () => (
       <ScrollBox follow={0}>
         <KeyValues entries={inputEntries(input)} />
@@ -581,20 +576,18 @@ function describeAgent(item: ToolItem, input: Record<string, any>, ctx: ToolCtx,
   const meta = item.meta || {};
   const bg = !!input.run_in_background || meta.isAsync === true;
   const subs = (item.subItems || []).filter(s => s.type === 'tool_use' || s.type === 'text' || s.type === 'thinking');
-  const calls = progress?.toolCount ?? subs.filter(s => s.type === 'tool_use').length;
   const ended = (progress && progress.status !== 'running' ? progress.status : undefined) ?? (meta.bgStatus as string | undefined);
   const bgRunning = bg && !ended && (progress ? progress.status === 'running' : ctx.backgroundRunning.has(String(meta.agentId || '')));
   const status: CardStatus = bg
     ? (bgRunning ? 'running' : ended === 'failed' ? 'error' : ended === 'killed' || ended === 'stopped' ? 'stopped' : o.status === 'running' ? 'running' : o.status)
     : o.status;
   const endTag = bg && !bgRunning && ended ? (ended === 'failed' ? <Tag tone="bad">failed</Tag> : ended === 'killed' || ended === 'stopped' ? <Tag tone="warn">stopped</Tag> : null) : null;
-  const tokens = progress && progress.inputTokens + progress.outputTokens > 0 ? `${Math.round((progress.inputTokens + progress.outputTokens) / 1000)}k tokens` : '';
-  const facts = tag ?? endTag ?? [calls ? `${calls} calls` : '', tokens].filter(Boolean).join(' · ');
+  const facts = tag ?? endTag;
   const outputFile = typeof meta.outputFile === 'string' ? meta.outputFile : undefined;
   const taskId = progress?.taskId || (typeof meta.agentId === 'string' ? meta.agentId : undefined);
   return {
-    kind: 'agent', icon: Bot, verb: bg ? 'Background agent' : 'Agent', target: description,
-    facts: facts || undefined, status,
+    kind: 'agent', background: bg, icon: Bot, verb: bg ? 'Background agent' : 'Agent', target: description,
+    facts, status,
     endedAt: bg && !bgRunning ? progress?.endedAt ?? (meta.bgEndedAt as number | undefined) : undefined,
     actions: [
       ...(outputFile && ctx.open?.file ? [{ icon: ExternalLink, label: 'open transcript', onClick: () => ctx.open!.file!(outputFile) }] : []),

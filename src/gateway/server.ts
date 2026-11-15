@@ -57,7 +57,8 @@ import { loadResearch, saveResearch, readResearchContent, writeResearchFile, nex
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
 import { slimToolMeta } from './tool-meta.js';
 
-const thinkingTokensSentAt = new Map<string, number>();
+// messages sent while a turn runs, recorded once their own turn starts
+const queuedUserMessages = new Map<string, Array<{ sessionId: string; content: Array<Record<string, unknown>>; metadata?: Record<string, unknown> }>>();
 const NOTICE_SUBTYPES = new Set(['model_refusal_fallback', 'model_refusal_no_fallback', 'api_retry', 'informational', 'notification', 'session_writes_lost', 'mirror_error', 'compact_boundary', 'code_change_published', 'hook_response', 'memory_recall', 'files_persisted', 'permission_denied']);
 import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, onClaudeAuthRequired } from '../providers/claude.js';
 import { getProviderUsage, onProviderUsage } from '../providers/usage.js';
@@ -1716,16 +1717,23 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       // try injection into active persistent session (even if idle between turns)
       const handle = runHandles.get(session.key);
       console.log(`[onMessage] key=${session.key} activeRun=${session.activeRun} handleExists=${!!handle} handleActive=${handle?.active} runQueueHas=${runQueues.has(session.key)}`);
-      if (handle?.active) {
-        const channelPrompt = buildIncomingChannelPrompt(msg, msg.body, runReplyContext);
+      const channelPrompt = handle?.active ? buildIncomingChannelPrompt(msg, msg.body, runReplyContext) : '';
+      if (handle?.active && handle.inject(channelPrompt)) {
         console.log(`[onMessage] INJECTING into ${session.key}`);
-        handle.inject(channelPrompt);
-        fileSessionManager.append(session.sessionId, {
-          type: 'user',
+        const userRecord = {
+          type: 'user' as const,
           timestamp: new Date().toISOString(),
           content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: channelPrompt }] } },
           metadata: { channel: msg.channel, chatId: msg.chatId, body: msg.body, senderName: msg.senderName },
-        });
+        };
+        // mid-turn it waits for the next turn, so it is recorded when that turn starts
+        if (session.activeRun) {
+          const waiting = queuedUserMessages.get(session.key) || [];
+          waiting.push({ sessionId: session.sessionId, content: userRecord.content.message.content, metadata: userRecord.metadata });
+          queuedUserMessages.set(session.key, waiting);
+        } else {
+          fileSessionManager.append(session.sessionId, userRecord);
+        }
         broadcast({ event: 'agent.user_message', data: {
           source: runSource, sessionKey: session.key,
           prompt: msg.body, injected: true, timestamp: Date.now(),
@@ -2760,14 +2768,6 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (m.type === 'prompt_suggestion' && (m as any).suggestion) {
             broadcast({ event: 'agent.prompt_suggestion', data: { sessionKey, suggestion: (m as any).suggestion } });
           }
-          // live thinking size, at most twice a second per session
-          if (m.type === 'system' && m.subtype === 'thinking_tokens') {
-            const now = Date.now();
-            if (now - (thinkingTokensSentAt.get(sessionKey) || 0) >= 500) {
-              thinkingTokensSentAt.set(sessionKey, now);
-              broadcast({ event: 'agent.thinking_tokens', data: { sessionKey, tokens: (m as any).estimated_tokens } });
-            }
-          }
           if ((m.type === 'system' && NOTICE_SUBTYPES.has(String(m.subtype))) || (m.type === 'tool_progress' && (m as any).subagent_retry)) {
             broadcast({ event: 'agent.notice', data: { source, sessionKey, message: m, timestamp: Date.now() } });
           }
@@ -3247,6 +3247,14 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               },
             };
             broadcast(resultEvent);
+            // messages sent during this turn start the next one: record them now, after its result
+            const waiting = queuedUserMessages.get(sessionKey);
+            if (waiting?.length) {
+              queuedUserMessages.delete(sessionKey);
+              for (const w of waiting) {
+                fileSessionManager.append(w.sessionId, { type: 'user', timestamp: new Date().toISOString(), content: { type: 'user', message: { role: 'user', content: w.content } }, ...(w.metadata ? { metadata: w.metadata as any } : {}) });
+              }
+            }
             if (streamV2Enabled && typeof resultEvent.seq === 'number') {
               scheduleRunEventPrune(sessionKey, resultEvent.seq);
               saveCheckpoint(sessionKey, resultEvent.seq);
@@ -3385,6 +3393,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         activeRunSources.delete(sessionKey);
         runHandles.delete(sessionKey);
         runModels.delete(sessionKey);
+        // a stopped run never started the turns its waiting messages were for
+        queuedUserMessages.delete(sessionKey);
         // clean up any remaining channel context (typing indicator, status message)
         const ctx = channelRunContexts.get(sessionKey);
         if (ctx) {
@@ -3602,8 +3612,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 console.error(`[gateway] setModel on inject failed for ${sessionKey}:`, err);
               }
             }
-            handle.inject(prompt, images, inputItems);
-            // record injected user message in session (CLI doesn't echo user text back)
+            // the run may have just ended (codex closes when nothing is queued): then start a new one
+            if (!handle.inject(prompt, images, inputItems)) {
+              handleAgentRun({ prompt, images, inputItems, sessionKey, source: 'desktop/chat' });
+              return { id, result: { sessionKey, sessionId: session.sessionId, queued: true } };
+            }
+            // the message waits for the running turn to end; record it when its own turn starts
+            // (CLI doesn't echo user text back)
             const injectedContent: Array<Record<string, unknown>> = [];
             if (images?.length) {
               for (const img of images) {
@@ -3611,11 +3626,14 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               }
             }
             injectedContent.push({ type: 'text', text: prompt });
-            fileSessionManager.append(session.sessionId, {
-              type: 'user',
-              timestamp: new Date().toISOString(),
-              content: { type: 'user', message: { role: 'user', content: injectedContent } },
-            });
+            if (session.activeRun) {
+              const waiting = queuedUserMessages.get(sessionKey) || [];
+              waiting.push({ sessionId: session.sessionId, content: injectedContent });
+              queuedUserMessages.set(sessionKey, waiting);
+            } else {
+              // idle between turns: it starts a turn right away
+              fileSessionManager.append(session.sessionId, { type: 'user', timestamp: new Date().toISOString(), content: { type: 'user', message: { role: 'user', content: injectedContent } } });
+            }
             broadcast({ event: 'agent.user_message', data: {
               source: 'desktop/chat', sessionKey, prompt, injected: true, timestamp: Date.now(),
             }});

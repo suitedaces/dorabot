@@ -1463,7 +1463,7 @@ export default function App() {
                           const dismiss = (ev: MouseEvent) => { if (!menu.contains(ev.target as Node)) { menu.remove(); document.removeEventListener('mousedown', dismiss); } };
                           setTimeout(() => document.addEventListener('mousedown', dismiss), 0);
                         }}
-                        title={`${s.channel || 'desktop'} | ${s.messageCount} msgs | ${new Date(s.updatedAt).toLocaleString()}\nRight-click for fork/rename/tag`}
+                        title={`${s.channel || 'desktop'} · ${new Date(s.updatedAt).toLocaleString()}`}
                       >
                         <span className="w-3 h-3 shrink-0 flex items-center justify-center">{channelIcon(s.channel)}</span>
                         <span className="truncate flex-1 text-left">

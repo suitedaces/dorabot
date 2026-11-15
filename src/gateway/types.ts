@@ -175,7 +175,6 @@ export type GatewayEventName =
   | 'provider.auth_required'
   | 'agent.notice'
   | 'agent.prompt_suggestion'
-  | 'agent.thinking_tokens'
   | 'agent.task_updated'
   | 'provider.usage'
   | 'background.status'

@@ -33,7 +33,6 @@ import {
   Quote, Reply, Zap,
   type LucideIcon,
 } from 'lucide-react';
-import { SHORTCUTS as ALL_SHORTCUTS } from '@/components/ShortcutHelp';
 import { jsonrepair } from 'jsonrepair';
 import {
   DEFAULT_CLAUDE_MODEL,
@@ -698,15 +697,6 @@ const SUGGESTIONS: { icon: LucideIcon; label: string; prompt: string }[] = [
   { icon: Radio, label: 'set up a research agent', prompt: 'every morning, scan Hacker News and Twitter for AI agent news and send me a summary on Telegram' },
 ];
 
-const QUICK_SHORTCUTS: { keys: string; label: string }[] = [
-  { keys: '⌘T', label: 'new tab' },
-  { keys: '⌘W', label: 'close tab' },
-  { keys: '⌘L', label: 'focus input' },
-  { keys: '⌘B', label: 'files' },
-  { keys: '⌘D', label: 'split' },
-  { keys: '⌘,', label: 'settings' },
-  { keys: 'Esc', label: 'stop' },
-];
 
 function ImagePreviewStrip({ images, onRemove }: { images: ImageAttachment[]; onRemove: (index: number) => void }) {
   if (images.length === 0) return null;
@@ -1091,6 +1081,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   liveImagesRef.current = attachedImages;
   const isRunning = agentStatus !== 'idle';
   const [approvalsFolded, setApprovalsFolded] = useState(false);
+  const [queuedOpen, setQueuedOpen] = useState(false);
   const isEmpty = chatItems.length === 0;
 
   // Derive elicitation and worktree state from active session
@@ -1621,10 +1612,6 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     }
   };
 
-  const formatTime = (ts: number) => {
-    return new Date(ts).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
-  };
-
   const handleReply = useCallback((snippet: QuotedSnippet) => {
     setQuotedSnippet(snippet);
     // Focus whichever input is mounted (landing vs main).
@@ -1650,7 +1637,6 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   }, [chatItems, isRunning, lastUserIdx]);
   const bgTasks = (sessionKey && gateway.backgroundTasks[sessionKey]) || EMPTY_TASKS;
   const taskProgress = activeState?.taskProgress || EMPTY_PROGRESS;
-  const thinkingTokens = activeState?.thinkingTokens;
   const suggestion = activeState?.suggestion;
   const listBase = useMemo(() => {
     const progressByToolUse = new Map<string, TaskProgress>();
@@ -1670,8 +1656,8 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         tail: async (path: string, offset: number) => await gateway.rpc('fs.tail', { path, offset }) as { content: string; size: number; next?: number },
       },
     };
-    return { current: { ...base, turnRunning: true, thinkingTokens } as ListCtx, past: { ...base, liveId: null, turnRunning: false } as ListCtx };
-  }, [liveId, thinkingTokens, bgTasks, taskProgress, onOpenFile, onOpenDiff, onOpenResearch, onOpenTask, onOpenTerminal, sessionKey, gateway.stopTask, gateway.rpc]);
+    return { current: { ...base, turnRunning: true } as ListCtx, past: { ...base, liveId: null, turnRunning: false } as ListCtx };
+  }, [liveId, bgTasks, taskProgress, onOpenFile, onOpenDiff, onOpenResearch, onOpenTask, onOpenTerminal, sessionKey, gateway.stopTask, gateway.rpc]);
 
   const jumpToTool = useCallback((toolUseId: string) => {
     document.getElementById(`tool-${toolUseId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -1704,9 +1690,9 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         );
       case 'result':
         return (
+          // when the turn ended, and why if it was not a normal ending
           <div key={i} className="flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground py-1 mt-1 border-t border-border">
-            {item.cost != null && <span>${item.cost.toFixed(4)}</span>}
-            <span>{formatTime(item.timestamp)}</span>
+            <span>{new Date(item.timestamp).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' })}</span>
             {turnEndNote(item.end)}
           </div>
         );
@@ -1811,14 +1797,17 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                   <DorabotSprite size={compact ? 56 : 96} className="relative dorabot-alive" />
                 </div>
                 <h1 className={cn('font-semibold text-foreground', compact ? 'text-sm' : 'text-lg')}>{getGreeting()}</h1>
+                {/* nothing to say when it's ready */}
+                {(!isReady || gatewayFailed) && (
                 <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
                   <div className={cn('w-1.5 h-1.5 rounded-full', isReady ? 'bg-success' : connected && !authenticated ? 'bg-warning' : connected ? 'bg-success' : 'bg-destructive')} />
                   {gatewayFailed
                     ? <span className="text-destructive">{gateway.gatewayError?.error || 'gateway failed to start'}</span>
                     : !connected ? <>connecting...{gateway.gatewayTelemetry.reconnectCount > 2 && <span className="ml-1 opacity-60">({gateway.gatewayTelemetry.disconnectReason || 'retrying'})</span>}</>
                     : !authenticated ? <>set up provider in <button type="button" className="underline hover:text-foreground transition-colors" onClick={onNavigateSettings}>Settings</button></>
-                    : 'ready'}
+                    : null}
                 </div>
+                )}
                 {gatewayFailed && gateway.gatewayError?.logs && (
                   <details className="mt-2 max-w-md mx-auto text-left">
                     <summary className="text-[10px] text-muted-foreground cursor-pointer hover:text-foreground transition-colors select-none">view logs</summary>
@@ -1875,9 +1864,6 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                     <Paperclip className="w-4 h-4 text-muted-foreground" />
                   </Button>
                   <ModelSelector gateway={gateway} disabled={!connected} sessionId={activeState?.sessionId} sessionKey={sessionKey} />
-                  {input.trim() && (
-                    <span className="text-[9px] text-muted-foreground/60 ml-2 select-none hidden @sm:inline">{'\u21E7\u21B5 new line'}</span>
-                  )}
                   <span className="flex-1 min-w-1" />
                   <Button
                     size="sm"
@@ -1906,41 +1892,6 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                 </div>
               )}
 
-              {/* keyboard shortcuts */}
-              {!compact && (
-                <Collapsible>
-                  <div className="flex flex-wrap justify-center gap-x-4 gap-y-1.5 text-[10px] text-muted-foreground/80 pt-2">
-                    {QUICK_SHORTCUTS.map(s => (
-                      <span key={s.keys} className="flex items-center gap-1">
-                        <kbd className="px-1.5 py-0.5 rounded border border-border/50 bg-muted/60 text-[10px] font-mono">{s.keys}</kbd>
-                        <span>{s.label}</span>
-                      </span>
-                    ))}
-                    <CollapsibleTrigger className="flex items-center gap-1 hover:text-foreground transition-colors cursor-pointer">
-                      <Keyboard className="w-3 h-3" />
-                      <span>all shortcuts</span>
-                      <ChevronDown className="w-3 h-3" />
-                    </CollapsibleTrigger>
-                  </div>
-                  <CollapsibleContent>
-                    <div className="grid grid-cols-1 @sm:grid-cols-2 gap-4 pt-3 max-w-md mx-auto">
-                      {ALL_SHORTCUTS.map(s => (
-                        <div key={s.section}>
-                          <div className="text-[9px] font-semibold text-muted-foreground/60 uppercase tracking-wider mb-1">{s.section}</div>
-                          <div className="space-y-0.5">
-                            {s.items.map(i => (
-                              <div key={i.keys} className="flex items-center justify-between text-[10px] text-muted-foreground/80">
-                                <span>{i.desc}</span>
-                                <kbd className="px-1 py-0.5 rounded border border-border/50 bg-muted/60 text-[9px] font-mono shrink-0 ml-2">{i.keys}</kbd>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </CollapsibleContent>
-                </Collapsible>
-              )}
             </div>
           </AuroraBackground>
         </div>
@@ -1991,6 +1942,28 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             gateway.rpc('chat.dismissElicitation', { elicitationId: pendingElicitation.elicitationId, sessionKey }).catch(() => {});
           }}
         />
+      )}
+
+      {/* messages sent mid-turn: they start the next turn. one line, opens to show them */}
+      {sessionKey && (activeState?.queued?.length ?? 0) > 0 && (
+        <div className="px-4 pt-2 shrink-0">
+          <button type="button" onClick={() => setQueuedOpen(v => !v)} className="w-full flex items-center gap-2 px-2.5 py-1 rounded-md text-[11px] text-muted-foreground hover:bg-secondary/50">
+            <ChevronRight className={cn('w-3 h-3 transition-transform', queuedOpen && 'rotate-90')} />
+            {activeState!.queued!.length} queued
+            <span className="text-muted-foreground/70">· {isRunning ? 'starts after this turn' : 'not sent: the run stopped'}</span>
+          </button>
+          {queuedOpen && activeState!.queued!.map((q, i) => (
+            <div key={q.timestamp + ':' + i} className="flex items-start gap-2 pl-7 pr-2 py-1 text-[12px]">
+              <span className="flex-1 min-w-0 whitespace-pre-wrap break-words text-foreground/90">{q.content}</span>
+              {!isRunning && (
+                <>
+                  <button type="button" className="text-[11px] text-primary hover:underline shrink-0" onClick={() => { const t = gateway.takeQueued(sessionKey, i); if (t) gateway.sendMessage(t.content, sessionKey, undefined, t.images); }}>send</button>
+                  <button type="button" className="text-[11px] text-muted-foreground hover:text-foreground shrink-0" onClick={() => { const t = gateway.takeQueued(sessionKey, i); if (t) handleInputChange(t.content, t.content.length); }}>edit</button>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
       )}
 
       {/* approvals: they need an answer, so they stay above the composer, but fold to one line */}
@@ -2065,9 +2038,6 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             </Button>
             <ModelSelector gateway={gateway} disabled={!connected} sessionId={activeState?.sessionId} sessionKey={sessionKey} />
             <span className="hidden @[400px]:flex shrink-0"><ContextWheel getContextUsage={gateway.getContextUsage} sessionKey={sessionKey} isRunning={isRunning} /></span>
-            {input.trim() && (
-              <span className="text-[9px] text-muted-foreground/60 ml-2 select-none hidden @sm:inline">{'\u21E7\u21B5 new line'}</span>
-            )}
             <span className="flex-1 min-w-1" />
             <PlanPill items={progress} />
             {sessionKey && (

@@ -85,7 +85,6 @@ export function ToolsView({ gateway }: Props) {
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0">
         <span className="font-semibold text-sm">Tools</span>
-        <Badge variant="outline" className="text-[10px]">{filteredTools.length} tools</Badge>
       </div>
 
       <ScrollArea className="flex-1 min-h-0">

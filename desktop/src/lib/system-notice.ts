@@ -6,22 +6,18 @@ export type Notice = { kind: string; level: NoticeLevel; text: string; detail?: 
 
 const secs = (ms: number) => (ms >= 1000 ? `${Math.round(ms / 1000)}s` : `${ms}ms`);
 
-const tokens = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
-
 export function noticeFromSystem(m: any): Notice | null {
   if (!m) return null;
   // a subagent's own api retry arrives on its tool_progress heartbeat
   if (m.type === 'tool_progress' && m.subagent_retry) {
     const r = m.subagent_retry;
-    return { kind: 'retry', level: 'notice', key: `subagent_retry:${m.tool_use_id}`, text: `Subagent API error${r.error_status ? ` ${r.error_status}` : ''}: retrying, attempt ${r.attempt} of ${r.max_retries}, in ${secs(r.retry_delay_ms)}` };
+    return { kind: 'retry', level: 'notice', key: `subagent_retry:${m.tool_use_id}`, text: `Subagent API error${r.error_status ? ` (${r.error_status})` : ''}, retrying` };
   }
   if (m.type !== 'system') return null;
   switch (m.subtype) {
     case 'compact_boundary': {
       const c = m.compact_metadata || {};
-      const how = c.trigger === 'manual' ? 'You compacted the context' : 'Context was full, so it was compacted';
-      const sizes = c.pre_tokens ? `: ${tokens(c.pre_tokens)} → ${tokens(c.post_tokens ?? 0)} tokens` : '';
-      return { kind: 'compact', level: 'notice', text: `${how}${sizes}${c.duration_ms ? ` · ${secs(c.duration_ms)}` : ''}` };
+      return { kind: 'compact', level: 'notice', text: c.trigger === 'manual' ? 'You compacted the context' : 'Context was full, so it was compacted' };
     }
     case 'code_change_published': {
       const what = m.identifier ? `${m.repo}#${m.identifier}` : m.repo || m.url;
@@ -61,8 +57,8 @@ export function noticeFromSystem(m: any): Notice | null {
       return { kind: 'refusal', level: 'error', text: m.content || `The safety classifier stopped ${m.original_model}'s response`, detail: why || undefined };
     }
     case 'api_retry': {
-      const what = m.no_response ? `no response after ${secs(m.no_response.waited_ms)}` : `API error${m.error_status ? ` ${m.error_status}` : ''}${m.error ? ` (${String(m.error).replace(/_/g, ' ')})` : ''}`;
-      return { kind: 'retry', level: 'notice', key: 'api_retry', text: `${what}: retrying, attempt ${m.attempt} of ${m.max_retries}, in ${secs(m.retry_delay_ms)}` };
+      const what = m.no_response ? `No response from the API after ${secs(m.no_response.waited_ms)}` : `API ${m.error ? String(m.error).replace(/_/g, ' ') : 'error'}${m.error_status ? ` (${m.error_status})` : ''}`;
+      return { kind: 'retry', level: 'notice', key: 'api_retry', text: `${what}, retrying` };
     }
     case 'informational': {
       if (m.level === 'info' || !m.content) return null;
