@@ -2345,8 +2345,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           } catch (err) {
             console.error(`[canUseTool] failed to send question:`, err);
             updateQuestionState(requestId, 'cancelled', runSessionKey);
-            answers[questionText] = opts[0]?.label || '';
-            continue;
+            return { behavior: 'deny' as const, message: `Could not deliver the question to ${runChannel}: ${err instanceof Error ? err.message : String(err)}. The user has not answered anything; do not pick an option yourself. Ask in a plain message instead.` };
           }
 
           const { label, timedOut } = await new Promise<{ label: string; timedOut: boolean }>((resolve) => {
@@ -2354,12 +2353,16 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             setTimeout(() => {
               if (pendingChannelQuestions.has(requestId)) {
                 pendingChannelQuestions.delete(requestId);
-                resolve({ label: opts[0]?.label || '', timedOut: true });
+                resolve({ label: '', timedOut: true });
               }
             }, 120000);
           });
-          if (timedOut) updateQuestionState(requestId, 'timeout', runSessionKey);
-          else updateQuestionState(requestId, 'answered', runSessionKey);
+          if (timedOut) {
+            // never hand the model a default: a late tap on the keyboard arrives as a new message
+            updateQuestionState(requestId, 'timeout', runSessionKey);
+            return { behavior: 'deny' as const, message: 'No answer within 2 minutes. The user did not choose anything: do not assume an option or proceed on a default. Say what you were waiting on and end the turn; their answer will arrive as a new message.' };
+          }
+          updateQuestionState(requestId, 'answered', runSessionKey);
           // SDK expects question text as key
           answers[questionText] = label;
         }
