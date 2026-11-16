@@ -1713,16 +1713,30 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     }
     if (event.reason === 'done' && w.wake && session) {
       const prompt = `<watch_done id="${w.id}" summary="${w.summary}">\n${watchTail(event.output, 40)}\n</watch_done>`;
-      void handleAgentRun({
-        prompt,
-        sessionKey: session.key,
-        source: `watch/${w.id}`,
-        channel: session.channel === 'desktop' ? undefined : session.channel,
-        messageMetadata: { channel: session.channel, chatId: session.chatId, chatType: session.chatType, senderName: w.summary, body: prompt },
-      }).catch(err => console.error(`[watch] wake failed for ${w.id}:`, err));
+      const source = `watch/${w.id}`;
+      // the cli stays alive between turns: feed a live handle like chat.send does, else start a run
+      const handle = runHandles.get(session.key);
+      if (handle?.active && handle.inject(prompt)) {
+        const content = [{ type: 'text', text: prompt }];
+        if (session.activeRun) {
+          const waiting = queuedUserMessages.get(session.key) || [];
+          waiting.push({ sessionId: session.sessionId, content });
+          queuedUserMessages.set(session.key, waiting);
+        } else {
+          fileSessionManager.append(session.sessionId, { type: 'user', timestamp: new Date().toISOString(), content: { type: 'user', message: { role: 'user', content } } });
+        }
+        broadcast({ event: 'agent.user_message', data: { source, sessionKey: session.key, prompt, injected: true, timestamp: Date.now() } });
+      } else {
+        void handleAgentRun({
+          prompt,
+          sessionKey: session.key,
+          source,
+          channel: session.channel === 'desktop' ? undefined : session.channel,
+          messageMetadata: { channel: session.channel, chatId: session.chatId, chatType: session.chatType, senderName: w.summary, body: prompt },
+        }).catch(err => console.error(`[watch] wake failed for ${w.id}:`, err));
+      }
     }
   };
-  const watcher: WatcherRunner = startWatcher({ onEvent: pushWatchEvent });
 
   // channel manager handles incoming messages from whatsapp/telegram
   const channelManager = new ChannelManager({
@@ -2334,14 +2348,6 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
   const canUseToolImpl = async (toolName: string, input: Record<string, unknown>, runChannel?: string, runChatId?: string, runSessionKey?: string, sdkCtx?: SdkPermissionContext) => {
     // AskUserQuestion — route to channel or desktop
-    if (cleanToolName(toolName) === 'watch' && runSessionKey) {
-      input.sessionKey = runSessionKey;
-      if (!input.channel && runChannel && runChannel !== 'desktop' && runChatId) {
-        input.channel = runChannel;
-        input.chatId = runChatId;
-      }
-    }
-
     if (toolName === 'AskUserQuestion') {
       const questions = input.questions as unknown[];
       if (!questions) {
@@ -2706,6 +2712,19 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             PreCompact: [{ hooks: [async () => {
               broadcast({ event: 'agent.compacting', data: { sessionKey, timestamp: Date.now() } });
               return { continue: true };
+            }] }],
+            // stamp the calling chat into a watch so pushes come back here. a hook, not canUseTool:
+            // auto-approved tools (bypassPermissions) never reach canUseTool
+            PreToolUse: [{ matcher: 'mcp__dorabot-tools__watch', hooks: [async (input) => {
+              const hi = input as { tool_name?: string; tool_input?: Record<string, unknown> };
+              if (hi.tool_name !== 'mcp__dorabot-tools__watch') return { continue: true };
+              const toolInput: Record<string, unknown> = { ...(hi.tool_input || {}), sessionKey };
+              const chatId = messageMetadata?.chatId;
+              if (!toolInput.channel && channel && channel !== 'desktop' && chatId) {
+                toolInput.channel = channel;
+                toolInput.chatId = chatId;
+              }
+              return { continue: true, hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', updatedInput: toolInput } };
             }] }],
           },
         });
@@ -7380,6 +7399,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
   // start channels
   await channelManager.startAll();
+
+  // watch loop starts once everything it pushes through exists
+  const watcher: WatcherRunner = startWatcher({ onEvent: pushWatchEvent });
 
   // Start HTTP auth fallback server (Phase 2)
   let httpAuth: HttpAuthServer | null = null;
