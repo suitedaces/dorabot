@@ -33,7 +33,7 @@ For SDK/API questions, check official SDK documentation and API docs via claude-
 - **Desktop**: Electron + Vite + React in `desktop/`
 - **Channels**: WhatsApp (Baileys), Telegram (grammy)
 - **Database**: SQLite (`~/.dorabot/dorabot.db`) via better-sqlite3, WAL mode
-- **Tools**: MCP server — `message`, `browser`, `screenshot`, `calendar` (4 tools), `goals` (4 tools)
+- **Tools**: MCP server — `message`, `browser`, `screenshot`, `calendar` (4 tools), `goals` (4 tools), `watch` (3 tools)
 - **Browser**: Playwright-core via CDP, persistent profile at `~/.dorabot/browser/profile/`, port 19222
 - **Skills**: Markdown files in `./skills/` and `~/.dorabot/skills/`, YAML frontmatter for metadata
 - **Providers**: Pluggable — Claude (Agent SDK, default) or OpenAI Codex (Codex SDK)
@@ -90,6 +90,7 @@ npm run dev:cli                      # interactive CLI mode
 - `src/tools/messaging.ts` — `messageTool` + channel handler registry pattern
 - `src/tools/browser.ts` — single tool with `action` discriminator, 37 actions (input, navigation, snapshots, scripts, console/network inspection)
 - `src/tools/calendar.ts` — `schedule`, `list_schedule`, `update_schedule`, `cancel_schedule` (RFC 5545 RRULE)
+- `src/tools/watch.ts` — `watch`, `list_watches`, `cancel_watch`: gateway polls a shell command with no LLM, pushes on change/done (`src/watch/watcher.ts`)
 - `src/tools/goals.ts` — `goals_view`, `goals_add`, `goals_update`, `goals_propose`
 - `src/tools/screenshot.ts` — standalone screenshot tool
 

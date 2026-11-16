@@ -56,6 +56,11 @@ export function noticeFromSystem(m: any): Notice | null {
       const why = [m.api_refusal_category, m.api_refusal_explanation].filter(Boolean).join(': ');
       return { kind: 'refusal', level: 'error', text: m.content || `The safety classifier stopped ${m.original_model}'s response`, detail: why || undefined };
     }
+    case 'watch': {
+      const last = String(m.output || '').trimEnd().split('\n').pop() || '';
+      const text = m.reason === 'done' ? `${m.summary} done` : m.reason === 'expired' ? `Stopped watching ${m.summary}` : last ? `${m.summary}: ${last}` : m.summary;
+      return { kind: 'watch', level: 'notice', text, detail: m.output || undefined };
+    }
     case 'api_retry': {
       const what = m.no_response ? `No response from the API after ${secs(m.no_response.waited_ms)}` : `API ${m.error ? String(m.error).replace(/_/g, ' ') : 'error'}${m.error_status ? ` (${m.error_status})` : ''}`;
       return { kind: 'retry', level: 'notice', key: 'api_retry', text: `${what}, retrying` };

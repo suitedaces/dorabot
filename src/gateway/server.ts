@@ -45,6 +45,7 @@ import { getChannelHandler } from '../tools/messaging.js';
 import { closeBrowser } from '../browser/manager.js';
 import { rememberFsWatchEvent, type FsWatchEvent } from './fs-watch-events.js';
 import { setScheduler, setBrowserConfig } from '../tools/index.js';
+import { startWatcher, formatWatchEvent, loadWatches, cancelWatch, tail as watchTail, type WatcherRunner, type WatchEvent } from '../watch/watcher.js';
 import { loadProjects, saveProjects, type Project } from '../tools/projects.js';
 import {
   loadTasks,
@@ -1691,6 +1692,38 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     }
   }
 
+  // watches: shell commands the gateway polls with no llm, pushed to the chat that set them
+  const pushWatchEvent = async (event: WatchEvent) => {
+    const w = event.watch;
+    const text = formatWatchEvent(event);
+    const notice = { type: 'system', subtype: 'watch', watch_id: w.id, summary: w.summary, reason: event.reason, output: watchTail(event.output, 40) };
+    const session = w.sessionKey ? sessionRegistry.get(w.sessionKey) : undefined;
+    if (session) {
+      fileSessionManager.append(session.sessionId, { type: 'system', timestamp: new Date().toISOString(), content: notice });
+      broadcast({ event: 'agent.notice', data: { source: `watch/${w.id}`, sessionKey: session.key, message: notice, timestamp: Date.now() } });
+      broadcastSessionUpdate(session.key);
+    }
+    const channel = w.channel && w.chatId ? { channel: w.channel, chatId: w.chatId }
+      // no chat to push to (codex mcp child, or the session is gone): fall back to the owner's channel
+      : !session ? getAllChannelStatuses().filter(c => c.connected && ownerChatIds.has(c.channel)).map(c => ({ channel: c.channel, chatId: ownerChatIds.get(c.channel)! }))
+        .sort((a, b) => (a.channel === 'telegram' ? -1 : 0) - (b.channel === 'telegram' ? -1 : 0))[0]
+      : undefined;
+    if (channel) {
+      await getChannelHandler(channel.channel)?.send(channel.chatId, text).catch(err => console.error(`[watch] push to ${channel.channel} failed:`, err));
+    }
+    if (event.reason === 'done' && w.wake && session) {
+      const prompt = `<watch_done id="${w.id}" summary="${w.summary}">\n${watchTail(event.output, 40)}\n</watch_done>`;
+      void handleAgentRun({
+        prompt,
+        sessionKey: session.key,
+        source: `watch/${w.id}`,
+        channel: session.channel === 'desktop' ? undefined : session.channel,
+        messageMetadata: { channel: session.channel, chatId: session.chatId, chatType: session.chatType, senderName: w.summary, body: prompt },
+      }).catch(err => console.error(`[watch] wake failed for ${w.id}:`, err));
+    }
+  };
+  const watcher: WatcherRunner = startWatcher({ onEvent: pushWatchEvent });
+
   // channel manager handles incoming messages from whatsapp/telegram
   const channelManager = new ChannelManager({
     config,
@@ -2301,6 +2334,14 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
   const canUseToolImpl = async (toolName: string, input: Record<string, unknown>, runChannel?: string, runChatId?: string, runSessionKey?: string, sdkCtx?: SdkPermissionContext) => {
     // AskUserQuestion — route to channel or desktop
+    if (cleanToolName(toolName) === 'watch' && runSessionKey) {
+      input.sessionKey = runSessionKey;
+      if (!input.channel && runChannel && runChannel !== 'desktop' && runChatId) {
+        input.channel = runChannel;
+        input.chatId = runChatId;
+      }
+    }
+
     if (toolName === 'AskUserQuestion') {
       const questions = input.questions as unknown[];
       if (!questions) {
@@ -4250,6 +4291,17 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const updated = scheduler.updateItem(itemId, updates);
           if (!updated) return { id, error: 'item not found' };
           return { id, result: updated };
+        }
+
+        case 'watch.list':
+          return { id, result: loadWatches() };
+
+        case 'watch.cancel': {
+          const watchId = params?.id as string;
+          if (!watchId) return { id, error: 'id required' };
+          const w = cancelWatch(watchId);
+          if (!w) return { id, error: 'watch not found' };
+          return { id, result: w };
         }
 
         case 'calendar.export': {
@@ -7354,6 +7406,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       for (const [, timer] of runEventPruneTimers) clearTimeout(timer);
       runEventPruneTimers.clear();
       scheduler?.stop();
+      watcher.stop();
       await channelManager.stopAll();
       await closeBrowser();
       closeCodexAppServerRpcClient();
