@@ -69,6 +69,7 @@ import { startHttpAuthServer, type HttpAuthServer } from './http-auth-server.js'
 import { setCachedAuth, flushAuthCache } from '../providers/auth-cache.js';
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { classifyToolCall, cleanToolName, isToolAllowed, type Tier } from './tool-policy.js';
+import { SleepTracker, formatSleepPeriod, type SleepPeriod } from './sleep-tracker.js';
 import { AUTONOMOUS_SCHEDULE_ID, buildAutonomousCalendarItem, PULSE_INTERVALS, DEFAULT_PULSE_INTERVAL, pulseIntervalToRrule, rruleToPulseInterval } from '../autonomous.js';
 import {
   DORABOT_DIR,
@@ -663,8 +664,18 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     }
   };
 
+  // while the mac sleeps nothing moves: clients cannot ping and the sdk's https streams die.
+  // a sweep that lands long after its interval means the clock jumped, not that clients went
+  // quiet, so their lastSeen is reset instead of closing them with 4101.
+  const sleepTracker = new SleepTracker();
   const heartbeatSweepTimer = setInterval(() => {
     const now = Date.now();
+    const sleep = sleepTracker.tick(now, CLIENT_HEARTBEAT_SWEEP_MS);
+    if (sleep.jumped) {
+      for (const state of clients.values()) state.lastSeen = now;
+      return;
+    }
+    if (sleep.settled) onSystemSlept(sleep.settled);
     for (const [ws, state] of clients) {
       if (!state.authenticated) continue;
       if (now - state.lastSeen <= CLIENT_HEARTBEAT_TIMEOUT_MS) continue;
@@ -1015,6 +1026,20 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     }
   }, 60_000);
   idleCliSweep.unref();
+  // one note per sleep, into sessions that were mid-turn when the mac froze: their tool
+  // timeouts and "now" moved under them.
+  function onSystemSlept(period: SleepPeriod): void {
+    const label = formatSleepPeriod(period);
+    const activeKeys = sessionRegistry.getActiveRunKeys();
+    console.log(`[gateway] system slept ${label}${activeKeys.length ? `, ${activeKeys.length} run(s) were mid-turn` : ''}`);
+    broadcast({ event: 'gateway.sleep', data: { ...period, activeRuns: activeKeys } });
+    const note = `<system_note>The Mac was asleep ${label}. Wall-clock time moved; anything you were waiting on may have timed out. Run \`date\` before logging times.</system_note>`;
+    for (const key of activeKeys) {
+      const handle = runHandles.get(key);
+      if (!handle?.active) continue;
+      if (!handle.inject(note)) console.log(`[gateway] sleep note not delivered to ${key}`);
+    }
+  }
   // model the live run is on, so a message sent with a different pick can switch it
   const runModels = new Map<string, string>();
   // per-chat fast mode, desktop chats only, in memory so a restart turns it off (it bills 2x to usage credits)
@@ -3470,6 +3495,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 enabled: true,
                 itemCount: scheduler.listItems().length,
               } : null,
+              sleep: sleepTracker.status(),
             },
           };
         }
