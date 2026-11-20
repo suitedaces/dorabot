@@ -69,7 +69,7 @@ import { startHttpAuthServer, type HttpAuthServer } from './http-auth-server.js'
 import { setCachedAuth, flushAuthCache } from '../providers/auth-cache.js';
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { classifyToolCall, cleanToolName, isToolAllowed, type Tier } from './tool-policy.js';
-import { AUTONOMOUS_SCHEDULE_ID, buildAutonomousCalendarItem, PULSE_INTERVALS, DEFAULT_PULSE_INTERVAL, pulseIntervalToRrule, rruleToPulseInterval } from '../autonomous.js';
+import { AUTONOMOUS_SCHEDULE_ID, buildAutonomousCalendarItem, buildAutonomousPrompt, PULSE_INTERVALS, DEFAULT_PULSE_INTERVAL, pulseIntervalToRrule, rruleToPulseInterval } from '../autonomous.js';
 import {
   DORABOT_DIR,
   GATEWAY_SOCKET_PATH,
@@ -1948,6 +1948,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         const runChannel = useOwnerChannel ? preferredOwner!.channel : undefined;
         const runChatId = useOwnerChannel ? preferredOwner!.chatId : undefined;
         const runSessionChatId = `${item.id}-${Date.now().toString(36)}`;
+        // the stored pulse message bakes in the journal path of the day the gateway started; rebuild it per run
+        const prompt = item.id === AUTONOMOUS_SCHEDULE_ID ? buildAutonomousPrompt(ctx.timezone) : item.message;
 
         const session = sessionRegistry.getOrCreate({
           channel: 'calendar',
@@ -1964,7 +1966,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         broadcastSessionUpdate(session.key);
 
         const result = await handleAgentRun({
-          prompt: item.message,
+          prompt,
           sessionKey: session.key,
           source: `calendar/${item.id}`,
           channel: runChannel,
@@ -1973,7 +1975,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             chatId: runChatId,
             chatType: 'dm',
             senderName: item.summary,
-            body: item.message,
+            body: prompt,
           } : undefined,
           extraContext: ctx.timezone ? `User timezone: ${ctx.timezone}` : undefined,
         });
