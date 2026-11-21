@@ -1977,11 +1977,16 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             <div key={q.timestamp + ':' + i} className="flex items-start gap-2 pl-7 pr-2 py-1 text-[12px]">
               <span className="flex-1 min-w-0 whitespace-pre-wrap break-words text-foreground">{q.content}</span>
               {!isRunning && (
-                <>
-                  <button type="button" className="text-[11px] text-primary hover:underline shrink-0" onClick={() => { const t = gateway.takeQueued(sessionKey, i); if (t) gateway.sendMessage(t.content, sessionKey, undefined, t.images); }}>send</button>
-                  <button type="button" className="text-[11px] text-muted-foreground hover:text-foreground shrink-0" onClick={() => { const t = gateway.takeQueued(sessionKey, i); if (t) handleInputChange(t.content, t.content.length); }}>edit</button>
-                </>
+                <button type="button" title="send" aria-label="send" className="w-5 h-5 shrink-0 flex items-center justify-center rounded text-primary hover:bg-secondary/60" onClick={async () => { const t = await gateway.takeQueued(sessionKey, i); if (t) gateway.sendMessage(t.content, sessionKey, undefined, t.images); }}>
+                  <ArrowUp className="w-3 h-3" />
+                </button>
               )}
+              <button type="button" title="edit" aria-label="edit" className="w-5 h-5 shrink-0 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-secondary/60" onClick={async () => { const t = await gateway.takeQueued(sessionKey, i); if (t) handleInputChange(t.content, t.content.length); }}>
+                <Pencil className="w-3 h-3" />
+              </button>
+              <button type="button" title="remove" aria-label="remove" className="w-5 h-5 shrink-0 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-secondary/60" onClick={() => { gateway.takeQueued(sessionKey, i).catch(() => {}); }}>
+                <X className="w-3 h-3" />
+              </button>
             </div>
           ))}
         </div>
