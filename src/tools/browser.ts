@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { tool } from '@anthropic-ai/claude-agent-sdk';
-import { getPage, type BrowserConfig } from '../browser/manager.js';
+import { getPage, touchBrowserActivity, type BrowserConfig } from '../browser/manager.js';
 import {
   browserStatus,
   browserStart,
@@ -203,6 +203,8 @@ export const browserTool = tool(
     const fromUid = args.from_uid || args.from_ref;
     const toUid = args.to_uid || args.to_ref;
 
+    // every action counts as activity; only launch paths reset the idle timer before this
+    touchBrowserActivity();
     const releaseMutex = await acquireBrowserMutex();
     try {
       let result;
