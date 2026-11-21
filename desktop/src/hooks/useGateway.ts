@@ -390,7 +390,8 @@ export type SessionState = {
   taskProgress: Record<string, TaskProgress>;
   suggestion?: string;
   // sent while a turn was running; they start the next turn and join the chat then
-  queued?: Array<{ content: string; images?: ImageAttachment[]; timestamp: number }>;
+  // id = the server's handle on a message waiting behind a running turn, used to take it back out
+  queued?: Array<{ content: string; images?: ImageAttachment[]; timestamp: number; id?: string }>;
   pendingElicitation: PendingElicitation | null;
   activeWorktrees: ActiveWorktree[];
 };
@@ -1034,7 +1035,7 @@ export function useGateway() {
 
     switch (name) {
       case 'agent.user_message': {
-        const d = data as { source: string; sessionKey?: string; prompt: string; injected?: boolean; timestamp: number };
+        const d = data as { source: string; sessionKey?: string; prompt: string; injected?: boolean; queuedId?: string; timestamp: number };
         const sk = d.sessionKey;
         if (!sk || !trackedSessionsRef.current.has(sk)) break;
         // desktop/chat already adds user item in sendMessage, skip to avoid dupes
@@ -1044,7 +1045,7 @@ export function useGateway() {
             if (!state) return prev;
             // a channel message that arrives mid-turn waits for the next turn, like one typed here
             if (d.injected && state.agentStatus !== 'idle') {
-              return { ...prev, [sk]: { ...state, queued: [...(state.queued || []), { content: d.prompt, timestamp: d.timestamp || Date.now() }] } };
+              return { ...prev, [sk]: { ...state, queued: [...(state.queued || []), { content: d.prompt, timestamp: d.timestamp || Date.now(), id: d.queuedId }] } };
             }
             const last = state.chatItems[state.chatItems.length - 1];
             const isMarkedRunSource = d.source?.startsWith('tasks/') || d.source?.startsWith('calendar/');
@@ -1070,7 +1071,9 @@ export function useGateway() {
         if (!sk || !trackedSessionsRef.current.has(sk)) break;
         setSessionStates(prev => {
           const state = prev[sk];
-          if (!state) return prev;
+          // a background subagent keeps calling tools after the turn ends: that must not make the session look busy,
+          // or the next message shows as queued while the server starts it right away
+          if (!state || state.agentStatus === 'idle') return prev;
           return { ...prev, [sk]: { ...state, agentStatus: `${TOOL_PENDING_TEXT[d.tool] || `running ${d.tool}`}...` } };
         });
         break;
@@ -2073,6 +2076,8 @@ export function useGateway() {
     activeSessionKeyRef.current = sk;
     currentChatIdRef.current = cid;
     setActiveSessionKey(sk);
+    // set when the message goes to the queue bar; the server's answer then says whether it really waits
+    let queuedAt: number | undefined;
     // Optimistic update: add user message and set status
     setSessionStates(prev => {
       const state = prev[sk] || { ...DEFAULT_SESSION_STATE };
@@ -2081,7 +2086,8 @@ export function useGateway() {
         onFirstMessageRef.current(sk, prompt.slice(0, 80));
       }
       if (state.agentStatus !== 'idle') {
-        const queued = [...(state.queued || []), { content: prompt, images: images?.length ? images : undefined, timestamp: Date.now() }];
+        queuedAt = Date.now();
+        const queued = [...(state.queued || []), { content: prompt, images: images?.length ? images : undefined, timestamp: queuedAt }];
         return { ...prev, [sk]: { ...state, queued, suggestion: undefined } };
       }
       return {
@@ -2108,7 +2114,31 @@ export function useGateway() {
         sessionKey: sk,
         model: effectiveModel || undefined,
         fastMode: !!fastModeRef.current[sk],
-      }) as { sessionKey?: string } | undefined;
+      }) as { sessionKey?: string; queuedId?: string } | undefined;
+      if (queuedAt !== undefined) {
+        const at = queuedAt;
+        let removedMeanwhile = false;
+        setSessionStates(prev => {
+          const state = prev[sk];
+          const item = state?.queued?.find(q => q.timestamp === at && !q.id);
+          if (!state || !item) { removedMeanwhile = true; return prev; }
+          const queued = state.queued!.filter(q => q !== item);
+          if (res?.queuedId) {
+            return { ...prev, [sk]: { ...state, queued: [...queued, { ...item, id: res.queuedId }] } };
+          }
+          // the server started it right away: it belongs in the chat, not the queue
+          return {
+            ...prev,
+            [sk]: {
+              ...state,
+              queued,
+              chatItems: [...state.chatItems, { type: 'user', content: item.content, images: item.images, timestamp: item.timestamp }],
+            },
+          };
+        });
+        // removed from the bar before the server answered: take it back out there too
+        if (removedMeanwhile && res?.queuedId) rpc('agent.cancelQueued', { sessionKey: sk, queuedId: res.queuedId }).catch(() => {});
+      }
       // the server pinned it to the session row; the pending pick has done its job
       if (pending[sk]) {
         const cleared = { ...pendingModelRef.current };
@@ -2294,17 +2324,21 @@ export function useGateway() {
     setFastModeByKey(fastModeRef.current);
   }, []);
 
-  // a queued message whose run was stopped never reached the agent: take it back out
-  const takeQueued = useCallback((sessionKey: string, index: number) => {
-    let taken: { content: string; images?: ImageAttachment[] } | undefined;
+  // take a queued message back out before its turn starts; undefined when its turn already started
+  const takeQueued = useCallback(async (sessionKey: string, index: number) => {
+    const item = sessionStatesRef.current[sessionKey]?.queued?.[index];
+    if (!item) return undefined;
+    if (item.id) {
+      const res = await rpc('agent.cancelQueued', { sessionKey, queuedId: item.id }) as { cancelled?: boolean } | undefined;
+      if (!res?.cancelled) return undefined;
+    }
     setSessionStates(prev => {
       const state = prev[sessionKey];
-      if (!state?.queued?.[index]) return prev;
-      taken = state.queued[index];
-      return { ...prev, [sessionKey]: { ...state, queued: state.queued.filter((_, i) => i !== index) } };
+      if (!state?.queued) return prev;
+      return { ...prev, [sessionKey]: { ...state, queued: state.queued.filter(q => !(q.timestamp === item.timestamp && q.content === item.content)) } };
     });
-    return taken;
-  }, []);
+    return item;
+  }, [rpc]);
 
   const getSessionFastMode = useCallback((sessionKey?: string) => !!(sessionKey && fastModeByKey[sessionKey]), [fastModeByKey]);
 

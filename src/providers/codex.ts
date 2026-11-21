@@ -3,7 +3,7 @@ import { execFile, execSync, spawn } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync, unlinkSync } from 'node:fs';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import type { Provider, ProviderRunOptions, ProviderMessage, ProviderAuthStatus, ProviderQueryResult, ProviderInputItem } from './types.js';
 import type { ReasoningEffort, CodexCliConfigValue, CodexMcpOauthCredentialsStore } from '../config.js';
@@ -2088,7 +2088,9 @@ export class CodexProvider implements Provider {
       if (opts.fastMode && !fastTier) console.log(`[codex] fast mode requested but ${model} has no fast tier`);
       const turnTier = opts.fastMode === false ? 'default' : fastTier;
 
-      const queuedInputs: Array<{ text: string; images?: ProviderRunOptions['images']; inputItems?: ProviderInputItem[] }> = [];
+      const issuedIds = new Set<string>();
+      const cancelledIds = new Set<string>();
+      const queuedInputs: Array<{ id: string; text: string; images?: ProviderRunOptions['images']; inputItems?: ProviderInputItem[] }> = [];
       const startTurn = async (turnInput = input) => {
         const turnResult = await client!.request('turn/start', {
           threadId: sessionId,
@@ -2110,10 +2112,20 @@ export class CodexProvider implements Provider {
 
       opts.onRunReady?.({
         get active() { return active; },
-        inject(text: string, images?: ProviderRunOptions['images'], inputItems?: ProviderInputItem[]): boolean {
+        inject(text: string, images?: ProviderRunOptions['images'], inputItems?: ProviderInputItem[]): string | false {
           if (!active || !client || !currentTurnId) return false;
           // a message sent while a turn runs waits for it to end and starts the next turn
-          queuedInputs.push({ text, images, inputItems });
+          const id = randomUUID();
+          issuedIds.add(id);
+          queuedInputs.push({ id, text, images, inputItems });
+          return id;
+        },
+        async cancelQueued(id: string) {
+          const i = queuedInputs.findIndex(q => q.id === id);
+          if (i >= 0) queuedInputs.splice(i, 1);
+          // gone from the list without a cancel means its turn started; an id this run never issued will not run here
+          else if (issuedIds.has(id) && !cancelledIds.has(id)) return false;
+          cancelledIds.add(id);
           return true;
         },
         close() {
