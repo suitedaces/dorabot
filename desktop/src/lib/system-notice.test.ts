@@ -27,6 +27,14 @@ describe('noticeFromSystem', () => {
     expect(noticeFromSystem({ type: 'system', subtype: 'informational', level: 'info', content: 'x' })).toBeNull();
   });
 
+  it('a watch push leads with the last line, done and expiry say so', () => {
+    const change = noticeFromSystem({ type: 'system', subtype: 'watch', summary: 'probe eval', reason: 'change', output: 'ep 3\nep 4 of 40' });
+    expect(change?.text).toBe('probe eval: ep 4 of 40');
+    expect(change?.detail).toBe('ep 3\nep 4 of 40');
+    expect(noticeFromSystem({ type: 'system', subtype: 'watch', summary: 'probe eval', reason: 'done', output: 'DONE' })?.text).toBe('probe eval done');
+    expect(noticeFromSystem({ type: 'system', subtype: 'watch', summary: 'probe eval', reason: 'expired', output: '' })?.text).toBe('Stopped watching probe eval');
+  });
+
   it('ignores bookkeeping events', () => {
     expect(noticeFromSystem({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 700 })).toBeNull();
     expect(noticeFromSystem({ type: 'system', subtype: 'task_progress' })).toBeNull();

@@ -49,6 +49,11 @@ export function getDb(): Database.Database {
       data TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS watches (
+      id TEXT PRIMARY KEY,
+      data TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS goals (
       id TEXT PRIMARY KEY,
       data TEXT NOT NULL

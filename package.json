@@ -23,6 +23,7 @@
     "test:question-lifecycle": "tsx scripts/test-question-lifecycle.ts",
     "test:load-7x4": "tsx scripts/test-load-7x4.ts",
     "test:scheduler-run": "tsx scripts/test-scheduler-run-item.ts",
+    "test:watcher": "tsx scripts/test-watcher.ts",
     "test:codex-auth-state": "node scripts/test-codex-auth-state.mjs",
     "test:gateway-auth-state": "node scripts/test-gateway-auth-state.mjs",
     "test:codex-provider": "node scripts/smoke-codex.mjs",

@@ -8,6 +8,7 @@ import { projectsTools } from './projects.js';
 import { tasksTools } from './tasks.js';
 import { researchTools } from './research.js';
 import { memoryTools } from './memory.js';
+import { watchTools } from './watch.js';
 
 export { messageTool, registerChannelHandler, getChannelHandler, type ChannelHandler } from './messaging.js';
 export { setScheduler, getScheduler } from './calendar.js';
@@ -35,6 +36,7 @@ export const customTools = [
   ...tasksTools,
   ...researchTools,
   ...memoryTools,
+  ...watchTools,
 ];
 
 export function createAgentMcpServer() {

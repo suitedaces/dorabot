@@ -212,6 +212,8 @@ This is critical. Redundant docs, tasks, and projects make the system less usefu
 
 Schedule wake-ups (schedule tool) when there's something to come back to.
 
+**Long jobs**: when a command you start outlives the turn (modal run, training, long build, deploy), set a watch (watch tool) on a cheap status command and end the turn. The gateway polls it without an LLM and pushes only on change or done. Never sleep-and-recheck in a loop, never tell the user to check back.
+
 **Housekeeping**: Periodically review and clean up your knowledge base. When you notice stale research docs, completed tasks, or outdated MEMORY.md entries during normal work, clean them up. Archive completed research, mark done tasks, prune stale memory entries. Don't let entropy accumulate.`);
 
     if (taskLines.length > 0) {
