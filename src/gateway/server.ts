@@ -3583,6 +3583,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             : undefined;
           if (!prompt) return { id, error: 'prompt required' };
 
+          // non-desktop clients (e.g. phone remote) may tag their messages so the desktop renders the echo.
+          // allowlisted to remote/<client>; anything else keeps the desktop/chat default.
+          const requestedSource = typeof params?.source === 'string' ? params.source : '';
+          const chatSource = /^remote\/[a-z0-9][a-z0-9-]{0,31}$/.test(requestedSource) ? requestedSource : 'desktop/chat';
+
           const chatId = (params?.chatId as string) || randomUUID();
           const requestedSessionKey = params?.sessionKey as string | undefined;
           // use client-provided sessionKey if it exists in the registry (e.g. replying to a calendar session)
@@ -3663,7 +3668,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               fileSessionManager.append(session.sessionId, { type: 'user', timestamp: new Date().toISOString(), content: { type: 'user', message: { role: 'user', content: injectedContent } } });
             }
             broadcast({ event: 'agent.user_message', data: {
-              source: 'desktop/chat', sessionKey, prompt, injected: true, timestamp: Date.now(),
+              source: chatSource, sessionKey, prompt, injected: true, timestamp: Date.now(),
             }});
             // queuedId only when it waits behind a running turn: without it the message started now
             return { id, result: { sessionKey, sessionId: session.sessionId, injected: true, ...(waitsForTurn ? { queuedId: queueId } : {}) } };
@@ -3675,7 +3680,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             images,
             inputItems,
             sessionKey,
-            source: 'desktop/chat',
+            source: chatSource,
           });
 
           return { id, result: { sessionKey, sessionId: session.sessionId, queued: true } };
