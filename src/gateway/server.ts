@@ -1282,7 +1282,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     messageId: string,
     messageText: string,
   ): void {
-    if (!isMarkedRunSource(source)) return;
+    if (channel !== 'telegram' && channel !== 'whatsapp') return;
     const sessionId = sessionRegistry.get(sessionKey)?.sessionId;
     if (!sessionId) return;
 
@@ -1327,8 +1327,27 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     for (const ref of channelQuestionRefs.values()) {
       if (ref.channel !== msg.channel || ref.chatId !== msg.chatId) continue;
       if (now - ref.createdAt > QUESTION_LINK_WINDOW_MS) continue;
-      if (ref.source && !isMarkedRunSource(ref.source)) continue;
       if (!best || ref.createdAt > best.createdAt) best = ref;
+    }
+    return best;
+  }
+
+  // the chat's own session: a reply that would link back to it needs no routing
+  function nativeSessionId(msg: InboundMessage): string | undefined {
+    const key = sessionRegistry.makeKey({ channel: msg.channel, chatType: msg.chatType, chatId: msg.chatId });
+    return sessionRegistry.get(key)?.sessionId;
+  }
+
+  function findRecentOutboundRef(msg: InboundMessage): RunReplyRef | null {
+    const now = Date.now();
+    const prefix = `${msg.channel}:${msg.chatId}:`;
+    const own = nativeSessionId(msg);
+    let best: RunReplyRef | null = null;
+    for (const [k, ref] of runReplyRefs) {
+      if (!k.startsWith(prefix)) continue;
+      if (now - ref.sentAt > QUESTION_LINK_WINDOW_MS) continue;
+      if (own && ref.sessionId === own) continue;
+      if (!best || ref.sentAt > best.sentAt) best = ref;
     }
     return best;
   }
@@ -1362,7 +1381,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             sessionKey,
             source: ref.source,
             context: [
-              'User replied to a prior marked run message.',
+              'User replied to a message this session sent them.',
               `Run source: ${ref.source}`,
               `Run session_id: ${ref.sessionId}`,
               `Sent at: ${new Date(ref.sentAt).toISOString()}`,
@@ -1387,7 +1406,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             sessionKey,
             source: recentQuestion.source,
             context: [
-              'User sent a follow-up after a recent AskUserQuestion from a marked run.',
+              'User sent a follow-up after a recent AskUserQuestion from this session.',
               `Run source: ${recentQuestion.source || '(unknown)'}`,
               `Run session_id: ${sessionId}`,
               `Original question: ${recentQuestion.question}`,
@@ -1396,6 +1415,27 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             ].join('\n'),
           };
         }
+      }
+    }
+
+    // no quote, no question: the session that messaged them last is the one they are answering
+    const recentOutbound = findRecentOutboundRef(msg);
+    if (recentOutbound) {
+      const sessionKey = ensureSessionKeyForSessionId(recentOutbound.sessionId);
+      if (sessionKey) {
+        return {
+          sessionId: recentOutbound.sessionId,
+          sessionKey,
+          source: recentOutbound.source,
+          context: [
+            'User sent a message shortly after this session messaged them, without quoting it.',
+            `Run source: ${recentOutbound.source}`,
+            `Run session_id: ${recentOutbound.sessionId}`,
+            `Sent at: ${new Date(recentOutbound.sentAt).toISOString()}`,
+            `Last message to the user: ${recentOutbound.messagePreview || '(no preview)'}`,
+            'Treat the message as an answer to that one when it reads like one; otherwise handle it here as a fresh request.',
+          ].join('\n'),
+        };
       }
     }
 
@@ -3615,6 +3655,18 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
           sessionRegistry.incrementMessages(session.key);
           broadcastSessionUpdate(sessionKey);
+
+          // the user moved to the desktop: stop answering this session on the channel it was last routed from
+          const channelCtx = channelRunContexts.get(sessionKey);
+          if (channelCtx) {
+            clearTypingInterval(channelCtx);
+            if (channelCtx.statusMsgId) {
+              const h = getChannelHandler(channelCtx.channel);
+              if (h) { try { await h.delete(channelCtx.statusMsgId, channelCtx.chatId); } catch {} }
+            }
+            channelRunContexts.delete(sessionKey);
+            statusMessages.delete(sessionKey);
+          }
 
           // try injection into active run first
           const handle = runHandles.get(sessionKey);
