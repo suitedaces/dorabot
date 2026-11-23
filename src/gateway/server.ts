@@ -3958,6 +3958,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'sessions.get': {
           const sessionId = params?.sessionId as string;
           if (!sessionId) return { id, error: 'sessionId required' };
+          // paged: one big chat is too large for a single websocket frame
+          if (params?.paged) {
+            const before = typeof params.before === 'number' ? params.before : undefined;
+            return { id, result: { sessionId, ...fileSessionManager.loadPage(sessionId, before) } };
+          }
           const messages = fileSessionManager.load(sessionId);
           return { id, result: { sessionId, messages } };
         }

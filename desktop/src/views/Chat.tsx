@@ -1626,6 +1626,18 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
 
   // tool calls and thinking become activity groups; the newest command/edit/write/agent holds the live slot
   const display = useMemo(() => buildDisplay(chatItems), [chatItems]);
+  // older history is loaded on scroll-up; count the display rows it added so the list keeps your place
+  const prepended = activeState?.history?.prepended ?? 0;
+  const headRows = useMemo(() => {
+    let n = 0;
+    while (n < display.length && display[n].index < prepended) n++;
+    return n;
+  }, [display, prepended]);
+  const hasOlder = activeState?.history?.before != null;
+  const loadOlder = useMemo(
+    () => (hasOlder && sessionKey ? () => { gateway.loadOlder(sessionKey); } : undefined),
+    [hasOlder, sessionKey, gateway.loadOlder],
+  );
   const lastUserIdx = useMemo(() => {
     for (let i = chatItems.length - 1; i >= 0; i--) if (chatItems[i].type === 'user') return i;
     return -1;
@@ -1908,7 +1920,10 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
     <div className="flex flex-col h-full min-h-0 min-w-0">
       {/* messages */}
       <VirtualChatList
+        key={sessionKey}
         items={display}
+        headCount={headRows}
+        onNearTop={loadOlder}
         renderItem={renderDisplay}
         className="flex-1 min-h-0 min-w-0 overflow-auto"
         itemClassName="px-4 min-w-0 overflow-hidden"

@@ -394,6 +394,8 @@ export type SessionState = {
   queued?: Array<{ content: string; images?: ImageAttachment[]; timestamp: number; id?: string }>;
   pendingElicitation: PendingElicitation | null;
   activeWorktrees: ActiveWorktree[];
+  // history loads newest first; `before` is the cursor for the next older page, null when it's all here
+  history?: { before: number | null; carry: SessionMessage[]; prepended: number };
 };
 
 const DEFAULT_SESSION_STATE: SessionState = {
@@ -444,13 +446,34 @@ function pushNotice(items: ChatItem[], raw: unknown, timestamp: number): ChatIte
   return [...items, item];
 }
 
-function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
+// history arrives in pages that start at a message the user typed. a tool result or background
+// task ending that lands in a later page than its call (you typed while it ran) can't find its row
+// yet: those come back in `carry` and go in again after the older page. `older` closes subagent
+// scopes left open at the page end, the way the next page's first message would.
+export function sessionMessagesToChatItems(messages: SessionMessage[], older = false): { items: ChatItem[]; carry: SessionMessage[] } {
   const items: ChatItem[] = [];
+  const carry: SessionMessage[] = [];
   // Track active Task tool scopes — messages between a Task tool_use and its
   // matching tool_result are subagent content that should be nested as subItems.
   const activeTaskIds = new Set<string>();
   const taskToolUse = new Map<string, string>();
   const taskSubItems = new Map<string, ChatItem[]>();
+
+  // a subagent that never returned a result (interrupted)
+  const closeOrphans = () => {
+    for (const orphanId of activeTaskIds) {
+      const subs = taskSubItems.get(orphanId) || [];
+      taskSubItems.delete(orphanId);
+      for (let i = items.length - 1; i >= 0; i--) {
+        const it = items[i];
+        if (it.type === 'tool_use' && it.id === orphanId) {
+          items[i] = { ...it, output: '(interrupted)', is_error: false, subItems: subs.length > 0 ? subs : undefined };
+          break;
+        }
+      }
+    }
+    activeTaskIds.clear();
+  };
 
   const extractResultText = (block: any): string => {
     if (typeof block.content === 'string') return block.content;
@@ -474,13 +497,16 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
       const endStatus = sc.subtype === 'task_updated' ? sc.patch?.status : sc.subtype === 'task_notification' ? sc.status : undefined;
       if (endStatus && endStatus !== 'running') {
         const toolUseId = taskToolUse.get(sc.task_id) || sc.tool_use_id;
+        let found = false;
         for (let i = items.length - 1; i >= 0; i--) {
           const it = items[i];
           if (it.type === 'tool_use' && it.id === toolUseId) {
             items[i] = { ...it, meta: { ...(it.meta || {}), bgStatus: endStatus, bgEndedAt: sc.patch?.end_time ?? it.meta?.bgEndedAt ?? ts } };
+            found = true;
             break;
           }
         }
+        if (!found) carry.push(msg);
       }
       if (sc.subtype === 'model_refusal_fallback' && Array.isArray(sc.retracted_message_uuids)) {
         const gone = new Set<string>(sc.retracted_message_uuids);
@@ -546,13 +572,16 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
             }
 
             // Regular (non-Task) tool result — patch top-level items
+            let found = false;
             for (let i = items.length - 1; i >= 0; i--) {
               const it = items[i];
               if (it.type === 'tool_use' && it.id === toolUseId) {
                 items[i] = { ...it, output: resultText, imageData, is_error: block.is_error || false, meta, endedAt: ts };
+                found = true;
                 break;
               }
             }
+            if (!found && carry[carry.length - 1] !== msg) carry.push(msg);
           }
         }
       } else if (activeTaskIds.size > 0) {
@@ -561,18 +590,7 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
         // interrupted and never produced a tool_result). Close them so subsequent
         // messages aren't swallowed.
         if (!parentToolUseId) {
-          for (const orphanId of activeTaskIds) {
-            const subs = taskSubItems.get(orphanId) || [];
-            taskSubItems.delete(orphanId);
-            for (let i = items.length - 1; i >= 0; i--) {
-              const it = items[i];
-              if (it.type === 'tool_use' && it.id === orphanId) {
-                items[i] = { ...it, output: '(interrupted)', is_error: false, subItems: subs.length > 0 ? subs : undefined };
-                break;
-              }
-            }
-          }
-          activeTaskIds.clear();
+          closeOrphans();
           // fall through to render this as a real user message
         } else {
           // Subagent prompt or intermediate user message — skip from top-level
@@ -636,20 +654,7 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
 
       // Top-level assistant message while subagent scope is open = orphan scope.
       // Close all open scopes so this message renders properly.
-      if (activeTaskIds.size > 0 && !isSubagentAssistant) {
-        for (const orphanId of activeTaskIds) {
-          const subs = taskSubItems.get(orphanId) || [];
-          taskSubItems.delete(orphanId);
-          for (let i = items.length - 1; i >= 0; i--) {
-            const it = items[i];
-            if (it.type === 'tool_use' && it.id === orphanId) {
-              items[i] = { ...it, output: '(interrupted)', is_error: false, subItems: subs.length > 0 ? subs : undefined };
-              break;
-            }
-          }
-        }
-        activeTaskIds.clear();
-      }
+      if (activeTaskIds.size > 0 && !isSubagentAssistant) closeOrphans();
 
       if (Array.isArray(blocks)) {
         for (const block of blocks) {
@@ -700,7 +705,8 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
     }
   }
 
-  return items;
+  if (older) closeOrphans();
+  return { items, carry };
 }
 
 // Helper: update a single session's chatItems in the map
@@ -899,9 +905,9 @@ export function useGateway() {
 
   const loadSessionIntoMap = useCallback(async (sessionId: string, sessionKey: string, chatId?: string) => {
     try {
-      const res = await rpc('sessions.get', { sessionId }) as { sessionId: string; messages: SessionMessage[] };
+      const res = await rpc('sessions.get', { sessionId, paged: true }) as { sessionId: string; messages: SessionMessage[]; before: number | null };
       if (res?.messages) {
-        const items = sessionMessagesToChatItems(res.messages);
+        const { items, carry } = sessionMessagesToChatItems(res.messages);
         setSessionStates(prev => ({
           ...prev,
           [sessionKey]: {
@@ -909,6 +915,7 @@ export function useGateway() {
             chatItems: items,
             sessionId,
             pendingQuestion: null,
+            history: { before: res.before ?? null, carry, prepended: 0 },
           },
         }));
         // restore registry entry so next chat.send continues this conversation
@@ -918,6 +925,36 @@ export function useGateway() {
       }
     } catch (err) {
       console.error('failed to load session into map:', err);
+    }
+  }, [rpc]);
+
+  const loadingOlderRef = useRef<Set<string>>(new Set());
+  const loadOlder = useCallback(async (sessionKey: string) => {
+    const state = sessionStatesRef.current[sessionKey];
+    const sessionId = state?.sessionId;
+    const before = state?.history?.before;
+    if (!sessionId || before == null || loadingOlderRef.current.has(sessionKey)) return;
+    loadingOlderRef.current.add(sessionKey);
+    try {
+      const res = await rpc('sessions.get', { sessionId, paged: true, before }) as { messages: SessionMessage[]; before: number | null };
+      const { items, carry } = sessionMessagesToChatItems([...res.messages, ...state.history!.carry], true);
+      setSessionStates(prev => {
+        const cur = prev[sessionKey];
+        // switched chats, or another page already landed
+        if (!cur || cur.sessionId !== sessionId || cur.history?.before !== before) return prev;
+        return {
+          ...prev,
+          [sessionKey]: {
+            ...cur,
+            chatItems: [...items, ...cur.chatItems],
+            history: { before: res.before ?? null, carry, prepended: cur.history.prepended + items.length },
+          },
+        };
+      });
+    } catch (err) {
+      console.error('failed to load older messages:', err);
+    } finally {
+      loadingOlderRef.current.delete(sessionKey);
     }
   }, [rpc]);
 
@@ -2642,6 +2679,7 @@ export function useGateway() {
     untrackSession,
     setActiveSession,
     loadSessionIntoMap,
+    loadOlder,
     onSessionIdChangeRef,
     onFirstMessageRef,
     onNotifiableEventRef,

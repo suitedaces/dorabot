@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown } from 'lucide-react';
 
 type Props<T> = {
@@ -11,7 +11,13 @@ type Props<T> = {
   bottomThresholdPx?: number;
   scrollBehavior?: ScrollBehavior;
   onScrollBehaviorConsumed?: () => void;
+  // rows added above the first row since mount (older history); keeps cached heights and row keys on their items
+  headCount?: number;
+  // called when the view is close to the top and there may be older history to load
+  onNearTop?: () => void;
 };
+
+const NEAR_TOP_PX = 1200;
 
 export function VirtualChatList<T>({
   items,
@@ -23,6 +29,8 @@ export function VirtualChatList<T>({
   bottomThresholdPx = 140,
   scrollBehavior = 'auto',
   onScrollBehaviorConsumed,
+  headCount = 0,
+  onNearTop,
 }: Props<T>) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const heightsRef = useRef<Map<number, number>>(new Map());
@@ -36,6 +44,54 @@ export function VirtualChatList<T>({
   const [viewportHeight, setViewportHeight] = useState(0);
   const [measureVersion, setMeasureVersion] = useState(0);
   const [away, setAway] = useState(false);
+  const initialScrollDoneRef = useRef(false);
+  const onNearTopRef = useRef(onNearTop);
+  onNearTopRef.current = onNearTop;
+
+  // older rows came in above: move cached heights to their items' new indices before layout reads them
+  const headRef = useRef(headCount);
+  if (headCount !== headRef.current) {
+    const delta = headCount - headRef.current;
+    headRef.current = headCount;
+    const shifted = new Map<number, number>();
+    for (const [i, h] of heightsRef.current) shifted.set(i + delta, h);
+    heightsRef.current = shifted;
+  }
+
+  // the row at the top of the view and how far it sits from the top edge. rows above it get
+  // measured or loaded later; putting this row back where it was keeps what you're reading still.
+  const anchorRef = useRef<{ key: string; offset: number } | null>(null);
+  const layoutRef = useRef<{ offsets: number[] }>({ offsets: [] });
+  // scroll writes made here fire scroll events too; those must not move the anchor
+  const ownScrollRef = useRef<number | null>(null);
+  const scrollOwn = (viewport: HTMLDivElement, top: number) => {
+    viewport.scrollTop = top;
+    lastScrollTopRef.current = viewport.scrollTop;
+    ownScrollRef.current = viewport.scrollTop;
+  };
+  const captureAnchor = () => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const top = viewport.getBoundingClientRect().top;
+    for (const el of viewport.children as HTMLCollectionOf<HTMLElement>) {
+      if (!el.dataset.key) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.bottom > top) { anchorRef.current = { key: el.dataset.key, offset: rect.top - top }; return; }
+    }
+  };
+  const restoreAnchor = () => {
+    const viewport = viewportRef.current;
+    const anchor = anchorRef.current;
+    if (!viewport || !anchor || nearBottomRef.current) return;
+    const el = viewport.querySelector<HTMLElement>(`:scope > [data-key="${anchor.key}"]`);
+    // not rendered (rows above got taller and pushed it out of range): go by the layout instead
+    const top = el
+      ? viewport.scrollTop + el.getBoundingClientRect().top - viewport.getBoundingClientRect().top - anchor.offset
+      : (layoutRef.current.offsets[Number(anchor.key) + headRef.current] ?? NaN) - anchor.offset;
+    if (Number.isNaN(top) || Math.abs(top - viewport.scrollTop) < 1) return;
+    scrollOwn(viewport, top);
+    if (!el) setScrollTop(viewport.scrollTop);
+  };
 
   const queueMeasureRecalc = useCallback(() => {
     if (measureRafRef.current !== null) return;
@@ -73,6 +129,7 @@ export function VirtualChatList<T>({
           }
         }
       }
+      restoreAnchor();
     });
     observerRef.current = ro;
     return () => {
@@ -96,6 +153,9 @@ export function VirtualChatList<T>({
     }
     return { heights, offsets, total };
   }, [items.length, estimateItemHeight, measureVersion]);
+  layoutRef.current = layout;
+
+  useLayoutEffect(restoreAnchor);
 
   const visibleRange = useMemo(() => {
     if (items.length === 0) return { start: 0, end: 0 };
@@ -137,6 +197,9 @@ export function VirtualChatList<T>({
     lastScrollTopRef.current = nextScrollTop;
     nearBottomRef.current = movedUp ? false : distanceFromBottom <= bottomThresholdPx;
     setAway(!nearBottomRef.current);
+    if (ownScrollRef.current !== null && Math.abs(nextScrollTop - ownScrollRef.current) < 1) ownScrollRef.current = null;
+    else captureAnchor();
+    if (initialScrollDoneRef.current && nextScrollTop < NEAR_TOP_PX) onNearTopRef.current?.();
   }, [bottomThresholdPx]);
 
   useEffect(() => {
@@ -153,6 +216,11 @@ export function VirtualChatList<T>({
     return () => observer.disconnect();
   }, [onScroll]);
 
+  // a page shorter than the view can't be scrolled to the top, so ask for more right away
+  useEffect(() => {
+    if (onNearTop && viewportHeight > 0 && layout.total < viewportHeight + NEAR_TOP_PX) onNearTop();
+  }, [onNearTop, layout.total, viewportHeight]);
+
   // Auto-scroll to bottom when near bottom and items change
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -162,7 +230,6 @@ export function VirtualChatList<T>({
   }, [items, onScrollBehaviorConsumed, scrollBehavior]);
 
   // Ensure we start at the bottom on initial mount
-  const initialScrollDoneRef = useRef(false);
   const hasItems = items.length > 0;
   useEffect(() => {
     if (initialScrollDoneRef.current) return;
@@ -223,6 +290,7 @@ export function VirtualChatList<T>({
     <div
       ref={viewportRef}
       className={className || 'flex-1 overflow-auto'}
+      style={{ overflowAnchor: 'none' }}
       onScroll={onScroll}
     >
       {/* rendered rows stay in normal flow between two spacers, so a row that changes height
@@ -231,7 +299,7 @@ export function VirtualChatList<T>({
       {items.slice(visibleRange.start, visibleRange.end).map((item, offset) => {
         const index = visibleRange.start + offset;
         return (
-          <div key={index} ref={rowRef(index)} className={itemClassName}>
+          <div key={index - headCount} data-key={index - headCount} ref={rowRef(index)} className={itemClassName}>
             {renderItem(item, index)}
           </div>
         );
