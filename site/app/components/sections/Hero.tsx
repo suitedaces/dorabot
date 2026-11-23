@@ -75,7 +75,7 @@ export function Hero() {
         <div className="mb-4 flex justify-center">
           <div className="inline-flex items-center gap-2 rounded-full border border-border bg-bg-card/40 px-3.5 py-2 text-xs text-text-secondary sm:px-5 sm:py-2.5 sm:text-sm">
             <span className="inline-block h-2.5 w-2.5 rounded-full bg-green animate-pulse" />
-            Open-Source · 100% private · 100% local
+            Open source · Runs on your Mac · Your existing Claude Code or Codex subscription
           </div>
         </div>
 
