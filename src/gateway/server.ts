@@ -58,7 +58,7 @@ import { getProvider, getProviderByName, disposeAllProviders } from '../provider
 import { slimToolMeta } from './tool-meta.js';
 
 // messages sent while a turn runs, recorded once their own turn starts
-const queuedUserMessages = new Map<string, Array<{ sessionId: string; content: Array<Record<string, unknown>>; metadata?: Record<string, unknown> }>>();
+const queuedUserMessages = new Map<string, Array<{ id: string; sessionId: string; content: Array<Record<string, unknown>>; metadata?: Record<string, unknown> }>>();
 const NOTICE_SUBTYPES = new Set(['model_refusal_fallback', 'model_refusal_no_fallback', 'api_retry', 'informational', 'notification', 'session_writes_lost', 'mirror_error', 'compact_boundary', 'code_change_published', 'hook_response', 'memory_recall', 'files_persisted', 'permission_denied']);
 import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, onClaudeAuthRequired } from '../providers/claude.js';
 import { getProviderUsage, onProviderUsage } from '../providers/usage.js';
@@ -1734,7 +1734,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       const handle = runHandles.get(session.key);
       console.log(`[onMessage] key=${session.key} activeRun=${session.activeRun} handleExists=${!!handle} handleActive=${handle?.active} runQueueHas=${runQueues.has(session.key)}`);
       const channelPrompt = handle?.active ? buildIncomingChannelPrompt(msg, msg.body, runReplyContext) : '';
-      if (handle?.active && handle.inject(channelPrompt)) {
+      const channelQueueId = handle?.active ? handle.inject(channelPrompt) : false;
+      if (channelQueueId) {
         console.log(`[onMessage] INJECTING into ${session.key}`);
         const userRecord = {
           type: 'user' as const,
@@ -1745,7 +1746,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         // mid-turn it waits for the next turn, so it is recorded when that turn starts
         if (session.activeRun) {
           const waiting = queuedUserMessages.get(session.key) || [];
-          waiting.push({ sessionId: session.sessionId, content: userRecord.content.message.content, metadata: userRecord.metadata });
+          waiting.push({ id: channelQueueId, sessionId: session.sessionId, content: userRecord.content.message.content, metadata: userRecord.metadata });
           queuedUserMessages.set(session.key, waiting);
         } else {
           fileSessionManager.append(session.sessionId, userRecord);
@@ -1753,6 +1754,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         broadcast({ event: 'agent.user_message', data: {
           source: runSource, sessionKey: session.key,
           prompt: msg.body, injected: true, timestamp: Date.now(),
+          ...(session.activeRun ? { queuedId: channelQueueId } : {}),
         }});
         // re-activate if idle between turns
         if (!session.activeRun) {
@@ -2345,8 +2347,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           } catch (err) {
             console.error(`[canUseTool] failed to send question:`, err);
             updateQuestionState(requestId, 'cancelled', runSessionKey);
-            answers[questionText] = opts[0]?.label || '';
-            continue;
+            return { behavior: 'deny' as const, message: `Could not deliver the question to ${runChannel}: ${err instanceof Error ? err.message : String(err)}. The user has not answered anything; do not pick an option yourself. Ask in a plain message instead.` };
           }
 
           const { label, timedOut } = await new Promise<{ label: string; timedOut: boolean }>((resolve) => {
@@ -2354,12 +2355,16 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             setTimeout(() => {
               if (pendingChannelQuestions.has(requestId)) {
                 pendingChannelQuestions.delete(requestId);
-                resolve({ label: opts[0]?.label || '', timedOut: true });
+                resolve({ label: '', timedOut: true });
               }
             }, 120000);
           });
-          if (timedOut) updateQuestionState(requestId, 'timeout', runSessionKey);
-          else updateQuestionState(requestId, 'answered', runSessionKey);
+          if (timedOut) {
+            // never hand the model a default: a late tap on the keyboard arrives as a new message
+            updateQuestionState(requestId, 'timeout', runSessionKey);
+            return { behavior: 'deny' as const, message: 'No answer within 2 minutes. The user did not choose anything: do not assume an option or proceed on a default. Say what you were waiting on and end the turn; their answer will arrive as a new message.' };
+          }
+          updateQuestionState(requestId, 'answered', runSessionKey);
           // SDK expects question text as key
           answers[questionText] = label;
         }
@@ -3634,7 +3639,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               }
             }
             // the run may have just ended (codex closes when nothing is queued): then start a new one
-            if (!handle.inject(prompt, images, inputItems)) {
+            const queueId = handle.inject(prompt, images, inputItems);
+            if (!queueId) {
               handleAgentRun({ prompt, images, inputItems, sessionKey, source: 'desktop/chat' });
               return { id, result: { sessionKey, sessionId: session.sessionId, queued: true } };
             }
@@ -3647,9 +3653,10 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               }
             }
             injectedContent.push({ type: 'text', text: prompt });
-            if (session.activeRun) {
+            const waitsForTurn = !!session.activeRun;
+            if (waitsForTurn) {
               const waiting = queuedUserMessages.get(sessionKey) || [];
-              waiting.push({ sessionId: session.sessionId, content: injectedContent });
+              waiting.push({ id: queueId, sessionId: session.sessionId, content: injectedContent });
               queuedUserMessages.set(sessionKey, waiting);
             } else {
               // idle between turns: it starts a turn right away
@@ -3658,7 +3665,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             broadcast({ event: 'agent.user_message', data: {
               source: 'desktop/chat', sessionKey, prompt, injected: true, timestamp: Date.now(),
             }});
-            return { id, result: { sessionKey, sessionId: session.sessionId, injected: true } };
+            // queuedId only when it waits behind a running turn: without it the message started now
+            return { id, result: { sessionKey, sessionId: session.sessionId, injected: true, ...(waitsForTurn ? { queuedId: queueId } : {}) } };
           }
 
           // no active session — start new run
@@ -3711,8 +3719,27 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const h = runHandles.get(sk);
           if (!h?.active) return { id, error: 'no active run for that session' };
           if (!h.sendNow) return { id, error: 'sendNow not supported by current provider' };
+          // the interrupt ends whatever turn runs: with nothing waiting it would only cut that turn off
+          if (!queuedUserMessages.get(sk)?.length) return { id, result: { sessionKey: sk, sent: false } };
           await h.sendNow();
-          return { id, result: { sessionKey: sk } };
+          return { id, result: { sessionKey: sk, sent: true } };
+        }
+
+        case 'agent.cancelQueued': {
+          const sk = params?.sessionKey as string;
+          const queuedId = params?.queuedId as string;
+          if (!sk) return { id, error: 'sessionKey required' };
+          if (!queuedId) return { id, error: 'queuedId required' };
+          const h = runHandles.get(sk);
+          // no live run: nothing is left to start it
+          if (!h?.active) return { id, result: { cancelled: true } };
+          if (!h.cancelQueued) return { id, result: { cancelled: false } };
+          const cancelled = await h.cancelQueued(queuedId);
+          if (cancelled) {
+            const left = (queuedUserMessages.get(sk) || []).filter(w => w.id !== queuedId);
+            if (left.length) queuedUserMessages.set(sk, left); else queuedUserMessages.delete(sk);
+          }
+          return { id, result: { cancelled } };
         }
 
         case 'agent.setModel': {
@@ -3931,6 +3958,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'sessions.get': {
           const sessionId = params?.sessionId as string;
           if (!sessionId) return { id, error: 'sessionId required' };
+          // paged: one big chat is too large for a single websocket frame
+          if (params?.paged) {
+            const before = typeof params.before === 'number' ? params.before : undefined;
+            return { id, result: { sessionId, ...fileSessionManager.loadPage(sessionId, before) } };
+          }
           const messages = fileSessionManager.load(sessionId);
           return { id, result: { sessionId, messages } };
         }

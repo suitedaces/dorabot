@@ -1,7 +1,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
 import { execFile, execSync, spawn } from 'node:child_process';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { homedir } from 'node:os';
 import type { Provider, ProviderRunOptions, ProviderMessage, ProviderAuthStatus, ProviderQueryResult, RunHandle, ClaudeModelCatalog } from './types.js';
@@ -937,6 +937,11 @@ export class ClaudeProvider implements Provider {
     };
 
     const messageQueue: UserMsg[] = [];
+    // ids of messages sent mid-turn: issued here, given to the cli, cancelled before or after that
+    const issuedIds = new Set<string>();
+    const handedToCli = new Set<string>();
+    const cancelledBeforeSend = new Set<string>();
+    const cancelledIds = new Set<string>();
     let waitingForMessage: ((msg: UserMsg) => void) | null = null;
     let closed = false;
     // messages taken in (the prompt + every inject), handed to the cli, and handed by the last result
@@ -970,18 +975,20 @@ export class ClaudeProvider implements Provider {
     async function* messageGenerator(): AsyncGenerator<UserMsg, void, unknown> {
       await seedReady;
       while (!closed && !opts.abortController?.signal.aborted) {
+        let msg: UserMsg;
         if (messageQueue.length > 0) {
-          sent++;
-          yield messageQueue.shift()!;
+          msg = messageQueue.shift()!;
         } else {
-          const msg = await new Promise<UserMsg>((resolve) => {
+          msg = await new Promise<UserMsg>((resolve) => {
             waitingForMessage = resolve;
           });
           waitingForMessage = null;
           if (closed || opts.abortController?.signal.aborted) break;
-          sent++;
-          yield msg;
         }
+        const uuid = (msg as UserMsg & { uuid?: string }).uuid;
+        if (uuid) handedToCli.add(uuid);
+        sent++;
+        yield msg;
       }
     }
 
@@ -991,19 +998,42 @@ export class ClaudeProvider implements Provider {
 
     const handle: RunHandle = {
       get active() { return !closed; },
-      inject(text: string, images?: import('./types.js').ImageAttachment[]): boolean {
+      inject(text: string, images?: import('./types.js').ImageAttachment[]): string | false {
         if (closed) return false;
         accepted++;
+        // the cli files the message under this uuid, so it can be taken back out before its turn
+        const id = randomUUID();
+        issuedIds.add(id);
         makeUserMsg(text, images).then(msg => {
           if (closed) return;
+          if (cancelledBeforeSend.delete(id)) return;
           // a message sent while a turn runs waits for that turn to end and starts the next one
-          (msg as UserMsg & { priority?: 'later' }).priority = 'later';
+          Object.assign(msg, { priority: 'later', uuid: id });
           if (waitingForMessage) {
             waitingForMessage(msg);
           } else {
             messageQueue.push(msg);
           }
         });
+        return id;
+      },
+      async cancelQueued(id: string) {
+        // not one this run is holding (cancelled already, or the run ended): it will not run here
+        if (closed || cancelledIds.has(id) || !issuedIds.has(id)) return true;
+        const i = messageQueue.findIndex(m => (m as UserMsg & { uuid?: string }).uuid === id);
+        if (i >= 0) {
+          messageQueue.splice(i, 1);
+          accepted--;
+        } else if (!handedToCli.has(id)) {
+          // still being built (image checks): drop it when it is ready
+          cancelledBeforeSend.add(id);
+          accepted--;
+        } else {
+          // cancelAsyncMessage is in the sdk runtime but not in its Query type; false = its turn started
+          const q = queryRef as unknown as { cancelAsyncMessage?(uuid: string): Promise<boolean> } | null;
+          if (!(await q?.cancelAsyncMessage?.(id))) return false;
+        }
+        cancelledIds.add(id);
         return true;
       },
       idleClose() {

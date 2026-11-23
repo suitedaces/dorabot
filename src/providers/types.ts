@@ -19,8 +19,10 @@ export type ProviderInputItem =
   | { type: 'mention'; name: string; path: string };
 
 export type RunHandle = {
-  /** Push a user message into the active run's async generator */
-  inject(text: string, images?: ImageAttachment[], inputItems?: ProviderInputItem[]): boolean;
+  /** Push a user message into the active run; returns its queue id, or false when the run has ended */
+  inject(text: string, images?: ImageAttachment[], inputItems?: ProviderInputItem[]): string | false;
+  /** Take a message sent mid-turn back out before its turn starts; false means it already started */
+  cancelQueued?(id: string): Promise<boolean>;
   /** End the generator → SDK CLI process exits */
   close(): void;
   /** Close only if no message is waiting to start a turn; false means it stayed open (Claude SDK only) */

@@ -161,21 +161,36 @@ export class SessionManager {
 
   load(sessionId: string): SessionMessage[] {
     const db = getDb();
-    const rows = db.prepare('SELECT type, uuid, timestamp, content, metadata FROM messages WHERE session_id = ? ORDER BY id').all(sessionId) as {
-      type: string;
-      uuid: string | null;
-      timestamp: string;
-      content: string;
-      metadata: string | null;
-    }[];
+    const rows = db.prepare('SELECT type, uuid, timestamp, content, metadata FROM messages WHERE session_id = ? ORDER BY id').all(sessionId) as MessageRow[];
 
-    return rows.map(row => ({
-      type: row.type as SessionMessage['type'],
-      uuid: row.uuid || undefined,
-      timestamp: row.timestamp,
-      content: JSON.parse(row.content),
-      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
-    }));
+    return rows.map(toSessionMessage);
+  }
+
+  // newest messages first: walk back from `before` until ~budget bytes, then on to the nearest
+  // message the user typed, so a page never splits a tool call from its result.
+  // `before` in the result is the cursor for the next older page, null when there is none.
+  loadPage(sessionId: string, before?: number, budget = 4 * 1024 * 1024): { messages: SessionMessage[]; before: number | null } {
+    const db = getDb();
+    const upper = before ?? Number.MAX_SAFE_INTEGER;
+    const walk = db.prepare(`
+      SELECT id, length(content) AS len,
+        (type = 'user'
+          AND json_extract(content, '$.parent_tool_use_id') IS NULL
+          AND instr(content, '"type":"tool_result"') = 0
+          AND coalesce(json_extract(content, '$.isSynthetic'), 0) = 0) AS top
+      FROM messages WHERE session_id = ? AND id < ? ORDER BY id DESC
+    `);
+    let start: number | null = null;
+    let bytes = 0;
+    for (const row of walk.iterate(sessionId, upper) as Iterable<{ id: number; len: number; top: number }>) {
+      bytes += row.len;
+      if (row.top && bytes >= budget) { start = row.id; break; }
+    }
+    const rows = db.prepare(
+      'SELECT type, uuid, timestamp, content, metadata FROM messages WHERE session_id = ? AND id >= ? AND id < ? ORDER BY id',
+    ).all(sessionId, start ?? 0, upper) as MessageRow[];
+    const older = start !== null && !!db.prepare('SELECT 1 FROM messages WHERE session_id = ? AND id < ? LIMIT 1').get(sessionId, start);
+    return { messages: rows.map(toSessionMessage), before: older ? start : null };
   }
 
   append(sessionId: string, message: SessionMessage): void {
@@ -324,6 +339,18 @@ export class SessionManager {
     }
     return undefined;
   }
+}
+
+type MessageRow = { type: string; uuid: string | null; timestamp: string; content: string; metadata: string | null };
+
+function toSessionMessage(row: MessageRow): SessionMessage {
+  return {
+    type: row.type as SessionMessage['type'],
+    uuid: row.uuid || undefined,
+    timestamp: row.timestamp,
+    content: JSON.parse(row.content),
+    metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
+  };
 }
 
 function extractFirstUserPreview(content: string | null): string | undefined {
