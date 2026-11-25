@@ -38,7 +38,7 @@
     "test:fs-ops": "tsx scripts/test-fs-ops.ts"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.331",
+    "@anthropic-ai/claude-agent-sdk": "0.3.332",
     "@anthropic-ai/sdk": "0.97.1",
     "@grammyjs/runner": "2.0.3",
     "@grammyjs/transformer-throttler": "1.2.1",
